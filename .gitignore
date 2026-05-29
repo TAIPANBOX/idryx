@@ -1,0 +1,41 @@
+# OS
+.DS_Store
+
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Node / UI
+node_modules/
+/web/dist/
+*.log
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Editor
+.idea/
+.vscode/
+
+# Session / tooling (not part of the project)
+.remember/
+.claude/
