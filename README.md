@@ -45,9 +45,35 @@ auditable.
 - UI: TypeScript (React)
 - License: open-core (Apache-2.0 core + paid connectors/enforcement/SaaS)
 
+## Quick start
+```bash
+make build
+./bin/idryx detect <okta-system-log.json>                 # human-readable report
+./bin/idryx detect --format json <okta-system-log.json>   # JSON alerts
+./bin/idryx detect --privileged alice@x.com,bob@x.com ... # mark privileged accounts
+```
+
+Run against the bundled fixture:
+```bash
+make detect
+```
+
+## What works today (Phase 0)
+A CLI that ingests an Okta System Log export, normalizes it into an in-memory
+identity graph, and runs 3 ITDR detectors:
+- `impossible_travel` — two successful logins too far apart to be feasible
+- `mfa_fatigue` — a burst of MFA challenges in a short window (push-bombing)
+- `new_device` — a privileged identity logging in from an unseen device
+
+Detection is deterministic (statistics + rules over the graph), and the
+`--privileged` set raises severity for sensitive accounts. The Okta connector
+(`internal/ingest`) normalizes source logs into a shared event model, so adding
+Entra/CloudTrail later is a new connector, not a new engine.
+
 ## Status
-Product design phase. The roadmap starts at Phase 0 (Okta connector + minimal
-graph + 3 ITDR detections). See [`idryx-plan.md`](./idryx-plan.md).
+Phase 0 (MVP CLI detector) — working. Next, per [`idryx-plan.md`](./idryx-plan.md):
+Postgres-backed graph, a baseline engine, Entra + CloudTrail connectors, web UI,
+and SIEM/Slack alerting.
 
 ## License
 Apache-2.0.

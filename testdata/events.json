@@ -1,0 +1,112 @@
+[
+  {
+    "published": "2026-05-29T10:00:00.000Z",
+    "eventType": "user.session.start",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "alice@example.com" },
+    "client": {
+      "ipAddress": "31.42.0.1",
+      "userAgent": { "rawUserAgent": "Chrome/120 macOS" },
+      "geographicalContext": {
+        "city": "Kyiv",
+        "country": "Ukraine",
+        "geolocation": { "lat": 50.45, "lon": 30.52 }
+      }
+    }
+  },
+  {
+    "published": "2026-05-29T10:30:00.000Z",
+    "eventType": "user.session.start",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "alice@example.com" },
+    "client": {
+      "ipAddress": "98.10.0.1",
+      "userAgent": { "rawUserAgent": "Chrome/120 macOS" },
+      "geographicalContext": {
+        "city": "New York",
+        "country": "United States",
+        "geolocation": { "lat": 40.71, "lon": -74.01 }
+      }
+    }
+  },
+  {
+    "published": "2026-05-29T10:00:00.000Z",
+    "eventType": "system.push.send_factor_verify_push",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "bob@example.com" },
+    "client": { "ipAddress": "203.0.113.5" }
+  },
+  {
+    "published": "2026-05-29T10:00:30.000Z",
+    "eventType": "system.push.send_factor_verify_push",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "bob@example.com" },
+    "client": { "ipAddress": "203.0.113.5" }
+  },
+  {
+    "published": "2026-05-29T10:01:00.000Z",
+    "eventType": "user.mfa.okta_verify.deny_push",
+    "outcome": { "result": "DENY" },
+    "actor": { "alternateId": "bob@example.com" },
+    "client": { "ipAddress": "203.0.113.5" }
+  },
+  {
+    "published": "2026-05-29T10:01:30.000Z",
+    "eventType": "system.push.send_factor_verify_push",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "bob@example.com" },
+    "client": { "ipAddress": "203.0.113.5" }
+  },
+  {
+    "published": "2026-05-29T10:02:00.000Z",
+    "eventType": "user.mfa.okta_verify.deny_push",
+    "outcome": { "result": "DENY" },
+    "actor": { "alternateId": "bob@example.com" },
+    "client": { "ipAddress": "203.0.113.5" }
+  },
+  {
+    "published": "2026-05-29T09:00:00.000Z",
+    "eventType": "user.session.start",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "carol@example.com" },
+    "client": {
+      "ipAddress": "31.42.0.9",
+      "userAgent": { "rawUserAgent": "Chrome/120 macOS" },
+      "geographicalContext": {
+        "city": "Kyiv",
+        "country": "Ukraine",
+        "geolocation": { "lat": 50.45, "lon": 30.52 }
+      }
+    }
+  },
+  {
+    "published": "2026-05-29T11:00:00.000Z",
+    "eventType": "user.session.start",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "carol@example.com" },
+    "client": {
+      "ipAddress": "31.42.0.9",
+      "userAgent": { "rawUserAgent": "Firefox/126 Windows" },
+      "geographicalContext": {
+        "city": "Kyiv",
+        "country": "Ukraine",
+        "geolocation": { "lat": 50.45, "lon": 30.52 }
+      }
+    }
+  },
+  {
+    "published": "2026-05-29T08:00:00.000Z",
+    "eventType": "user.session.start",
+    "outcome": { "result": "SUCCESS" },
+    "actor": { "alternateId": "dave@example.com" },
+    "client": {
+      "ipAddress": "31.42.0.20",
+      "userAgent": { "rawUserAgent": "Safari/17 iOS" },
+      "geographicalContext": {
+        "city": "Kyiv",
+        "country": "Ukraine",
+        "geolocation": { "lat": 50.45, "lon": 30.52 }
+      }
+    }
+  }
+]
