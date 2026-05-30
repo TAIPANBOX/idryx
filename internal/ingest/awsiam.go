@@ -111,6 +111,59 @@ func ownerFromTags(tags []awsTag) string {
 	return ""
 }
 
+// AWSSIAMWithUsage parses IAM inventory data and enriches each permission with
+// CloudTrail usage records. A permission is marked Used when the principal was
+// observed making calls to the AWS service associated with that policy, enabling
+// the least-privilege detector to distinguish never-exercised capabilities.
+func AWSSIAMWithUsage(iamData, ctData []byte) ([]model.Identity, error) {
+	ids, err := AWSIAM(iamData)
+	if err != nil {
+		return nil, err
+	}
+	usage, err := CloudTrailUsage(ctData)
+	if err != nil {
+		return nil, err
+	}
+	for i := range ids {
+		usedSvcs := usage[ids[i].ID]
+		hasAny := len(usedSvcs) > 0
+		for j := range ids[i].Permissions {
+			p := &ids[i].Permissions[j]
+			for _, svc := range servicesFromPolicy(p.Name) {
+				if (svc == "*" && hasAny) || usedSvcs[svc] {
+					p.Used = true
+					break
+				}
+			}
+		}
+	}
+	return ids, nil
+}
+
+// servicesFromPolicy infers the set of AWS service prefixes covered by a policy
+// name. Returns ["*"] for administrator-equivalent policies. Returns nil when
+// no recognisable service hint is present.
+func servicesFromPolicy(name string) []string {
+	lower := strings.ToLower(name)
+	if strings.Contains(lower, "administrator") || lower == "admin" {
+		return []string{"*"}
+	}
+	keywords := []string{
+		"s3", "ec2", "iam", "sts", "lambda", "dynamodb", "rds", "ecs", "eks",
+		"sqs", "sns", "kms", "secretsmanager", "cloudwatch", "logs",
+		"codebuild", "codedeploy", "codecommit", "cloudformation", "ssm",
+		"route53", "elasticloadbalancing", "autoscaling", "glue", "athena",
+		"emr", "redshift", "kinesis", "firehose",
+	}
+	var out []string
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			out = append(out, kw)
+		}
+	}
+	return out
+}
+
 // parseAWSTime parses an IAM ISO-8601 timestamp; returns zero on empty/invalid.
 func parseAWSTime(s string) time.Time {
 	if s == "" {

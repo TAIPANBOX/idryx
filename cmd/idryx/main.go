@@ -69,7 +69,9 @@ detect, serve and remediate also accept --db to read from Postgres instead of a 
 
 // buildGraph returns an identity graph either from a Postgres snapshot (when db
 // is set) or by parsing a source log file. Exactly one of db/path is used.
-func buildGraph(source, privileged, path, db string) (graph.Reader, error) {
+// ctPath is optional: when non-empty and source is "aws_iam", CloudTrail records
+// are used to mark which permissions have been exercised.
+func buildGraph(source, privileged, path, db, ctPath string) (graph.Reader, error) {
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
@@ -84,6 +86,22 @@ func buildGraph(source, privileged, path, db string) (graph.Reader, error) {
 		return nil, err
 	}
 	g := graph.New(privilegedSet(privileged))
+
+	// aws_iam + CloudTrail enrichment path.
+	if source == "aws_iam" && ctPath != "" {
+		ctData, err := os.ReadFile(ctPath)
+		if err != nil {
+			return nil, fmt.Errorf("read cloudtrail file: %w", err)
+		}
+		ids, err := ingest.AWSSIAMWithUsage(data, ctData)
+		if err != nil {
+			return nil, fmt.Errorf("parse aws_iam+cloudtrail: %w", err)
+		}
+		for _, id := range ids {
+			g.AddIdentity(id)
+		}
+		return g, nil
+	}
 
 	// Inventory sources (identities + permissions), not event logs; they
 	// populate the graph via AddIdentity for the NHI detectors.
@@ -154,6 +172,7 @@ func runDetect(args []string) error {
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -168,7 +187,7 @@ func runDetect(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
 	if err != nil {
 		return err
 	}
@@ -210,6 +229,7 @@ func runServe(args []string) error {
 		addr       = fs.String("addr", ":8080", "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -224,7 +244,7 @@ func runServe(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
 	if err != nil {
 		return err
 	}
@@ -376,6 +396,7 @@ func runRemediate(args []string) error {
 	var (
 		source     = fs.String("source", "aws_iam", "source: aws_iam|gcp_iam|azure|agents")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -390,7 +411,7 @@ func runRemediate(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
 	if err != nil {
 		return err
 	}
