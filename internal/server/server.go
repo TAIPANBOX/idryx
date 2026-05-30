@@ -10,6 +10,7 @@ import (
 
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/model"
+	"github.com/TAIPANBOX/idryx/internal/remediation"
 )
 
 // Server holds the data rendered by the API and dashboard. It is a snapshot:
@@ -69,11 +70,31 @@ func (s *Server) handleAlerts(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.alertsJSON())
 }
 
+type apiPermission struct {
+	Name  string `json:"name"`
+	Admin bool   `json:"admin"`
+	Used  bool   `json:"used"`
+}
+
+type apiRemediation struct {
+	Explanation string `json:"explanation"`
+	Code        string `json:"code"`
+}
+
 type apiIdentity struct {
-	ID         string `json:"id"`
-	Privileged bool   `json:"privileged"`
-	Events     int    `json:"events"`
-	Alerts     int    `json:"alerts"`
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	Privileged  bool            `json:"privileged"`
+	Source      string          `json:"source"`
+	Owner       string          `json:"owner"`
+	Created     string          `json:"created,omitempty"`
+	LastUsed    string          `json:"last_used,omitempty"`
+	Runtime     string          `json:"runtime,omitempty"`
+	OnBehalfOf  string          `json:"on_behalf_of,omitempty"`
+	Permissions []apiPermission `json:"permissions,omitempty"`
+	Remediation *apiRemediation `json:"remediation,omitempty"`
+	Events      int             `json:"events"`
+	Alerts      int             `json:"alerts"`
 }
 
 func (s *Server) identitiesJSON() []apiIdentity {
@@ -84,11 +105,51 @@ func (s *Server) identitiesJSON() []apiIdentity {
 	ids := s.graph.Identities()
 	out := make([]apiIdentity, 0, len(ids))
 	for _, id := range ids {
+		var perms []apiPermission
+		for _, p := range id.Permissions {
+			perms = append(perms, apiPermission{
+				Name:  p.Name,
+				Admin: p.Admin,
+				Used:  p.Used,
+			})
+		}
+
+		createdStr := ""
+		if !id.Created.IsZero() {
+			createdStr = id.Created.UTC().Format("2006-01-02 15:04:05 UTC")
+		}
+		lastUsedStr := ""
+		if !id.LastUsed.IsZero() {
+			lastUsedStr = id.LastUsed.UTC().Format("2006-01-02 15:04:05 UTC")
+		}
+
+		typStr := string(id.Type)
+		if typStr == "" {
+			typStr = "human"
+		}
+
+		var remData *apiRemediation
+		if rem := remediation.Generate(*id); rem != nil {
+			remData = &apiRemediation{
+				Explanation: rem.Explanation,
+				Code:        rem.Code,
+			}
+		}
+
 		out = append(out, apiIdentity{
-			ID:         id.ID,
-			Privileged: id.Privileged,
-			Events:     len(id.Events),
-			Alerts:     alertCount[id.ID],
+			ID:          id.ID,
+			Type:        typStr,
+			Privileged:  id.Privileged,
+			Source:      id.Source,
+			Owner:       id.Owner,
+			Created:     createdStr,
+			LastUsed:    lastUsedStr,
+			Runtime:     id.Runtime,
+			OnBehalfOf:  id.OnBehalfOf,
+			Permissions: perms,
+			Remediation: remData,
+			Events:      len(id.Events),
+			Alerts:      alertCount[id.ID],
 		})
 	}
 	return out

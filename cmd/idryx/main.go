@@ -15,6 +15,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
+	"github.com/TAIPANBOX/idryx/internal/remediation"
 	"github.com/TAIPANBOX/idryx/internal/report"
 	"github.com/TAIPANBOX/idryx/internal/server"
 	"github.com/TAIPANBOX/idryx/internal/sink"
@@ -42,6 +43,8 @@ func run(args []string) error {
 		return runServe(args[1:])
 	case "load":
 		return runLoad(args[1:])
+	case "remediate":
+		return runRemediate(args[1:])
 	case "version":
 		fmt.Println("idryx", version)
 		return nil
@@ -55,12 +58,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: idryx <command> [flags] <log.json>
 
 commands:
-  detect   ingest a log, run detectors, print/deliver alerts
-  serve    ingest a log and serve a read-only web dashboard
-  load     ingest a log into a Postgres graph (--db)
-  version  print version
+  detect     ingest a log, run detectors, print/deliver alerts
+  serve      ingest a log and serve a read-only web dashboard
+  load       ingest a log into a Postgres graph (--db)
+  remediate  generate Terraform right-sizing snippets for unused permissions
+  version    print version
 
-detect and serve also accept --db to read from Postgres instead of a file.`)
+detect, serve and remediate also accept --db to read from Postgres instead of a file.`)
 }
 
 // buildGraph returns an identity graph either from a Postgres snapshot (when db
@@ -255,19 +259,10 @@ func runLoad(args []string) error {
 		fs.Usage()
 		return fmt.Errorf("load requires exactly one input file")
 	}
-	if _, isInventory, _ := parseInventory(*source, []byte("{}")); isInventory {
-		// Inventory sources aren't events; the events table can't hold them yet.
-		// Run NHI detection directly from the file instead.
-		return fmt.Errorf("load does not support %s yet; use: idryx detect --source %s <file>", *source, *source)
-	}
 
 	data, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
-	}
-	events, err := parseSource(*source, data)
-	if err != nil {
-		return fmt.Errorf("parse %s log: %w", *source, err)
 	}
 
 	store, err := graph.OpenPg(context.Background(), *db)
@@ -275,6 +270,30 @@ func runLoad(args []string) error {
 		return err
 	}
 	defer store.Close()
+
+	if ids, isInventory, err := parseInventory(*source, data); isInventory {
+		if err != nil {
+			return err
+		}
+		// Apply privileged flag from CLI arguments if specified
+		privSet := privilegedSet(*privileged)
+		for i := range ids {
+			if privSet[ids[i].ID] {
+				ids[i].Privileged = true
+			}
+		}
+		if err := store.IngestIdentities(context.Background(), ids); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities into postgres\n", len(ids))
+		return nil
+	}
+
+	events, err := parseSource(*source, data)
+	if err != nil {
+		return fmt.Errorf("parse %s log: %w", *source, err)
+	}
+
 	if err := store.Ingest(context.Background(), events, privilegedSet(*privileged)); err != nil {
 		return err
 	}
@@ -348,4 +367,50 @@ func privilegedSet(csv string) map[string]bool {
 		}
 	}
 	return set
+}
+
+func runRemediate(args []string) error {
+	fs := flag.NewFlagSet("remediate", flag.ContinueOnError)
+	var (
+		source     = fs.String("source", "aws_iam", "source: aws_iam|gcp_iam|azure|agents")
+		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+	)
+	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx remediate [flags] <log.json>\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path, err := inputArg(fs, *db)
+	if err != nil {
+		return err
+	}
+
+	g, err := buildGraph(*source, *privileged, path, *db)
+	if err != nil {
+		return err
+	}
+
+	var count int
+	for _, id := range g.Identities() {
+		if rem := remediation.Generate(*id); rem != nil {
+			fmt.Printf("================================================================================\n")
+			fmt.Printf("REMEDIATION RECOMMENDATION FOR: %s\n", rem.IdentityID)
+			fmt.Printf("EXPLANATION: %s\n", rem.Explanation)
+			fmt.Printf("--------------------------------------------------------------------------------\n")
+			fmt.Printf("%s\n", rem.Code)
+			fmt.Printf("================================================================================\n\n")
+			count++
+		}
+	}
+
+	if count == 0 {
+		fmt.Println("All monitored identities are fully right-sized. No unused permissions observed.")
+	} else {
+		fmt.Printf("Generated %d remediation recommendation(s).\n", count)
+	}
+
+	return nil
 }
