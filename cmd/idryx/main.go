@@ -438,9 +438,16 @@ func runRemediate(args []string) error {
 
 	var count int
 	for _, id := range g.Identities() {
+		var recs []*remediation.Recommendation
 		if rem := remediation.Generate(*id); rem != nil {
+			recs = append(recs, rem)
+		}
+		if rem := remediation.GenerateRotation(*id); rem != nil {
+			recs = append(recs, rem)
+		}
+		for _, rem := range recs {
 			fmt.Printf("================================================================================\n")
-			fmt.Printf("REMEDIATION RECOMMENDATION FOR: %s\n", rem.IdentityID)
+			fmt.Printf("REMEDIATION (%s) FOR: %s\n", rem.Kind, rem.IdentityID)
 			fmt.Printf("EXPLANATION: %s\n", rem.Explanation)
 			fmt.Printf("--------------------------------------------------------------------------------\n")
 			fmt.Printf("%s\n", rem.Code)
@@ -450,7 +457,7 @@ func runRemediate(args []string) error {
 	}
 
 	if count == 0 {
-		fmt.Println("All monitored identities are fully right-sized. No unused permissions observed.")
+		fmt.Println("All monitored identities are fully right-sized and within credential-rotation age.")
 	} else {
 		fmt.Printf("Generated %d remediation recommendation(s).\n", count)
 	}
