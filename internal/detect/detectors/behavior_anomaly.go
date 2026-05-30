@@ -20,7 +20,7 @@ func NewBehaviorAnomaly() *BehaviorAnomaly { return &BehaviorAnomaly{} }
 
 func (d *BehaviorAnomaly) Name() string { return "behavior_anomaly" }
 
-func (d *BehaviorAnomaly) Detect(g *graph.Store) []model.Alert {
+func (d *BehaviorAnomaly) Detect(g graph.Reader) []model.Alert {
 	var alerts []model.Alert
 	for _, id := range g.Identities() {
 		// Score each login against the baseline of everything that came before

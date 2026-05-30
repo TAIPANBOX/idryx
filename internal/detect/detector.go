@@ -10,5 +10,5 @@ import (
 // statistics and rules over the graph, never an LLM in the decision path.
 type Detector interface {
 	Name() string
-	Detect(g *graph.Store) []model.Alert
+	Detect(g graph.Reader) []model.Alert
 }

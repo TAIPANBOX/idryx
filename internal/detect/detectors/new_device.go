@@ -15,7 +15,7 @@ func NewNewDevice() *NewDevice { return &NewDevice{} }
 
 func (d *NewDevice) Name() string { return "new_device" }
 
-func (d *NewDevice) Detect(g *graph.Store) []model.Alert {
+func (d *NewDevice) Detect(g graph.Reader) []model.Alert {
 	var alerts []model.Alert
 	for _, id := range g.Identities() {
 		if !id.Privileged {

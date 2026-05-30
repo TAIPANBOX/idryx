@@ -1,5 +1,6 @@
-// Package graph holds the in-memory identity graph for Phase 0. Postgres is a
-// later-phase swap behind this same surface.
+// Package graph holds the identity graph. Phase 0/1 use an in-memory Store; a
+// Postgres-backed implementation can satisfy the same Reader interface later
+// without touching detectors.
 package graph
 
 import (
@@ -7,6 +8,13 @@ import (
 
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
+
+// Reader is the read surface detectors depend on. Any backend (in-memory,
+// Postgres) that returns identities with chronological events satisfies it.
+type Reader interface {
+	// Identities returns all identities, each with events in chronological order.
+	Identities() []*model.Identity
+}
 
 // Store is an in-memory collection of identities and their events.
 type Store struct {

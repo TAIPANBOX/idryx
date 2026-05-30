@@ -21,7 +21,7 @@ func NewMFAFatigue() *MFAFatigue { return &MFAFatigue{} }
 
 func (d *MFAFatigue) Name() string { return "mfa_fatigue" }
 
-func (d *MFAFatigue) Detect(g *graph.Store) []model.Alert {
+func (d *MFAFatigue) Detect(g graph.Reader) []model.Alert {
 	var alerts []model.Alert
 	for _, id := range g.Identities() {
 		challenges := make([]model.Event, 0)

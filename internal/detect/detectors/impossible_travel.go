@@ -21,7 +21,7 @@ func NewImpossibleTravel() *ImpossibleTravel { return &ImpossibleTravel{} }
 
 func (d *ImpossibleTravel) Name() string { return "impossible_travel" }
 
-func (d *ImpossibleTravel) Detect(g *graph.Store) []model.Alert {
+func (d *ImpossibleTravel) Detect(g graph.Reader) []model.Alert {
 	var alerts []model.Alert
 	for _, id := range g.Identities() {
 		var prev *model.Event
