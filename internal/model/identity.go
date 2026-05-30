@@ -9,6 +9,7 @@ type EventType string
 const (
 	EventLogin        EventType = "login"
 	EventMFAChallenge EventType = "mfa_challenge"
+	EventEgress       EventType = "egress"
 	EventOther        EventType = "other"
 )
 
@@ -25,6 +26,7 @@ type Event struct {
 	Lat        float64
 	Lon        float64
 	Device     string // user agent or device fingerprint
+	Resource   string // destination host/service for egress events (e.g. api.openai.com)
 }
 
 // IdentityType distinguishes humans from non-human identities (NHIs) and, in

@@ -83,6 +83,8 @@ detectors.
 - `okta` — Okta System Log (events)
 - `entra` — Microsoft Entra ID sign-in log (events)
 - `cloudtrail` — AWS CloudTrail (events: ConsoleLogin + API activity)
+- `egress` — generic network-egress log (events: identity → destination host;
+  VPC flow logs / proxy / CASB all reduce to this shape)
 - `aws_iam` — AWS IAM account authorization details (NHI inventory:
   users/roles as service accounts, with permissions, owner tags, and last-used)
 - `gcp_iam` — GCP service accounts + project IAM policy (NHI inventory:

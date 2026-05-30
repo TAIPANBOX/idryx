@@ -1,0 +1,9 @@
+{
+  "flows": [
+    {"time": "2026-05-29T10:00:00Z", "identity": "arn:aws:iam::123456789012:role/data-pipeline", "destination": "api.openai.com:443", "bytes": 48211},
+    {"time": "2026-05-29T10:05:00Z", "identity": "arn:aws:iam::123456789012:role/data-pipeline", "destination": "s3.amazonaws.com:443", "bytes": 1048576},
+    {"time": "2026-05-29T11:00:00Z", "identity": "agent:research-bot", "destination": "api.anthropic.com:443", "bytes": 91022},
+    {"time": "2026-05-29T11:30:00Z", "identity": "dev@example.com", "destination": "generativelanguage.googleapis.com:443", "bytes": 5120},
+    {"time": "2026-05-29T12:00:00Z", "identity": "ci@example.com", "destination": "github.com:443", "bytes": 2048}
+  ]
+}
