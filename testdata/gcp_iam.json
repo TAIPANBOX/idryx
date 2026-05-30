@@ -1,0 +1,14 @@
+{
+  "serviceAccounts": [
+    {"email": "ci-deployer@my-proj.iam.gserviceaccount.com", "displayName": "owner: platform-team"},
+    {"email": "metrics-reader@my-proj.iam.gserviceaccount.com", "displayName": "metrics scraper"},
+    {"email": "legacy-batch@my-proj.iam.gserviceaccount.com", "displayName": ""}
+  ],
+  "policy": {
+    "bindings": [
+      {"role": "roles/owner", "members": ["serviceAccount:ci-deployer@my-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/monitoring.viewer", "members": ["serviceAccount:metrics-reader@my-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/storage.admin", "members": ["serviceAccount:legacy-batch@my-proj.iam.gserviceaccount.com"]}
+    ]
+  }
+}

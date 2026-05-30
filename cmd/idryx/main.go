@@ -81,13 +81,11 @@ func buildGraph(source, privileged, path, db string) (graph.Reader, error) {
 	}
 	g := graph.New(privilegedSet(privileged))
 
-	// aws_iam is an inventory source (identities + permissions), not an event
-	// log; it populates the graph via AddIdentity for the NHI detectors.
-	if source == "aws_iam" {
-		ids, err := ingest.AWSIAM(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse aws_iam: %w", err)
-		}
+	// Inventory sources (identities + permissions), not event logs; they
+	// populate the graph via AddIdentity for the NHI detectors.
+	if ids, ok, err := parseInventory(source, data); err != nil {
+		return nil, err
+	} else if ok {
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
@@ -143,7 +141,7 @@ func runDetect(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
@@ -202,7 +200,7 @@ func runServe(args []string) error {
 	var (
 		addr       = fs.String("addr", ":8080", "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -236,7 +234,7 @@ func runLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	var (
 		db         = fs.String("db", "", "Postgres DSN (required)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 	)
 	fs.Usage = func() {
@@ -289,6 +287,28 @@ func parseSeverity(s string) (model.Severity, bool) {
 	default:
 		return model.SeverityNone, false
 	}
+}
+
+// parseInventory handles inventory sources (NHI identities, not events). The
+// bool reports whether source was an inventory source at all.
+func parseInventory(source string, data []byte) ([]model.Identity, bool, error) {
+	switch source {
+	case "aws_iam":
+		ids, err := ingest.AWSIAM(data)
+		return ids, true, wrapParse(source, err)
+	case "gcp_iam":
+		ids, err := ingest.GCPIAM(data)
+		return ids, true, wrapParse(source, err)
+	default:
+		return nil, false, nil
+	}
+}
+
+func wrapParse(source string, err error) error {
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", source, err)
+	}
+	return nil
 }
 
 func parseSource(source string, data []byte) ([]model.Event, error) {

@@ -85,6 +85,8 @@ detectors.
 - `cloudtrail` — AWS CloudTrail (events: ConsoleLogin + API activity)
 - `aws_iam` — AWS IAM account authorization details (NHI inventory:
   users/roles as service accounts, with permissions, owner tags, and last-used)
+- `gcp_iam` — GCP service accounts + project IAM policy (NHI inventory:
+  service accounts with their granted roles and owner hints)
 
 **Detectors (ITDR):**
 - `impossible_travel` — two successful logins too far apart to be feasible
