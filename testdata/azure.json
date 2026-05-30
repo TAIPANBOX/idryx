@@ -1,0 +1,33 @@
+{
+  "servicePrincipals": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "appId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "displayName": "terraform-deployer",
+      "accountEnabled": true,
+      "owners": ["platform-team@example.com"],
+      "passwordCredentialEndDates": ["2027-01-01T00:00:00Z"]
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "appId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "displayName": "legacy-webhook",
+      "accountEnabled": true,
+      "owners": [],
+      "passwordCredentialEndDates": ["2023-06-01T00:00:00Z"]
+    },
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "appId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "displayName": "monitoring-reader",
+      "accountEnabled": true,
+      "owners": ["sre@example.com"],
+      "passwordCredentialEndDates": []
+    }
+  ],
+  "roleAssignments": [
+    {"principalId": "11111111-1111-1111-1111-111111111111", "roleDefinitionName": "Owner"},
+    {"principalId": "22222222-2222-2222-2222-222222222222", "roleDefinitionName": "Contributor"},
+    {"principalId": "33333333-3333-3333-3333-333333333333", "roleDefinitionName": "Reader"}
+  ]
+}

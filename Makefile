@@ -31,6 +31,8 @@ nhi: build
 	./bin/idryx detect --source aws_iam ./testdata/aws_iam.json
 	@echo
 	./bin/idryx detect --source gcp_iam ./testdata/gcp_iam.json
+	@echo
+	./bin/idryx detect --source azure ./testdata/azure.json
 
 serve: build
 	./bin/idryx serve ./testdata/baseline_events.json
