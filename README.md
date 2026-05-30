@@ -79,17 +79,24 @@ A CLI that ingests an identity log, normalizes it into an in-memory identity
 graph, builds per-identity behavioral baselines, and runs deterministic
 detectors.
 
-**Source connectors** (normalize into one shared event model):
-- `okta` — Okta System Log
-- `entra` — Microsoft Entra ID sign-in log (Graph API)
-- `cloudtrail` — AWS CloudTrail (ConsoleLogin + API activity for NHIs/roles)
+**Source connectors:**
+- `okta` — Okta System Log (events)
+- `entra` — Microsoft Entra ID sign-in log (events)
+- `cloudtrail` — AWS CloudTrail (events: ConsoleLogin + API activity)
+- `aws_iam` — AWS IAM account authorization details (NHI inventory:
+  users/roles as service accounts, with permissions, owner tags, and last-used)
 
-**Detectors:**
+**Detectors (ITDR):**
 - `impossible_travel` — two successful logins too far apart to be feasible
 - `mfa_fatigue` — a burst of MFA challenges in a short window (push-bombing)
 - `new_device` — a privileged identity logging in from an unseen device
 - `behavior_anomaly` — login deviating from the identity's learned baseline
   (new country/device/active-hour), scored 0–1
+
+**Detectors (NHI / non-human identities):**
+- `stale_nhi` — a service account unused past a 90-day window (or never used)
+- `over_privileged_nhi` — an NHI holding admin-equivalent permissions
+- `orphaned_nhi` — an NHI with no mapped owner (nobody to rotate/revoke it)
 
 The **baseline engine** (`internal/baseline`) learns what is normal per identity
 and suppresses scoring during a learning period to avoid false positives — the

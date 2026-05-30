@@ -1,0 +1,36 @@
+{
+  "UserDetailList": [
+    {
+      "UserName": "legacy-deploy",
+      "Arn": "arn:aws:iam::123456789012:user/legacy-deploy",
+      "CreateDate": "2023-02-15T10:00:00Z",
+      "Tags": [],
+      "AttachedManagedPolicies": [
+        {"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}
+      ],
+      "UserPolicyList": []
+    }
+  ],
+  "RoleDetailList": [
+    {
+      "RoleName": "ci-runner",
+      "Arn": "arn:aws:iam::123456789012:role/ci-runner",
+      "CreateDate": "2026-05-20T09:00:00Z",
+      "Tags": [{"Key": "owner", "Value": "platform-team"}],
+      "AttachedManagedPolicies": [
+        {"PolicyName": "ReadOnlyAccess", "PolicyArn": "arn:aws:iam::aws:policy/ReadOnlyAccess"}
+      ],
+      "RolePolicyList": [],
+      "RoleLastUsed": {"LastUsedDate": "2026-05-28T12:00:00Z"}
+    },
+    {
+      "RoleName": "old-lambda-exec",
+      "Arn": "arn:aws:iam::123456789012:role/old-lambda-exec",
+      "CreateDate": "2022-01-01T00:00:00Z",
+      "Tags": [],
+      "AttachedManagedPolicies": [],
+      "RolePolicyList": [{"PolicyName": "inline-s3-read"}],
+      "RoleLastUsed": {"LastUsedDate": "2024-03-01T00:00:00Z"}
+    }
+  ]
+}

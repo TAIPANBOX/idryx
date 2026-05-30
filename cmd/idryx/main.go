@@ -79,11 +79,25 @@ func buildGraph(source, privileged, path, db string) (graph.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	g := graph.New(privilegedSet(privileged))
+
+	// aws_iam is an inventory source (identities + permissions), not an event
+	// log; it populates the graph via AddIdentity for the NHI detectors.
+	if source == "aws_iam" {
+		ids, err := ingest.AWSIAM(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse aws_iam: %w", err)
+		}
+		for _, id := range ids {
+			g.AddIdentity(id)
+		}
+		return g, nil
+	}
+
 	events, err := parseSource(source, data)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s log: %w", source, err)
 	}
-	g := graph.New(privilegedSet(privileged))
 	for _, e := range events {
 		g.AddEvent(e)
 	}
@@ -97,6 +111,9 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewMFAFatigue(),
 		detectors.NewNewDevice(),
 		detectors.NewBehaviorAnomaly(),
+		detectors.NewStaleNHI(),
+		detectors.NewOverPrivilegedNHI(),
+		detectors.NewOrphanedNHI(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -126,7 +143,7 @@ func runDetect(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
@@ -185,7 +202,7 @@ func runServe(args []string) error {
 	var (
 		addr       = fs.String("addr", ":8080", "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -219,7 +236,7 @@ func runLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	var (
 		db         = fs.String("db", "", "Postgres DSN (required)")
-		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 	)
 	fs.Usage = func() {

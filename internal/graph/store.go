@@ -33,15 +33,46 @@ func New(privileged map[string]bool) *Store {
 
 // AddEvent records an event, creating the identity if needed.
 func (s *Store) AddEvent(e model.Event) {
-	id, ok := s.identities[e.IdentityID]
-	if !ok {
-		id = &model.Identity{
-			ID:         e.IdentityID,
-			Privileged: s.privileged[e.IdentityID],
-		}
-		s.identities[e.IdentityID] = id
-	}
+	id := s.ensure(e.IdentityID)
 	id.Events = append(id.Events, e)
+}
+
+// AddIdentity merges a fully-described identity (e.g. an NHI from an IAM
+// connector) into the graph. Metadata fields are filled in; events from other
+// sources on the same ID are preserved.
+func (s *Store) AddIdentity(in model.Identity) {
+	id := s.ensure(in.ID)
+	if in.Type != model.IdentityHuman {
+		id.Type = in.Type
+	}
+	if in.Source != "" {
+		id.Source = in.Source
+	}
+	if in.Owner != "" {
+		id.Owner = in.Owner
+	}
+	if !in.Created.IsZero() {
+		id.Created = in.Created
+	}
+	if in.LastUsed.After(id.LastUsed) {
+		id.LastUsed = in.LastUsed
+	}
+	if in.Privileged {
+		id.Privileged = true
+	}
+	id.Permissions = append(id.Permissions, in.Permissions...)
+	id.Events = append(id.Events, in.Events...)
+}
+
+// ensure returns the identity for id, creating it (with the privileged flag
+// applied) if absent.
+func (s *Store) ensure(id string) *model.Identity {
+	got, ok := s.identities[id]
+	if !ok {
+		got = &model.Identity{ID: id, Privileged: s.privileged[id]}
+		s.identities[id] = got
+	}
+	return got
 }
 
 // Identities returns all identities sorted by ID, each with events sorted by

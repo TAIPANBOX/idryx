@@ -27,11 +27,52 @@ type Event struct {
 	Device     string // user agent or device fingerprint
 }
 
-// Identity is an actor in the graph with its chronological events.
+// IdentityType distinguishes humans from non-human identities (NHIs) and, in
+// later phases, agents. Defaulting to the zero value keeps existing ITDR code
+// (which only ever dealt with humans) working unchanged.
+type IdentityType string
+
+const (
+	IdentityHuman          IdentityType = ""                // default: human user
+	IdentityServiceAccount IdentityType = "service_account" // IAM user/role, GCP SA, etc.
+	IdentityKey            IdentityType = "key"             // access key / credential
+	IdentityAgent          IdentityType = "agent"           // AI agent (Phase 5)
+)
+
+// Permission is a single granted capability on an NHI (e.g. an attached IAM
+// policy or an admin-equivalent grant). Phase 2 records them coarsely; later
+// phases refine to action-level.
+type Permission struct {
+	Name  string // policy or grant name
+	Admin bool   // grants admin-equivalent access
+}
+
+// Identity is an actor in the graph: a human, service account, key, or agent.
 type Identity struct {
 	ID         string
+	Type       IdentityType
 	Privileged bool
 	Events     []Event
+
+	// NHI metadata (zero for humans).
+	Source      string       // connector that produced it, e.g. "aws_iam"
+	Owner       string       // mapped owner, when known
+	Created     time.Time    // when the identity was created
+	LastUsed    time.Time    // last observed use (zero if never)
+	Permissions []Permission // granted permissions
+}
+
+// IsNHI reports whether the identity is non-human.
+func (i *Identity) IsNHI() bool { return i.Type != IdentityHuman }
+
+// HasAdmin reports whether any granted permission is admin-equivalent.
+func (i *Identity) HasAdmin() bool {
+	for _, p := range i.Permissions {
+		if p.Admin {
+			return true
+		}
+	}
+	return false
 }
 
 // Severity ranks the urgency of an alert.
