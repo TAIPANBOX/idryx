@@ -104,6 +104,22 @@ detectors.
 - `over_privileged_nhi` — an NHI holding admin-equivalent permissions
 - `orphaned_nhi` — an NHI with no mapped owner (nobody to rotate/revoke it)
 
+**Detectors (agents / AI):**
+- `excessive_agency` — an AI agent that reaches admin-equivalent permissions
+  *through its delegation chain* (OWASP LLM06). Severity rises with delegation
+  depth. The graph resolves `on_behalf_of` edges (agent → sub-agent → service
+  account → human), so an agent's blast radius is the union of what every
+  identity it can act as may do.
+- `shadow_ai` — an identity whose egress reaches a known external LLM API
+  (OpenAI, Anthropic, Gemini, …): unsanctioned AI usage and a data-egress risk.
+  Higher severity for NHIs/agents than for humans.
+
+**Detectors (least-privilege):**
+- `least_privilege` — granted permissions never exercised, with a revocation
+  recommendation. Fires only for identities that have usage data, so sources
+  without an observed-usage signal produce no false recommendations; an unused
+  admin grant is the highest-severity reduction.
+
 The **baseline engine** (`internal/baseline`) learns what is normal per identity
 and suppresses scoring during a learning period to avoid false positives — the
 same engine that will later extend to service accounts and AI agents. Detection
