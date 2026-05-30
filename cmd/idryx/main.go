@@ -13,6 +13,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/report"
+	"github.com/TAIPANBOX/idryx/internal/sink"
 )
 
 // version is overridden at build time via -ldflags.
@@ -31,6 +32,9 @@ func run(args []string) error {
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
+		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
+		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
@@ -88,7 +92,39 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown format %q", *format)
 	}
+
+	threshold, ok := parseSeverity(*minSev)
+	if !ok {
+		return fmt.Errorf("invalid --min-severity %q", *minSev)
+	}
+	var sinks []sink.Sink
+	if *slackURL != "" {
+		sinks = append(sinks, sink.NewSlack(*slackURL, threshold))
+	}
+	if *webhookURL != "" {
+		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold))
+	}
+	for _, s := range sinks {
+		if err := s.Send(alerts); err != nil {
+			fmt.Fprintf(os.Stderr, "idryx: sink %s: %v\n", s.Name(), err)
+		}
+	}
 	return nil
+}
+
+func parseSeverity(s string) (model.Severity, bool) {
+	switch s {
+	case "low":
+		return model.SeverityLow, true
+	case "medium":
+		return model.SeverityMedium, true
+	case "high":
+		return model.SeverityHigh, true
+	case "critical":
+		return model.SeverityCritical, true
+	default:
+		return model.SeverityNone, false
+	}
 }
 
 func parseSource(source string, data []byte) ([]model.Event, error) {
