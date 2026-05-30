@@ -119,6 +119,8 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewExcessiveAgency(),
 		detectors.NewShadowAI(),
 		detectors.NewLeastPrivilege(),
+		detectors.NewPrivilegeEscalation(),
+		detectors.NewSharedCredential(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {

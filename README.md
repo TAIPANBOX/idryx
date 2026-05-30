@@ -117,6 +117,11 @@ learning period to avoid false positives.
 - `stale_nhi` — a service account unused past a 90-day window (or never used)
 - `over_privileged_nhi` — an NHI holding admin-equivalent permissions
 - `orphaned_nhi` — an NHI with no mapped owner (nobody to rotate / revoke it)
+- `privilege_escalation` — an NHI holding a stealthy escalation permission
+  (AWS `iam:PassRole`/`PutRolePolicy`, GCP `actAs`/`getAccessToken`, Azure
+  `roleAssignments/write`, …) that grants a path to admin without holding admin
+- `shared_credential` — an NHI whose credential is used across many distinct IPs,
+  countries, or devices: the signature of a leaked or shared key
 
 **Agents / AI**
 - `excessive_agency` — an AI agent that reaches admin-equivalent permissions through
