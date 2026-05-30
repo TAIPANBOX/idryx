@@ -48,15 +48,30 @@ auditable.
 ## Quick start
 ```bash
 make build
+
+# detect: run detectors, print or deliver alerts
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
 ./bin/idryx detect --source entra <log.json>        # okta | entra | cloudtrail
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
+./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
+./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
+./bin/idryx detect --min-severity critical ...      # delivery threshold (default high)
+
+# serve: read-only web dashboard + JSON API
+./bin/idryx serve <log.json>                        # dashboard on :8080
+./bin/idryx serve --addr :9000 <log.json>           # custom address
+
+# load: persist a log into a Postgres graph, then read from it
+./bin/idryx load --db "$DSN" <log.json>             # ingest into Postgres
+./bin/idryx detect --db "$DSN"                      # detect from the DB
+./bin/idryx serve  --db "$DSN"                      # dashboard from the DB
 ```
 
 Run against the bundled fixtures:
 ```bash
 make detect
+make serve     # then open http://localhost:8080
 ```
 
 ## What works today
@@ -82,10 +97,27 @@ same engine that will later extend to service accounts and AI agents. Detection
 is deterministic (statistics + rules over the graph); LLMs are never in the
 detection path. `--privileged` raises severity for sensitive accounts.
 
+**Alert delivery** (`internal/sink`): alerts at or above `--min-severity` are
+pushed to a Slack incoming webhook (`--slack`) and/or a generic JSON webhook for
+SIEM/SOAR (`--webhook`). Fully-filtered batches make no network call.
+
+**Web dashboard** (`internal/server`, `idryx serve`): a read-only HTTP server
+with a self-contained HTML dashboard and a JSON API (`/api/alerts`,
+`/api/identities`, `/healthz`). Read-only by design — idryx observes, it never
+mutates the IdP.
+
+**Postgres graph** (`internal/graph`, pgx): `idryx load --db <dsn>` persists
+events into Postgres; `detect`/`serve --db` read a snapshot back. The snapshot
+implements the same `graph.Reader` the in-memory store does, so detectors run
+unchanged. Integration tests live behind the `integration` build tag and run in
+CI against a Postgres service (`make test-integration` with `DATABASE_URL`).
+
 ## Status
-Phase 1 in progress: baseline engine and Entra + CloudTrail connectors landed on
-top of the Phase 0 ITDR core. Next, per [`idryx-plan.md`](./idryx-plan.md):
-Postgres-backed graph, web UI, and SIEM/Slack alerting.
+Phase 1 in progress: baseline engine, Entra + CloudTrail connectors, Slack/SIEM
+alert delivery, a read-only web dashboard, and a Postgres-backed graph landed on
+top of the Phase 0 ITDR core. Detectors read through a `graph.Reader` interface
+satisfied by both the in-memory and Postgres backends. See
+[`idryx-plan.md`](./idryx-plan.md).
 
 ## License
 Apache-2.0.
