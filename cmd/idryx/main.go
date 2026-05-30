@@ -1,9 +1,11 @@
-// Command idryx ingests identity events and reports ITDR alerts.
+// Command idryx ingests identity logs and reports ITDR alerts, either to the
+// terminal/sinks (detect) or over a read-only web dashboard (serve).
 package main
 
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/report"
+	"github.com/TAIPANBOX/idryx/internal/server"
 	"github.com/TAIPANBOX/idryx/internal/sink"
 )
 
@@ -27,46 +30,46 @@ func main() {
 }
 
 func run(args []string) error {
-	fs := flag.NewFlagSet("idryx", flag.ContinueOnError)
-	var (
-		format     = fs.String("format", "human", "output format: human|json")
-		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
-		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
-		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
-		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
-	)
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
-		fs.PrintDefaults()
-	}
-
 	if len(args) == 0 {
-		fs.Usage()
+		usage()
 		return fmt.Errorf("no command given")
 	}
-	if args[0] != "detect" {
-		fs.Usage()
+	switch args[0] {
+	case "detect":
+		return runDetect(args[1:])
+	case "serve":
+		return runServe(args[1:])
+	case "version":
+		fmt.Println("idryx", version)
+		return nil
+	default:
+		usage()
 		return fmt.Errorf("unknown command %q", args[0])
 	}
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `usage: idryx <command> [flags] <log.json>
+
+commands:
+  detect   ingest a log, run detectors, print/deliver alerts
+  serve    ingest a log and serve a read-only web dashboard
+  version  print version`)
+}
+
+// pipeline parses a source log, builds the identity graph, and runs all
+// detectors. Shared by detect and serve.
+func pipeline(source, privileged, path string) (*graph.Store, []model.Alert, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
 	}
-	if fs.NArg() != 1 {
-		fs.Usage()
-		return fmt.Errorf("detect requires exactly one input file")
+	events, err := parseSource(source, data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s log: %w", source, err)
 	}
 
-	data, err := os.ReadFile(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	events, err := parseSource(*source, data)
-	if err != nil {
-		return fmt.Errorf("parse %s log: %w", *source, err)
-	}
-
-	g := graph.New(privilegedSet(*privileged))
+	g := graph.New(privilegedSet(privileged))
 	for _, e := range events {
 		g.AddEvent(e)
 	}
@@ -80,6 +83,35 @@ func run(args []string) error {
 	var alerts []model.Alert
 	for _, d := range ds {
 		alerts = append(alerts, d.Detect(g)...)
+	}
+	return g, alerts, nil
+}
+
+func runDetect(args []string) error {
+	fs := flag.NewFlagSet("detect", flag.ContinueOnError)
+	var (
+		format     = fs.String("format", "human", "output format: human|json")
+		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
+		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
+		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
+	)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("detect requires exactly one input file")
+	}
+
+	_, alerts, err := pipeline(*source, *privileged, fs.Arg(0))
+	if err != nil {
+		return err
 	}
 
 	switch *format {
@@ -110,6 +142,39 @@ func run(args []string) error {
 		}
 	}
 	return nil
+}
+
+func runServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	var (
+		addr       = fs.String("addr", ":8080", "address to listen on")
+		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
+	)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx serve [flags] <log.json>\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("serve requires exactly one input file")
+	}
+
+	g, alerts, err := pipeline(*source, *privileged, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	srv := server.New(g, alerts)
+	shown := *addr
+	if strings.HasPrefix(shown, ":") {
+		shown = "localhost" + shown
+	}
+	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts)\n", shown, len(alerts))
+	return http.ListenAndServe(*addr, srv.Handler())
 }
 
 func parseSeverity(s string) (model.Severity, bool) {
