@@ -20,7 +20,8 @@ type agentRecord struct {
 	Runtime    string   `json:"runtime"`
 	OnBehalfOf string   `json:"onBehalfOf"` // identity ID the agent delegates from
 	Owner      string   `json:"owner"`
-	Tools      []string `json:"tools"` // tool/scope names the agent may call
+	Tools      []string `json:"tools"`     // tool/scope names the agent may call
+	UsedTools  []string `json:"usedTools"` // tools actually observed in use (optional)
 }
 
 // Agents parses the agent inventory into agent identities. Each tool becomes a
@@ -42,10 +43,15 @@ func Agents(data []byte) ([]model.Identity, error) {
 			Runtime:    a.Runtime,
 			OnBehalfOf: a.OnBehalfOf,
 		}
+		used := make(map[string]bool, len(a.UsedTools))
+		for _, t := range a.UsedTools {
+			used[t] = true
+		}
 		for _, tool := range a.Tools {
 			id.Permissions = append(id.Permissions, model.Permission{
 				Name:  tool,
 				Admin: isHighRiskTool(tool),
+				Used:  used[tool],
 			})
 		}
 		id.Privileged = id.HasAdmin()

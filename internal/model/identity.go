@@ -42,11 +42,11 @@ const (
 )
 
 // Permission is a single granted capability on an NHI (e.g. an attached IAM
-// policy or an admin-equivalent grant). Phase 2 records them coarsely; later
-// phases refine to action-level.
+// policy, an admin-equivalent grant, or an agent tool/scope).
 type Permission struct {
-	Name  string // policy or grant name
+	Name  string // policy, grant, or tool name
 	Admin bool   // grants admin-equivalent access
+	Used  bool   // whether this grant has been observed in use (when usage data exists)
 }
 
 // Identity is an actor in the graph: a human, service account, key, or agent.

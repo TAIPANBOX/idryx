@@ -19,7 +19,8 @@
       "runtime": "bedrock",
       "onBehalfOf": "agent:orchestrator",
       "owner": "support-team",
-      "tools": ["jira_read", "slack_post"]
+      "tools": ["jira_read", "slack_post", "s3_delete"],
+      "usedTools": ["jira_read"]
     },
     {
       "id": "agent:readonly-helper",
