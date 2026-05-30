@@ -48,32 +48,44 @@ auditable.
 ## Quick start
 ```bash
 make build
-./bin/idryx detect <okta-system-log.json>                 # human-readable report
-./bin/idryx detect --format json <okta-system-log.json>   # JSON alerts
-./bin/idryx detect --privileged alice@x.com,bob@x.com ... # mark privileged accounts
+./bin/idryx detect <log.json>                       # human-readable report
+./bin/idryx detect --format json <log.json>         # JSON alerts
+./bin/idryx detect --source entra <log.json>        # okta | entra | cloudtrail
+./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
 ```
 
-Run against the bundled fixture:
+Run against the bundled fixtures:
 ```bash
 make detect
 ```
 
-## What works today (Phase 0)
-A CLI that ingests an Okta System Log export, normalizes it into an in-memory
-identity graph, and runs 3 ITDR detectors:
+## What works today
+A CLI that ingests an identity log, normalizes it into an in-memory identity
+graph, builds per-identity behavioral baselines, and runs deterministic
+detectors.
+
+**Source connectors** (normalize into one shared event model):
+- `okta` — Okta System Log
+- `entra` — Microsoft Entra ID sign-in log (Graph API)
+- `cloudtrail` — AWS CloudTrail (ConsoleLogin + API activity for NHIs/roles)
+
+**Detectors:**
 - `impossible_travel` — two successful logins too far apart to be feasible
 - `mfa_fatigue` — a burst of MFA challenges in a short window (push-bombing)
 - `new_device` — a privileged identity logging in from an unseen device
+- `behavior_anomaly` — login deviating from the identity's learned baseline
+  (new country/device/active-hour), scored 0–1
 
-Detection is deterministic (statistics + rules over the graph), and the
-`--privileged` set raises severity for sensitive accounts. The Okta connector
-(`internal/ingest`) normalizes source logs into a shared event model, so adding
-Entra/CloudTrail later is a new connector, not a new engine.
+The **baseline engine** (`internal/baseline`) learns what is normal per identity
+and suppresses scoring during a learning period to avoid false positives — the
+same engine that will later extend to service accounts and AI agents. Detection
+is deterministic (statistics + rules over the graph); LLMs are never in the
+detection path. `--privileged` raises severity for sensitive accounts.
 
 ## Status
-Phase 0 (MVP CLI detector) — working. Next, per [`idryx-plan.md`](./idryx-plan.md):
-Postgres-backed graph, a baseline engine, Entra + CloudTrail connectors, web UI,
-and SIEM/Slack alerting.
+Phase 1 in progress: baseline engine and Entra + CloudTrail connectors landed on
+top of the Phase 0 ITDR core. Next, per [`idryx-plan.md`](./idryx-plan.md):
+Postgres-backed graph, web UI, and SIEM/Slack alerting.
 
 ## License
 Apache-2.0.

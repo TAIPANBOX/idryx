@@ -30,9 +30,10 @@ func run(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		source     = fs.String("source", "okta", "log source: okta|entra|cloudtrail")
 	)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <okta-system-log.json>\n\nflags:\n")
+		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
 	}
 
@@ -56,9 +57,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	events, err := ingest.Okta(data)
+	events, err := parseSource(*source, data)
 	if err != nil {
-		return fmt.Errorf("parse okta log: %w", err)
+		return fmt.Errorf("parse %s log: %w", *source, err)
 	}
 
 	g := graph.New(privilegedSet(*privileged))
@@ -70,6 +71,7 @@ func run(args []string) error {
 		detectors.NewImpossibleTravel(),
 		detectors.NewMFAFatigue(),
 		detectors.NewNewDevice(),
+		detectors.NewBehaviorAnomaly(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -87,6 +89,19 @@ func run(args []string) error {
 		return fmt.Errorf("unknown format %q", *format)
 	}
 	return nil
+}
+
+func parseSource(source string, data []byte) ([]model.Event, error) {
+	switch source {
+	case "okta":
+		return ingest.Okta(data)
+	case "entra":
+		return ingest.Entra(data)
+	case "cloudtrail":
+		return ingest.CloudTrail(data)
+	default:
+		return nil, fmt.Errorf("unknown source %q", source)
+	}
 }
 
 func privilegedSet(csv string) map[string]bool {

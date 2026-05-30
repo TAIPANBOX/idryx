@@ -20,6 +20,8 @@ lint: vet
 
 detect: build
 	./bin/idryx detect --privileged bob@example.com,carol@example.com ./testdata/events.json
+	@echo
+	./bin/idryx detect ./testdata/baseline_events.json
 
 clean:
 	rm -rf bin
