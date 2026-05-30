@@ -1,13 +1,17 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: build test vet fmt lint detect serve clean
+.PHONY: build test test-integration vet fmt lint detect serve clean
 
 build:
 	go build $(LDFLAGS) -o bin/idryx ./cmd/idryx
 
 test:
 	go test ./...
+
+# Requires a running Postgres; set DATABASE_URL.
+test-integration:
+	go test -tags integration ./internal/graph/
 
 vet:
 	go vet ./...
