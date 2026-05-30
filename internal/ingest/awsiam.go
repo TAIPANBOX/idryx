@@ -56,15 +56,15 @@ func AWSIAM(data []byte) ([]model.Identity, error) {
 
 	var out []model.Identity
 	for _, p := range d.UserDetailList {
-		out = append(out, principalToIdentity(p, p.UserName, p.UserPolicyList))
+		out = append(out, principalToIdentity(p, p.UserPolicyList))
 	}
 	for _, p := range d.RoleDetailList {
-		out = append(out, principalToIdentity(p, p.RoleName, p.RolePolicyList))
+		out = append(out, principalToIdentity(p, p.RolePolicyList))
 	}
 	return out, nil
 }
 
-func principalToIdentity(p awsPrincipal, name string, inline []awsInline) model.Identity {
+func principalToIdentity(p awsPrincipal, inline []awsInline) model.Identity {
 	id := model.Identity{
 		ID:      p.Arn,
 		Type:    model.IdentityServiceAccount,
