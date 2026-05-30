@@ -142,7 +142,7 @@ func runDetect(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents|agents")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
@@ -201,7 +201,7 @@ func runServe(args []string) error {
 	var (
 		addr       = fs.String("addr", ":8080", "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents|agents")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -235,7 +235,7 @@ func runLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	var (
 		db         = fs.String("db", "", "Postgres DSN (required)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents|agents")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|aws_iam|gcp_iam|azure|agents")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 	)
 	fs.Usage = func() {
@@ -252,6 +252,11 @@ func runLoad(args []string) error {
 	if fs.NArg() != 1 {
 		fs.Usage()
 		return fmt.Errorf("load requires exactly one input file")
+	}
+	if _, isInventory, _ := parseInventory(*source, []byte("{}")); isInventory {
+		// Inventory sources aren't events; the events table can't hold them yet.
+		// Run NHI detection directly from the file instead.
+		return fmt.Errorf("load does not support %s yet; use: idryx detect --source %s <file>", *source, *source)
 	}
 
 	data, err := os.ReadFile(fs.Arg(0))
