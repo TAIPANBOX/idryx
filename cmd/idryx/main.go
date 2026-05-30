@@ -70,8 +70,9 @@ detect, serve and remediate also accept --db to read from Postgres instead of a 
 // buildGraph returns an identity graph either from a Postgres snapshot (when db
 // is set) or by parsing a source log file. Exactly one of db/path is used.
 // ctPath is optional: when non-empty and source is "aws_iam", CloudTrail records
-// are used to mark which permissions have been exercised.
-func buildGraph(source, privileged, path, db, ctPath string) (graph.Reader, error) {
+// are used to mark which permissions have been exercised. auditPath does the same
+// for "gcp_iam" using Cloud Audit Logs.
+func buildGraph(source, privileged, path, db, ctPath, auditPath string) (graph.Reader, error) {
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
@@ -96,6 +97,22 @@ func buildGraph(source, privileged, path, db, ctPath string) (graph.Reader, erro
 		ids, err := ingest.AWSSIAMWithUsage(data, ctData)
 		if err != nil {
 			return nil, fmt.Errorf("parse aws_iam+cloudtrail: %w", err)
+		}
+		for _, id := range ids {
+			g.AddIdentity(id)
+		}
+		return g, nil
+	}
+
+	// gcp_iam + Cloud Audit Logs enrichment path.
+	if source == "gcp_iam" && auditPath != "" {
+		auditData, err := os.ReadFile(auditPath)
+		if err != nil {
+			return nil, fmt.Errorf("read gcp audit file: %w", err)
+		}
+		ids, err := ingest.GCPIAMWithUsage(data, auditData)
+		if err != nil {
+			return nil, fmt.Errorf("parse gcp_iam+audit: %w", err)
 		}
 		for _, id := range ids {
 			g.AddIdentity(id)
@@ -173,6 +190,7 @@ func runDetect(args []string) error {
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -187,7 +205,7 @@ func runDetect(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
 	if err != nil {
 		return err
 	}
@@ -230,6 +248,7 @@ func runServe(args []string) error {
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -244,7 +263,7 @@ func runServe(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
 	if err != nil {
 		return err
 	}
@@ -397,6 +416,7 @@ func runRemediate(args []string) error {
 		source     = fs.String("source", "aws_iam", "source: aws_iam|gcp_iam|azure|agents")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
@@ -411,7 +431,7 @@ func runRemediate(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
 	if err != nil {
 		return err
 	}

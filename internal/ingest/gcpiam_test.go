@@ -55,6 +55,72 @@ func TestGCPIAM(t *testing.T) {
 	}
 }
 
+func TestGCPIAMWithUsage(t *testing.T) {
+	iam := []byte(`{
+	  "serviceAccounts": [
+	    {"email":"reader@proj.iam.gserviceaccount.com","displayName":"telemetry reader"}
+	  ],
+	  "policy": {
+	    "bindings": [
+	      {"role":"roles/logging.viewer","members":["serviceAccount:reader@proj.iam.gserviceaccount.com"]},
+	      {"role":"roles/storage.admin","members":["serviceAccount:reader@proj.iam.gserviceaccount.com"]}
+	    ]
+	  }
+	}`)
+	audit := []byte(`{"entries":[
+	  {"protoPayload":{"serviceName":"logging.googleapis.com","methodName":"google.logging.v2.LoggingServiceV2.ListLogEntries","authenticationInfo":{"principalEmail":"reader@proj.iam.gserviceaccount.com"}}}
+	]}`)
+
+	ids, err := GCPIAMWithUsage(iam, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+	used := map[string]bool{}
+	for _, p := range ids[0].Permissions {
+		used[p.Name] = p.Used
+	}
+	if !used["roles/logging.viewer"] {
+		t.Error("roles/logging.viewer should be marked used (logging activity observed)")
+	}
+	if used["roles/storage.admin"] {
+		t.Error("roles/storage.admin must stay unused (no storage activity observed)")
+	}
+}
+
+func TestGCPAuditUsageArray(t *testing.T) {
+	// Bare array form (not wrapped in {"entries":...}).
+	audit := []byte(`[
+	  {"protoPayload":{"serviceName":"storage.googleapis.com","authenticationInfo":{"principalEmail":"sa@p.iam.gserviceaccount.com"}}}
+	]`)
+	usage, err := GCPAuditUsage(audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage["gcp:sa@p.iam.gserviceaccount.com"]["storage"] {
+		t.Errorf("expected storage usage for sa, got %v", usage)
+	}
+}
+
+func TestServicesFromRole(t *testing.T) {
+	cases := map[string][]string{
+		"roles/owner":          {"*"},
+		"roles/editor":         {"*"},
+		"roles/viewer":         {"*"},
+		"roles/storage.admin":  {"storage"},
+		"roles/logging.viewer": {"logging"},
+		"roles/customOpaque":   nil,
+	}
+	for role, want := range cases {
+		got := servicesFromRole(role)
+		if len(got) != len(want) || (len(want) == 1 && got[0] != want[0]) {
+			t.Errorf("servicesFromRole(%q) = %v, want %v", role, got, want)
+		}
+	}
+}
+
 func TestIsAdminRole(t *testing.T) {
 	cases := map[string]bool{
 		"roles/owner":          true,

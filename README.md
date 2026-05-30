@@ -172,6 +172,10 @@ make build
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
 ./bin/idryx detect --min-severity critical ...      # delivery threshold (default high)
 
+# least-privilege: enrich inventory with observed usage to flag unused grants
+./bin/idryx detect --source aws_iam --cloudtrail ct.json iam.json    # mark used AWS permissions
+./bin/idryx detect --source gcp_iam --gcp-audit  audit.json iam.json # mark used GCP roles
+
 # serve: read-only web dashboard + JSON API
 ./bin/idryx serve <log.json>                        # dashboard on :8080
 ./bin/idryx serve --addr :9000 <log.json>           # custom address
@@ -207,7 +211,7 @@ deterministic detectors.
 | `cloudtrail` | events | AWS CloudTrail (ConsoleLogin + API activity) |
 | `egress` | events | generic network-egress (identity → destination host; VPC flow / proxy / CASB) |
 | `aws_iam` | NHI inventory | IAM users/roles as service accounts, with permissions, owner tags, last-used |
-| `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles and owner hints |
+| `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles and owner hints (optional Cloud Audit Log usage enrichment via `--gcp-audit`) |
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 
