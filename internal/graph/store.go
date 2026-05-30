@@ -60,8 +60,48 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if in.Privileged {
 		id.Privileged = true
 	}
+	if in.Runtime != "" {
+		id.Runtime = in.Runtime
+	}
+	if in.OnBehalfOf != "" {
+		id.OnBehalfOf = in.OnBehalfOf
+	}
 	id.Permissions = append(id.Permissions, in.Permissions...)
 	id.Events = append(id.Events, in.Events...)
+}
+
+// DelegationChain returns the chain of identity IDs an agent acts through,
+// starting at id and following OnBehalfOf upward to the ultimate principal.
+// The starting id is included; a cycle or missing link terminates the walk.
+func (s *Store) DelegationChain(id string) []string {
+	var chain []string
+	seen := map[string]bool{}
+	for cur := id; cur != ""; {
+		if seen[cur] {
+			break // cycle guard
+		}
+		seen[cur] = true
+		chain = append(chain, cur)
+		node, ok := s.identities[cur]
+		if !ok {
+			break
+		}
+		cur = node.OnBehalfOf
+	}
+	return chain
+}
+
+// EffectivePermissions returns the union of permissions an agent reaches through
+// its delegation chain: an agent's blast radius is the sum of what every
+// identity it can act as is allowed to do.
+func (s *Store) EffectivePermissions(id string) []model.Permission {
+	var out []model.Permission
+	for _, link := range s.DelegationChain(id) {
+		if node, ok := s.identities[link]; ok {
+			out = append(out, node.Permissions...)
+		}
+	}
+	return out
 }
 
 // ensure returns the identity for id, creating it (with the privileged flag

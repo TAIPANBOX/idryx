@@ -1,0 +1,32 @@
+{
+  "agents": [
+    {
+      "id": "agent:deploy-bot",
+      "runtime": "github-actions",
+      "onBehalfOf": "",
+      "owner": "platform",
+      "tools": ["ci_trigger", "shell_exec"]
+    },
+    {
+      "id": "agent:orchestrator",
+      "runtime": "langgraph",
+      "onBehalfOf": "agent:deploy-bot",
+      "owner": "platform",
+      "tools": ["plan", "delegate"]
+    },
+    {
+      "id": "agent:support-triage",
+      "runtime": "bedrock",
+      "onBehalfOf": "agent:orchestrator",
+      "owner": "support-team",
+      "tools": ["jira_read", "slack_post"]
+    },
+    {
+      "id": "agent:readonly-helper",
+      "runtime": "langgraph",
+      "onBehalfOf": "",
+      "owner": "data-team",
+      "tools": ["kb_search", "doc_read"]
+    }
+  ]
+}

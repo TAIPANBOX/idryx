@@ -60,7 +60,14 @@ type Identity struct {
 	Created     time.Time    // when the identity was created
 	LastUsed    time.Time    // last observed use (zero if never)
 	Permissions []Permission // granted permissions
+
+	// Agent / delegation metadata (zero for non-agents).
+	Runtime    string // where the agent executes, e.g. "langgraph", "bedrock"
+	OnBehalfOf string // identity ID this agent acts on behalf of (one hop up)
 }
+
+// IsAgent reports whether the identity is an AI agent.
+func (i *Identity) IsAgent() bool { return i.Type == IdentityAgent }
 
 // IsNHI reports whether the identity is non-human.
 func (i *Identity) IsNHI() bool { return i.Type != IdentityHuman }
