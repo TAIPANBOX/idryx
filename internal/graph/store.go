@@ -66,6 +66,9 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if in.OnBehalfOf != "" {
 		id.OnBehalfOf = in.OnBehalfOf
 	}
+	if in.Shadow {
+		id.Shadow = true
+	}
 	id.Permissions = append(id.Permissions, in.Permissions...)
 	id.Events = append(id.Events, in.Events...)
 }

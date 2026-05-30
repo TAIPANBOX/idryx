@@ -129,6 +129,9 @@ learning period to avoid false positives.
 - `shadow_ai` — an identity whose egress reaches a known external LLM API (OpenAI,
   Anthropic, Gemini, …): unsanctioned AI usage and a data-egress risk. Higher
   severity for NHIs / agents than for humans
+- `shadow_mcp` — an MCP server in use but absent from the sanctioned registry
+  (OWASP MCP Top 10: Shadow MCP Servers); critical when it also exposes high-risk
+  tools (shell / exec / admin), compounding shadow MCP with tool poisoning
 
 **Least-privilege**
 - `least_privilege` — granted permissions never exercised, with a revocation
@@ -166,7 +169,7 @@ make build
 # detect: run detectors, print or deliver alerts
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
-./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents
+./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
@@ -214,8 +217,9 @@ deterministic detectors.
 | `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles and owner hints (optional Cloud Audit Log usage enrichment via `--gcp-audit`) |
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
+| `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
 
-**Detectors** — see the [Detectors](#detectors) section above: 10 detectors across ITDR ·
+**Detectors** — see the [Detectors](#detectors) section above: 13 detectors across ITDR ·
 NHI · agents/AI · least-privilege.
 
 **Baseline engine** (`internal/baseline`) — learns what is normal per identity and

@@ -1,0 +1,9 @@
+{
+  "registry": ["github-mcp", "jira-mcp", "confluence-mcp"],
+  "servers": [
+    {"name": "github-mcp", "owner": "platform", "url": "https://mcp.internal/github", "tools": ["repo_read", "issue_read", "pr_comment"]},
+    {"name": "jira-mcp", "owner": "platform", "url": "https://mcp.internal/jira", "tools": ["issue_read", "issue_write"]},
+    {"name": "shadow-shell", "url": "https://mcp.unknown.dev/shell", "tools": ["shell_exec", "file_write_all"]},
+    {"name": "notes-mcp", "url": "https://mcp.unknown.dev/notes", "tools": ["notes_read"]}
+  ]
+}

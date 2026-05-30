@@ -39,6 +39,7 @@ const (
 	IdentityServiceAccount IdentityType = "service_account" // IAM user/role, GCP SA, etc.
 	IdentityKey            IdentityType = "key"             // access key / credential
 	IdentityAgent          IdentityType = "agent"           // AI agent (Phase 5)
+	IdentityMCPServer      IdentityType = "mcp_server"      // MCP server exposing tools to agents
 )
 
 // Permission is a single granted capability on an NHI (e.g. an attached IAM
@@ -66,6 +67,9 @@ type Identity struct {
 	// Agent / delegation metadata (zero for non-agents).
 	Runtime    string // where the agent executes, e.g. "langgraph", "bedrock"
 	OnBehalfOf string // identity ID this agent acts on behalf of (one hop up)
+
+	// MCP metadata (zero for non-MCP identities).
+	Shadow bool // MCP server in use but absent from the sanctioned registry
 }
 
 // IsAgent reports whether the identity is an AI agent.
