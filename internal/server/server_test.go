@@ -73,6 +73,36 @@ func TestAPIIdentities(t *testing.T) {
 	}
 }
 
+func TestAPIRemediations(t *testing.T) {
+	g := graph.New(nil)
+	g.AddIdentity(model.Identity{
+		ID:     "arn:aws:iam::1:role/r",
+		Type:   model.IdentityServiceAccount,
+		Source: "aws_iam",
+		Permissions: []model.Permission{
+			{Name: "AdministratorAccess", Admin: true, Used: false},
+			{Name: "S3ReadOnly", Used: true},
+		},
+	})
+	rr := get(t, New(g, nil).Handler(), "/api/remediations")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var got []apiRecommendation
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected at least one recommendation, got none")
+	}
+	if got[0].Kind != "right_size" {
+		t.Errorf("kind = %q, want right_size", got[0].Kind)
+	}
+	if got[0].Identity != "arn:aws:iam::1:role/r" {
+		t.Errorf("identity = %q", got[0].Identity)
+	}
+}
+
 func TestDashboardServed(t *testing.T) {
 	rr := get(t, testServer().Handler(), "/")
 	if rr.Code != http.StatusOK {

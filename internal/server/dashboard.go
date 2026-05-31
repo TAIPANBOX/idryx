@@ -920,7 +920,16 @@ function renderDetails(id) {
       '<pre id="remediation-code-' + esc(id.id) + '" style="background: #090d16; border: 1px solid var(--panel-border); border-radius: 0.5rem; padding: 1rem; font-family: monospace; font-size: 0.8rem; overflow-x: auto; color: #34d399; text-align: left; max-height: 200px;">' + esc(id.remediation.code) + '</pre>' +
       '</div>';
   }
-  
+
+  // Render Credential Rotation if available
+  if (id.rotation) {
+    html += '<div class="delegation-section" style="border-color: rgba(234, 179, 8, 0.3);">' +
+      '<div class="delegation-title" style="color: var(--medium);">Credential Rotation</div>' +
+      '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.rotation.explanation) + '</div>' +
+      '<pre style="background: #090d16; border: 1px solid var(--panel-border); border-radius: 0.5rem; padding: 1rem; font-family: monospace; font-size: 0.8rem; overflow-x: auto; color: #fde68a; text-align: left; max-height: 200px;">' + esc(id.rotation.code) + '</pre>' +
+      '</div>';
+  }
+
   // Render Permissions list
   if (id.permissions && id.permissions.length > 0) {
     html += '<div class="perms-section">' +

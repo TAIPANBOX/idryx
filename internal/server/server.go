@@ -30,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/identities", s.handleIdentities)
+	mux.HandleFunc("/api/remediations", s.handleRemediations)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -77,6 +78,16 @@ type apiPermission struct {
 }
 
 type apiRemediation struct {
+	Kind        string `json:"kind"`
+	Explanation string `json:"explanation"`
+	Code        string `json:"code"`
+}
+
+// apiRecommendation is a flat, identity-tagged remediation for the
+// /api/remediations endpoint (one row per recommendation, ready for SOAR).
+type apiRecommendation struct {
+	Identity    string `json:"identity"`
+	Kind        string `json:"kind"`
 	Explanation string `json:"explanation"`
 	Code        string `json:"code"`
 }
@@ -93,6 +104,7 @@ type apiIdentity struct {
 	OnBehalfOf  string          `json:"on_behalf_of,omitempty"`
 	Permissions []apiPermission `json:"permissions,omitempty"`
 	Remediation *apiRemediation `json:"remediation,omitempty"`
+	Rotation    *apiRemediation `json:"rotation,omitempty"`
 	Events      int             `json:"events"`
 	Alerts      int             `json:"alerts"`
 }
@@ -131,6 +143,15 @@ func (s *Server) identitiesJSON() []apiIdentity {
 		var remData *apiRemediation
 		if rem := remediation.Generate(*id); rem != nil {
 			remData = &apiRemediation{
+				Kind:        rem.Kind,
+				Explanation: rem.Explanation,
+				Code:        rem.Code,
+			}
+		}
+		var rotData *apiRemediation
+		if rem := remediation.GenerateRotation(*id); rem != nil {
+			rotData = &apiRemediation{
+				Kind:        rem.Kind,
 				Explanation: rem.Explanation,
 				Code:        rem.Code,
 			}
@@ -148,6 +169,7 @@ func (s *Server) identitiesJSON() []apiIdentity {
 			OnBehalfOf:  id.OnBehalfOf,
 			Permissions: perms,
 			Remediation: remData,
+			Rotation:    rotData,
 			Events:      len(id.Events),
 			Alerts:      alertCount[id.ID],
 		})
@@ -157,6 +179,23 @@ func (s *Server) identitiesJSON() []apiIdentity {
 
 func (s *Server) handleIdentities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.identitiesJSON())
+}
+
+func (s *Server) remediationsJSON() []apiRecommendation {
+	out := make([]apiRecommendation, 0)
+	for _, id := range s.graph.Identities() {
+		if rem := remediation.Generate(*id); rem != nil {
+			out = append(out, apiRecommendation{Identity: id.ID, Kind: rem.Kind, Explanation: rem.Explanation, Code: rem.Code})
+		}
+		if rem := remediation.GenerateRotation(*id); rem != nil {
+			out = append(out, apiRecommendation{Identity: id.ID, Kind: rem.Kind, Explanation: rem.Explanation, Code: rem.Code})
+		}
+	}
+	return out
+}
+
+func (s *Server) handleRemediations(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.remediationsJSON())
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
