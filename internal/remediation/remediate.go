@@ -241,7 +241,7 @@ func generateGCP(id model.Identity, unused []model.Permission) string {
 		sb.WriteString(fmt.Sprintf("- resource \"google_project_iam_member\" \"%s\" {\n", resName))
 		sb.WriteString("-   project = \"my-gcp-project\"\n")
 		sb.WriteString(fmt.Sprintf("-   role    = \"%s\"\n", role))
-		sb.WriteString(fmt.Sprintf("-   member  = \"serviceAccount:%s\"\n", id.ID))
+		sb.WriteString(fmt.Sprintf("-   member  = \"serviceAccount:%s\"\n", strings.TrimPrefix(id.ID, "gcp:")))
 		sb.WriteString("- }\n\n")
 	}
 	return strings.TrimSpace(sb.String())

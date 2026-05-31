@@ -269,3 +269,25 @@ func TestGenerateRotationAgent(t *testing.T) {
 		t.Errorf("fresh agent token should not get a rotation rec, got %+v", rem)
 	}
 }
+
+func TestGenerateGCPMemberStripsPrefix(t *testing.T) {
+	id := model.Identity{
+		ID:     "gcp:etl@proj.iam.gserviceaccount.com",
+		Type:   model.IdentityServiceAccount,
+		Source: "gcp_iam",
+		Permissions: []model.Permission{
+			{Name: "roles/compute.viewer", Used: false},
+			{Name: "roles/storage.objectViewer", Used: true},
+		},
+	}
+	rem := Generate(id)
+	if rem == nil {
+		t.Fatal("expected recommendation, got nil")
+	}
+	if strings.Contains(rem.Code, "serviceAccount:gcp:") {
+		t.Errorf("member must not double the gcp: prefix:\n%s", rem.Code)
+	}
+	if !strings.Contains(rem.Code, "serviceAccount:etl@proj.iam.gserviceaccount.com") {
+		t.Errorf("expected clean member email:\n%s", rem.Code)
+	}
+}
