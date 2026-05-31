@@ -905,8 +905,25 @@ function renderDetails(id) {
         html += '<div class="tree-arrow">↓</div>';
       }
     });
-    
-    html += '</div></div>';
+
+    html += '</div>';
+
+    // Blast radius: the union of permissions reachable across the whole chain.
+    // This is what an attacker gains if this agent is compromised.
+    const blast = computeBlastRadius(chain);
+    if (blast.length > 0) {
+      const adminCount = blast.filter(p => p.admin).length;
+      html += '<div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--panel-border);">' +
+        '<div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">' +
+        'Blast radius: <b style="color: #fff;">' + blast.length + '</b> effective permission(s) across the chain' +
+        (adminCount > 0 ? ' · <b style="color: var(--critical);">' + adminCount + ' admin-equivalent</b>' : '') +
+        '</div>' +
+        '<div class="perm-badges" style="flex-wrap: wrap; gap: 0.375rem;">' +
+        blast.map(p => '<span class="pbadge ' + (p.admin ? 'pbadge-admin' : 'pbadge-used') + '" title="' + esc(p.source) + '">' + esc(p.name) + '</span>').join('') +
+        '</div></div>';
+    }
+
+    html += '</div>';
   }
   
   // Render Terraform Remediation if available
@@ -978,6 +995,26 @@ function getDelegationChain(startId) {
     currentId = obj.on_behalf_of;
   }
   return chain;
+}
+
+// Compute the blast radius: the de-duplicated union of permissions across every
+// identity in the delegation chain, tagged with the link they come from. This
+// mirrors graph.EffectivePermissions on the server.
+function computeBlastRadius(chain) {
+  const out = [];
+  const seen = new Set();
+  chain.forEach(linkId => {
+    const obj = globalIdentities.find(x => x.id === linkId);
+    if (!obj || !obj.permissions) return;
+    obj.permissions.forEach(p => {
+      if (seen.has(p.name)) return;
+      seen.add(p.name);
+      out.push({ name: p.name, admin: p.admin, source: linkId });
+    });
+  });
+  // Admin-equivalent permissions first, then by name, for a stable, scannable list.
+  out.sort((a, b) => (b.admin - a.admin) || a.name.localeCompare(b.name));
+  return out;
 }
 
 // Render active threat alerts table
