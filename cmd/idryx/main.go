@@ -4,16 +4,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/TAIPANBOX/idryx/internal/detect"
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
+	"github.com/TAIPANBOX/idryx/internal/enforce"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
@@ -513,6 +512,10 @@ func runRemediate(args []string) error {
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	outDir := fs.String("out", "", "write apply-ready Terraform artifacts to this directory instead of stdout")
 	saveDB := fs.String("save-db", "", "Postgres DSN to persist the generated recommendations into")
+	openPR := fs.Bool("open-pr", false, "open a GitHub PR with the remediation artifacts against --repo (needs git + gh)")
+	repoDir := fs.String("repo", "", "path to the IaC git repo to open the remediation PR against")
+	prBase := fs.String("pr-base", "main", "base branch for the remediation pull request")
+	prSubdir := fs.String("pr-subdir", "idryx", "directory within the repo to write artifacts into")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx remediate [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
@@ -553,6 +556,22 @@ func runRemediate(args []string) error {
 		return nil
 	}
 
+	if *openPR {
+		if *repoDir == "" {
+			return fmt.Errorf("--open-pr requires --repo <path to IaC repo>")
+		}
+		url, err := enforce.OpenPR(context.Background(), enforce.ExecRunner{}, recs, enforce.Options{
+			RepoDir: *repoDir,
+			SubDir:  *prSubdir,
+			Base:    *prBase,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Opened remediation PR: %s\n", url)
+		return nil
+	}
+
 	if *outDir != "" {
 		return writeRemediationArtifacts(*outDir, recs)
 	}
@@ -575,58 +594,15 @@ func runRemediate(args []string) error {
 	return nil
 }
 
-// artifactEntry indexes one written remediation file in manifest.json.
-type artifactEntry struct {
-	Identity    string `json:"identity"`
-	Kind        string `json:"kind"`
-	File        string `json:"file"`
-	Explanation string `json:"explanation"`
-}
-
-// writeRemediationArtifacts writes each recommendation as an apply-ready
-// Terraform file plus a manifest.json index. idryx stays read-only on the cloud:
-// it emits files to review and apply, it never mutates the provider itself.
+// writeRemediationArtifacts writes the apply-ready Terraform files plus a
+// manifest.json via the shared remediation writer (one source of truth with the
+// pull-request flow). idryx stays read-only on the cloud: it emits files to
+// review and apply, it never mutates the provider itself.
 func writeRemediationArtifacts(dir string, recs []*remediation.Recommendation) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	manifest := make([]artifactEntry, 0, len(recs))
-	used := map[string]bool{}
-	for _, rem := range recs {
-		name := fmt.Sprintf("%s__%s.tf", rem.Kind, sanitizeName(rem.IdentityID))
-		for n := 2; used[name]; n++ {
-			name = fmt.Sprintf("%s__%s_%d.tf", rem.Kind, sanitizeName(rem.IdentityID), n)
-		}
-		used[name] = true
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(rem.Code+"\n"), 0o644); err != nil {
-			return err
-		}
-		manifest = append(manifest, artifactEntry{
-			Identity:    rem.IdentityID,
-			Kind:        rem.Kind,
-			File:        name,
-			Explanation: rem.Explanation,
-		})
-	}
-	mb, err := json.MarshalIndent(manifest, "", "  ")
+	manifest, err := remediation.WriteArtifacts(dir, recs)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("Wrote %d remediation artifact(s) and manifest.json to %s\n", len(recs), dir)
+	fmt.Printf("Wrote %d remediation artifact(s) and manifest.json to %s\n", len(manifest), dir)
 	return nil
-}
-
-// sanitizeName makes an identity ID safe to use as a filename segment.
-func sanitizeName(id string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
-			return r
-		default:
-			return '_'
-		}
-	}, id)
 }
