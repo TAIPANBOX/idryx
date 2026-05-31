@@ -222,11 +222,6 @@ func generateAWS(id model.Identity, unused []model.Permission) string {
 }
 
 func generateGCP(id model.Identity, unused []model.Permission) string {
-	saName := id.ID
-	if i := strings.Index(saName, "@"); i >= 0 {
-		saName = saName[:i]
-	}
-
 	var sb strings.Builder
 	sb.WriteString("# GCP IAM Least-Privilege Remediation\n")
 	sb.WriteString("# Remove unused role bindings from the Service Account\n\n")
