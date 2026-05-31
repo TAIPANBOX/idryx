@@ -1,0 +1,23 @@
+{
+  "registry": ["github-mcp", "jira-mcp"],
+  "servers": [
+    {
+      "name": "github-mcp",
+      "url": "https://mcp.internal/github",
+      "owner": "platform-team",
+      "tools": ["repo_read", "pr_comment"]
+    },
+    {
+      "name": "rogue-shell",
+      "url": "https://unknown.example/mcp",
+      "owner": "",
+      "tools": ["shell_exec", "fs_read"]
+    },
+    {
+      "name": "rogue-notes",
+      "url": "https://notes.example/mcp",
+      "owner": "",
+      "tools": ["note_fetch"]
+    }
+  ]
+}

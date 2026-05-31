@@ -66,15 +66,47 @@ commands:
   remediate  generate Terraform right-sizing snippets for unused permissions
   version    print version
 
-detect, serve and remediate also accept --db to read from Postgres instead of a file.`)
+detect, serve and remediate also accept --db to read from Postgres, or one or
+more --load source:path to stitch several sources into one graph (needed for
+cross-layer detectors like agent_shadow_tool, which spans agents + mcp).`)
 }
 
-// buildGraph returns an identity graph either from a Postgres snapshot (when db
-// is set) or by parsing a source log file. Exactly one of db/path is used.
-// ctPath is optional: when non-empty and source is "aws_iam", CloudTrail records
-// are used to mark which permissions have been exercised. auditPath does the same
-// for "gcp_iam" using Cloud Audit Logs.
-func buildGraph(source, privileged, path, db, ctPath, auditPath string) (graph.Reader, error) {
+// loadSpec is one source to ingest into the graph: a source kind and the file
+// that provides it. ctPath/auditPath optionally enrich aws_iam/gcp_iam with
+// observed permission usage.
+type loadSpec struct {
+	Source    string
+	Path      string
+	CTPath    string
+	AuditPath string
+}
+
+// loadList collects repeated --load source:path flags so several sources can be
+// stitched into one graph (e.g. agents + mcp, which the agent_shadow_tool
+// detector needs together). It implements flag.Value.
+type loadList []loadSpec
+
+func (l *loadList) String() string {
+	parts := make([]string, 0, len(*l))
+	for _, s := range *l {
+		parts = append(parts, s.Source+":"+s.Path)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (l *loadList) Set(v string) error {
+	src, path, ok := strings.Cut(v, ":")
+	if !ok || src == "" || path == "" {
+		return fmt.Errorf("--load expects source:path, got %q", v)
+	}
+	*l = append(*l, loadSpec{Source: src, Path: path})
+	return nil
+}
+
+// buildGraph returns an identity graph from one of: a Postgres snapshot (db set),
+// several stitched sources (loads set), or a single source file. Exactly one of
+// the three is used, in that precedence.
+func buildGraph(source, privileged, path, db, ctPath, auditPath string, loads loadList) (graph.Reader, error) {
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
@@ -84,63 +116,85 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath string) (graph.R
 		return store.Snapshot(context.Background())
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
 	g := graph.New(privilegedSet(privileged))
 
+	// Multi-source: stitch every --load into one graph. Cross-layer detectors
+	// (e.g. agent_shadow_tool, which needs agents + mcp) only fire here.
+	if len(loads) > 0 {
+		for _, spec := range loads {
+			if err := populate(g, spec); err != nil {
+				return nil, err
+			}
+		}
+		return g, nil
+	}
+
+	// Single source.
+	if err := populate(g, loadSpec{Source: source, Path: path, CTPath: ctPath, AuditPath: auditPath}); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// populate ingests one source spec into g. Inventory sources add identities;
+// event sources add events; aws_iam/gcp_iam optionally fold in usage enrichment.
+func populate(g *graph.Store, spec loadSpec) error {
+	data, err := os.ReadFile(spec.Path)
+	if err != nil {
+		return err
+	}
+
 	// aws_iam + CloudTrail enrichment path.
-	if source == "aws_iam" && ctPath != "" {
-		ctData, err := os.ReadFile(ctPath)
+	if spec.Source == "aws_iam" && spec.CTPath != "" {
+		ctData, err := os.ReadFile(spec.CTPath)
 		if err != nil {
-			return nil, fmt.Errorf("read cloudtrail file: %w", err)
+			return fmt.Errorf("read cloudtrail file: %w", err)
 		}
 		ids, err := ingest.AWSSIAMWithUsage(data, ctData)
 		if err != nil {
-			return nil, fmt.Errorf("parse aws_iam+cloudtrail: %w", err)
+			return fmt.Errorf("parse aws_iam+cloudtrail: %w", err)
 		}
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
-		return g, nil
+		return nil
 	}
 
 	// gcp_iam + Cloud Audit Logs enrichment path.
-	if source == "gcp_iam" && auditPath != "" {
-		auditData, err := os.ReadFile(auditPath)
+	if spec.Source == "gcp_iam" && spec.AuditPath != "" {
+		auditData, err := os.ReadFile(spec.AuditPath)
 		if err != nil {
-			return nil, fmt.Errorf("read gcp audit file: %w", err)
+			return fmt.Errorf("read gcp audit file: %w", err)
 		}
 		ids, err := ingest.GCPIAMWithUsage(data, auditData)
 		if err != nil {
-			return nil, fmt.Errorf("parse gcp_iam+audit: %w", err)
+			return fmt.Errorf("parse gcp_iam+audit: %w", err)
 		}
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
-		return g, nil
+		return nil
 	}
 
-	// Inventory sources (identities + permissions), not event logs; they
-	// populate the graph via AddIdentity for the NHI detectors.
-	if ids, ok, err := parseInventory(source, data); err != nil {
-		return nil, err
+	// Inventory sources (identities + permissions).
+	if ids, ok, err := parseInventory(spec.Source, data); err != nil {
+		return err
 	} else if ok {
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
-		return g, nil
+		return nil
 	}
 
-	events, err := parseSource(source, data)
+	// Event sources.
+	events, err := parseSource(spec.Source, data)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s log: %w", source, err)
+		return fmt.Errorf("parse %s log: %w", spec.Source, err)
 	}
 	for _, e := range events {
 		g.AddEvent(e)
 	}
-	return g, nil
+	return nil
 }
 
 // runDetectors runs all detectors over the graph and returns their alerts.
@@ -168,9 +222,15 @@ func runDetectors(g graph.Reader) []model.Alert {
 	return alerts
 }
 
-// inputArg validates the file/db combination and returns the file path (empty
-// when reading from db).
-func inputArg(fs *flag.FlagSet, db string) (string, error) {
+// inputArg validates the input combination and returns the positional file path.
+// Exactly one of: --db, one or more --load, or a single positional file.
+func inputArg(fs *flag.FlagSet, db string, loads loadList) (string, error) {
+	if len(loads) > 0 {
+		if db != "" || fs.NArg() > 0 {
+			return "", fmt.Errorf("use --load on its own, not with --db or a positional file")
+		}
+		return "", nil
+	}
 	switch {
 	case db != "" && fs.NArg() == 0:
 		return "", nil
@@ -180,7 +240,7 @@ func inputArg(fs *flag.FlagSet, db string) (string, error) {
 		return fs.Arg(0), nil
 	default:
 		fs.Usage()
-		return "", fmt.Errorf("provide exactly one input file (or --db)")
+		return "", fmt.Errorf("provide exactly one input file, --db, or --load source:path")
 	}
 }
 
@@ -196,6 +256,8 @@ func runDetect(args []string) error {
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
+	var loads loadList
+	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
@@ -204,12 +266,12 @@ func runDetect(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path, err := inputArg(fs, *db)
+	path, err := inputArg(fs, *db, loads)
 	if err != nil {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
 	if err != nil {
 		return err
 	}
@@ -254,6 +316,8 @@ func runServe(args []string) error {
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
+	var loads loadList
+	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx serve [flags] <log.json>\n\nflags:\n")
@@ -262,12 +326,12 @@ func runServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path, err := inputArg(fs, *db)
+	path, err := inputArg(fs, *db, loads)
 	if err != nil {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
 	if err != nil {
 		return err
 	}
@@ -425,6 +489,8 @@ func runRemediate(args []string) error {
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
+	var loads loadList
+	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	outDir := fs.String("out", "", "write apply-ready Terraform artifacts to this directory instead of stdout")
 	fs.Usage = func() {
@@ -434,12 +500,12 @@ func runRemediate(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path, err := inputArg(fs, *db)
+	path, err := inputArg(fs, *db, loads)
 	if err != nil {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
 	if err != nil {
 		return err
 	}

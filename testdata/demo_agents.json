@@ -1,0 +1,28 @@
+{
+  "agents": [
+    {
+      "id": "agent:ops-helper",
+      "runtime": "langgraph",
+      "onBehalfOf": "",
+      "owner": "sre-team",
+      "tools": ["repo_read", "shell_exec"],
+      "usedTools": ["repo_read"]
+    },
+    {
+      "id": "agent:notetaker",
+      "runtime": "bedrock",
+      "onBehalfOf": "",
+      "owner": "support-team",
+      "tools": ["note_fetch"],
+      "usedTools": ["note_fetch"]
+    },
+    {
+      "id": "agent:clean-bot",
+      "runtime": "langgraph",
+      "onBehalfOf": "",
+      "owner": "data-team",
+      "tools": ["repo_read", "pr_comment"],
+      "usedTools": ["repo_read", "pr_comment"]
+    }
+  ]
+}
