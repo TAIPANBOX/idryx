@@ -78,6 +78,12 @@ func OpenPR(ctx context.Context, r Runner, recs []*remediation.Recommendation, o
 		body = defaultBody(recs)
 	}
 
+	// 0. Preflight: fail before touching the repo if the environment can't
+	// complete the flow, so we never leave a half-created branch behind.
+	if err := preflight(ctx, r, opts.RepoDir); err != nil {
+		return "", err
+	}
+
 	// 1. Create the branch off the current HEAD.
 	if out, err := r.Run(ctx, opts.RepoDir, "git", "checkout", "-b", branch); err != nil {
 		return "", fmt.Errorf("git checkout -b %s: %w\n%s", branch, err, out)
@@ -106,6 +112,27 @@ func OpenPR(ctx context.Context, r Runner, recs []*remediation.Recommendation, o
 		return "", fmt.Errorf("gh pr create: %w\n%s", err, out)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// preflight verifies the environment can complete the PR flow before any
+// mutation: the path is a git work tree, that tree is clean (so idryx's commit
+// contains only its own artifacts), and gh is authenticated. Any failure aborts
+// before the branch is created.
+func preflight(ctx context.Context, r Runner, repoDir string) error {
+	if out, err := r.Run(ctx, repoDir, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
+		return fmt.Errorf("%s is not a git repository: %w\n%s", repoDir, err, out)
+	}
+	out, err := r.Run(ctx, repoDir, "git", "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("git status: %w\n%s", err, out)
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("the IaC repo at %s has uncommitted changes; commit or stash them first so the remediation PR contains only idryx's artifacts", repoDir)
+	}
+	if out, err := r.Run(ctx, repoDir, "gh", "auth", "status"); err != nil {
+		return fmt.Errorf("gh is not authenticated (run `gh auth login`): %w\n%s", err, out)
+	}
+	return nil
 }
 
 // defaultBody renders a review-oriented PR description that states idryx's

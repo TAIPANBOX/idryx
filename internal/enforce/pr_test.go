@@ -55,8 +55,12 @@ func TestOpenPRSequenceAndArtifacts(t *testing.T) {
 		t.Errorf("url = %q, want the gh stdout trimmed", url)
 	}
 
-	// Expected command order: checkout -b, add, commit, push, gh pr create.
-	wantOrder := []string{"git checkout", "git add", "git commit", "git push", "gh pr"}
+	// Expected command order: preflight (rev-parse, status, gh auth), then
+	// checkout -b, add, commit, push, gh pr create.
+	wantOrder := []string{
+		"git rev-parse", "git status", "gh auth",
+		"git checkout", "git add", "git commit", "git push", "gh pr",
+	}
 	if len(f.calls) != len(wantOrder) {
 		t.Fatalf("got %d calls, want %d: %v", len(f.calls), len(wantOrder), f.calls)
 	}
@@ -68,12 +72,12 @@ func TestOpenPRSequenceAndArtifacts(t *testing.T) {
 	}
 
 	// Deterministic branch name flows into checkout (git checkout -b <branch>),
-	// push, and gh --head.
+	// push, and gh --head. checkout is the 4th call (index 3) after preflight.
 	branch := "idryx/remediation-" + strconv.FormatInt(nowFunc().Unix(), 10)
-	if f.calls[0][3] != branch {
-		t.Errorf("checkout branch = %q, want %q", f.calls[0][3], branch)
+	if f.calls[3][3] != branch {
+		t.Errorf("checkout branch = %q, want %q", f.calls[3][3], branch)
 	}
-	gh := strings.Join(f.calls[4], " ")
+	gh := strings.Join(f.calls[7], " ")
 	if !strings.Contains(gh, "--head "+branch) || !strings.Contains(gh, "--base main") {
 		t.Errorf("gh pr create missing head/base: %q", gh)
 	}
@@ -113,3 +117,33 @@ func TestOpenPRGuards(t *testing.T) {
 		t.Errorf("guards must run before any command, got %v", f.calls)
 	}
 }
+
+func TestOpenPRPreflightAborts(t *testing.T) {
+	// A dirty work tree must abort before any branch is created.
+	dirty := &fakeRunner{out: map[string]string{"git status": " M main.tf"}}
+	if _, err := OpenPR(context.Background(), dirty, sampleRecs(), Options{RepoDir: t.TempDir()}); err == nil {
+		t.Error("expected error for a dirty IaC repo")
+	}
+	for _, c := range dirty.calls {
+		if c[0] == "git" && c[1] == "checkout" {
+			t.Error("must not create a branch when the work tree is dirty")
+		}
+	}
+
+	// An unauthenticated gh must abort too.
+	noauth := &fakeRunner{err: map[string]error{"gh auth": errStub}}
+	if _, err := OpenPR(context.Background(), noauth, sampleRecs(), Options{RepoDir: t.TempDir()}); err == nil {
+		t.Error("expected error when gh is not authenticated")
+	}
+	for _, c := range noauth.calls {
+		if c[0] == "git" && c[1] == "checkout" {
+			t.Error("must not create a branch when gh is unauthenticated")
+		}
+	}
+}
+
+var errStub = errStubT("stub error")
+
+type errStubT string
+
+func (e errStubT) Error() string { return string(e) }
