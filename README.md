@@ -71,7 +71,8 @@ year.
    delegation chains in a single Identity Graph.
 3. **Baseline + detection** — per-identity normal behavior; deterministic detection
    of anomalies and excessive privilege (ITDR, NHI, least-privilege).
-4. **Remediation** — least-privilege recommendations and rotation, delivered as PRs
+4. **Remediation** — least-privilege recommendations and credential rotation
+   (cloud secrets and agent tokens), delivered as PRs
    and alerts (SIEM / Slack / OTLP).
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
@@ -179,6 +180,9 @@ make build
 ./bin/idryx detect --source aws_iam --cloudtrail ct.json iam.json    # mark used AWS permissions
 ./bin/idryx detect --source gcp_iam --gcp-audit  audit.json iam.json # mark used GCP roles
 
+./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
+./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
+
 # serve: read-only web dashboard + JSON API
 ./bin/idryx serve <log.json>                        # dashboard on :8080
 ./bin/idryx serve --addr :9000 <log.json>           # custom address
@@ -194,6 +198,7 @@ Run against the bundled fixtures:
 ```sh
 make detect    # ITDR detectors over the event fixtures
 make nhi       # NHI + agent + shadow-ai detectors over the inventory fixtures
+make remediate # least-privilege + credential-rotation snippets over the inventory fixtures
 make serve     # then open http://localhost:8080
 ```
 
