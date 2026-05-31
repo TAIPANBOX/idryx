@@ -135,7 +135,9 @@ learning period to avoid false positives.
   tools (shell / exec / admin), compounding shadow MCP with tool poisoning
 - `agent_shadow_tool` — an AI agent whose declared tools are exposed by a shadow
   MCP server: the path a poisoned tool takes to reach a model. Critical when the
-  shared tool is high-risk (shell / exec / admin)
+  shared tool is high-risk (shell / exec / admin). Needs the `agents` and `mcp`
+  sources stitched into one graph:
+  `idryx detect --load agents:agents.json --load mcp:mcp.json`
 
 **Least-privilege**
 - `least_privilege` — granted permissions never exercised, with a revocation
