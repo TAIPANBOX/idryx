@@ -237,3 +237,35 @@ func TestGenerateNoRemediation(t *testing.T) {
 		t.Errorf("expected nil when no usage signal is available, got %+v", rem)
 	}
 }
+
+func TestGenerateRotationAgent(t *testing.T) {
+	at := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC)
+	withFixedNow(t, at)
+
+	agent := model.Identity{
+		ID:         "agent:deploy-bot",
+		Type:       model.IdentityAgent,
+		Source:     "agents",
+		OnBehalfOf: "aws:arn:aws:iam::1:role/deploy",
+		Created:    at.Add(-200 * 24 * time.Hour),
+	}
+	rem := GenerateRotation(agent)
+	if rem == nil {
+		t.Fatal("expected rotation recommendation, got nil")
+	}
+	if rem.Kind != "rotation" {
+		t.Errorf("kind = %q, want rotation", rem.Kind)
+	}
+	if !strings.Contains(rem.Code, "agent:deploy-bot") || !strings.Contains(rem.Code, "vault_token") {
+		t.Errorf("unexpected code: %q", rem.Code)
+	}
+	if !strings.Contains(rem.Code, "aws:arn:aws:iam::1:role/deploy") {
+		t.Errorf("expected delegation note in code: %q", rem.Code)
+	}
+
+	// Fresh agent token: within threshold.
+	fresh := model.Identity{ID: "agent:new", Type: model.IdentityAgent, Source: "agents", Created: at.Add(-10 * 24 * time.Hour)}
+	if rem := GenerateRotation(fresh); rem != nil {
+		t.Errorf("fresh agent token should not get a rotation rec, got %+v", rem)
+	}
+}
