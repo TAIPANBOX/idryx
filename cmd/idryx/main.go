@@ -157,6 +157,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewPrivilegeEscalation(),
 		detectors.NewSharedCredential(),
 		detectors.NewShadowMCP(),
+		detectors.NewAgentShadowTool(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
