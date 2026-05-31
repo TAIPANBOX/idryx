@@ -338,6 +338,25 @@ func runServe(args []string) error {
 	alerts := runDetectors(g)
 
 	srv := server.New(g, alerts)
+
+	// When backed by Postgres, serve any persisted remediations (from
+	// `remediate --save-db`) instead of recomputing them from the graph.
+	if *db != "" {
+		store, err := graph.OpenPg(context.Background(), *db)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		recs, err := store.Remediations(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(recs) > 0 {
+			srv.SetRemediations(recs)
+			fmt.Fprintf(os.Stderr, "idryx: serving %d persisted remediation(s) from postgres\n", len(recs))
+		}
+	}
+
 	shown := *addr
 	if strings.HasPrefix(shown, ":") {
 		shown = "localhost" + shown
