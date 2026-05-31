@@ -133,6 +133,9 @@ learning period to avoid false positives.
 - `shadow_mcp` — an MCP server in use but absent from the sanctioned registry
   (OWASP MCP Top 10: Shadow MCP Servers); critical when it also exposes high-risk
   tools (shell / exec / admin), compounding shadow MCP with tool poisoning
+- `agent_shadow_tool` — an AI agent whose declared tools are exposed by a shadow
+  MCP server: the path a poisoned tool takes to reach a model. Critical when the
+  shared tool is high-risk (shell / exec / admin)
 
 **Least-privilege**
 - `least_privilege` — granted permissions never exercised, with a revocation
@@ -182,6 +185,7 @@ make build
 
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
 ./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
+./bin/idryx remediate --source aws_iam --out ./tf iam.json  # write .tf artifacts + manifest.json (read-only)
 
 # serve: read-only web dashboard + JSON API
 ./bin/idryx serve <log.json>                        # dashboard on :8080
@@ -224,7 +228,7 @@ deterministic detectors.
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
 
-**Detectors** — see the [Detectors](#detectors) section above: 13 detectors across ITDR ·
+**Detectors** — see the [Detectors](#detectors) section above: 14 detectors across ITDR ·
 NHI · agents/AI · least-privilege.
 
 **Baseline engine** (`internal/baseline`) — learns what is normal per identity and
