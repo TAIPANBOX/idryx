@@ -37,7 +37,9 @@ nhi: build
 	./bin/idryx detect --source mcp ./testdata/mcp.json
 
 remediate: build
-	./bin/idryx remediate --source aws_iam ./testdata/aws_iam.json
+	./bin/idryx remediate --source aws_iam --cloudtrail ./testdata/cloudtrail.json ./testdata/aws_iam.json
+	@echo
+	./bin/idryx remediate --source gcp_iam --gcp-audit ./testdata/gcp_audit.json ./testdata/gcp_iam.json
 	@echo
 	./bin/idryx remediate --source agents ./testdata/agents.json
 

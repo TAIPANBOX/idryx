@@ -1,0 +1,6 @@
+{
+  "entries": [
+    {"protoPayload": {"serviceName": "storage.googleapis.com", "methodName": "storage.objects.get", "authenticationInfo": {"principalEmail": "etl-runner@my-proj.iam.gserviceaccount.com"}}},
+    {"protoPayload": {"serviceName": "bigquery.googleapis.com", "methodName": "bigquery.jobs.create", "authenticationInfo": {"principalEmail": "etl-runner@my-proj.iam.gserviceaccount.com"}}}
+  ]
+}

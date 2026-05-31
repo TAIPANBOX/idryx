@@ -24,6 +24,19 @@
       "RoleLastUsed": {"LastUsedDate": "2026-05-28T12:00:00Z"}
     },
     {
+      "RoleName": "data-pipeline",
+      "Arn": "arn:aws:iam::123456789012:role/data-pipeline",
+      "CreateDate": "2025-01-10T00:00:00Z",
+      "Tags": [{"Key": "owner", "Value": "data-team"}],
+      "AttachedManagedPolicies": [
+        {"PolicyName": "AmazonS3FullAccess", "PolicyArn": "arn:aws:iam::aws:policy/AmazonS3FullAccess"},
+        {"PolicyName": "AmazonDynamoDBFullAccess", "PolicyArn": "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"},
+        {"PolicyName": "AmazonEC2FullAccess", "PolicyArn": "arn:aws:iam::aws:policy/AmazonEC2FullAccess"}
+      ],
+      "RolePolicyList": [],
+      "RoleLastUsed": {"LastUsedDate": "2026-05-29T12:00:00Z"}
+    },
+    {
       "RoleName": "old-lambda-exec",
       "Arn": "arn:aws:iam::123456789012:role/old-lambda-exec",
       "CreateDate": "2022-01-01T00:00:00Z",

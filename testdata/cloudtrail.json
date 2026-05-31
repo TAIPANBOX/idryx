@@ -1,0 +1,7 @@
+{
+  "Records": [
+    {"eventTime": "2026-05-29T10:00:00Z", "eventName": "GetObject", "eventSource": "s3.amazonaws.com", "userIdentity": {"arn": "arn:aws:iam::123456789012:role/data-pipeline", "type": "AssumedRole"}},
+    {"eventTime": "2026-05-29T10:05:00Z", "eventName": "PutItem", "eventSource": "dynamodb.amazonaws.com", "userIdentity": {"arn": "arn:aws:sts::123456789012:assumed-role/data-pipeline/session-42", "type": "AssumedRole"}},
+    {"eventTime": "2026-05-29T11:00:00Z", "eventName": "ConsoleLogin", "eventSource": "signin.amazonaws.com", "userIdentity": {"arn": "arn:aws:iam::123456789012:user/legacy-deploy", "type": "IAMUser"}}
+  ]
+}

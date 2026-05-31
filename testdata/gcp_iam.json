@@ -2,13 +2,17 @@
   "serviceAccounts": [
     {"email": "ci-deployer@my-proj.iam.gserviceaccount.com", "displayName": "owner: platform-team"},
     {"email": "metrics-reader@my-proj.iam.gserviceaccount.com", "displayName": "metrics scraper"},
-    {"email": "legacy-batch@my-proj.iam.gserviceaccount.com", "displayName": ""}
+    {"email": "legacy-batch@my-proj.iam.gserviceaccount.com", "displayName": ""},
+    {"email": "etl-runner@my-proj.iam.gserviceaccount.com", "displayName": "team: data-team"}
   ],
   "policy": {
     "bindings": [
       {"role": "roles/owner", "members": ["serviceAccount:ci-deployer@my-proj.iam.gserviceaccount.com"]},
       {"role": "roles/monitoring.viewer", "members": ["serviceAccount:metrics-reader@my-proj.iam.gserviceaccount.com"]},
-      {"role": "roles/storage.admin", "members": ["serviceAccount:legacy-batch@my-proj.iam.gserviceaccount.com"]}
+      {"role": "roles/storage.admin", "members": ["serviceAccount:legacy-batch@my-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/storage.objectViewer", "members": ["serviceAccount:etl-runner@my-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/bigquery.dataEditor", "members": ["serviceAccount:etl-runner@my-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/compute.viewer", "members": ["serviceAccount:etl-runner@my-proj.iam.gserviceaccount.com"]}
     ]
   }
 }
