@@ -347,7 +347,7 @@ func runServe(args []string) error {
 			return err
 		}
 		defer store.Close()
-		recs, err := store.Remediations(context.Background())
+		recs, err := store.RemediationRecords(context.Background())
 		if err != nil {
 			return err
 		}

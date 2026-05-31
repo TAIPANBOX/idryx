@@ -18,7 +18,7 @@ import (
 type Server struct {
 	graph    graph.Reader
 	alerts   []model.Alert
-	remParam []*remediation.Recommendation // when non-nil, served instead of recomputing
+	remParam []graph.StoredRemediation // when non-nil, served instead of recomputing
 }
 
 // New returns a Server over the given graph and precomputed alerts.
@@ -27,9 +27,9 @@ func New(g graph.Reader, alerts []model.Alert) *Server {
 }
 
 // SetRemediations makes /api/remediations serve a fixed set (e.g. recommendations
-// loaded from Postgres) instead of recomputing them from the graph. Passing a
-// nil slice restores the recompute-from-graph default.
-func (s *Server) SetRemediations(recs []*remediation.Recommendation) {
+// loaded from Postgres, carrying their stored timestamps) instead of recomputing
+// them from the graph. Passing a nil slice restores the recompute default.
+func (s *Server) SetRemediations(recs []graph.StoredRemediation) {
 	s.remParam = recs
 }
 
@@ -98,6 +98,7 @@ type apiRecommendation struct {
 	Kind        string `json:"kind"`
 	Explanation string `json:"explanation"`
 	Code        string `json:"code"`
+	CreatedAt   string `json:"created_at,omitempty"`
 }
 
 type apiIdentity struct {
@@ -193,8 +194,19 @@ func (s *Server) remediationsJSON() []apiRecommendation {
 	out := make([]apiRecommendation, 0)
 	// Prefer a persisted set when one was supplied (serve --db).
 	if s.remParam != nil {
-		for _, rem := range s.remParam {
-			out = append(out, apiRecommendation{Identity: rem.IdentityID, Kind: rem.Kind, Explanation: rem.Explanation, Code: rem.Code})
+		for _, sr := range s.remParam {
+			rem := sr.Recommendation
+			created := ""
+			if !sr.CreatedAt.IsZero() {
+				created = sr.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC")
+			}
+			out = append(out, apiRecommendation{
+				Identity:    rem.IdentityID,
+				Kind:        rem.Kind,
+				Explanation: rem.Explanation,
+				Code:        rem.Code,
+				CreatedAt:   created,
+			})
 		}
 		return out
 	}

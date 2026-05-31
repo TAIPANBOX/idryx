@@ -5,20 +5,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/remediation"
 )
 
 // TestSetRemediationsOverridesRecompute verifies that a persisted set supplied
-// via SetRemediations is served by /api/remediations verbatim, instead of being
-// recomputed from the (here empty) graph.
+// via SetRemediations is served by /api/remediations verbatim (with its stored
+// created_at), instead of being recomputed from the (here empty) graph.
 func TestSetRemediationsOverridesRecompute(t *testing.T) {
 	g := graph.New(nil) // empty graph -> recompute would yield zero recommendations
 	srv := New(g, nil)
-	srv.SetRemediations([]*remediation.Recommendation{
-		{IdentityID: "arn:role/etl", Kind: "right_size", Explanation: "2 unused", Code: "- a"},
-		{IdentityID: "arn:role/etl", Kind: "rotation", Explanation: "old key", Code: "rotate"},
+	created := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	srv.SetRemediations([]graph.StoredRemediation{
+		{Recommendation: &remediation.Recommendation{IdentityID: "arn:role/etl", Kind: "right_size", Explanation: "2 unused", Code: "- a"}, CreatedAt: created},
+		{Recommendation: &remediation.Recommendation{IdentityID: "arn:role/etl", Kind: "rotation", Explanation: "old key", Code: "rotate"}},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/remediations", nil)
@@ -29,8 +31,9 @@ func TestSetRemediationsOverridesRecompute(t *testing.T) {
 		t.Fatalf("status = %d", rr.Code)
 	}
 	var got []struct {
-		Identity string `json:"identity"`
-		Kind     string `json:"kind"`
+		Identity  string `json:"identity"`
+		Kind      string `json:"kind"`
+		CreatedAt string `json:"created_at"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -40,6 +43,13 @@ func TestSetRemediationsOverridesRecompute(t *testing.T) {
 	}
 	if got[0].Identity != "arn:role/etl" || got[0].Kind != "right_size" {
 		t.Errorf("first = %+v", got[0])
+	}
+	if got[0].CreatedAt != "2026-05-31 12:00:00 UTC" {
+		t.Errorf("created_at = %q, want stored timestamp", got[0].CreatedAt)
+	}
+	// A zero CreatedAt is omitted from the JSON.
+	if got[1].CreatedAt != "" {
+		t.Errorf("zero CreatedAt should be omitted, got %q", got[1].CreatedAt)
 	}
 }
 
