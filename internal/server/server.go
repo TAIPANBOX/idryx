@@ -89,6 +89,21 @@ type apiRemediation struct {
 	Kind        string `json:"kind"`
 	Explanation string `json:"explanation"`
 	Code        string `json:"code"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// persistedRemTimes maps "identity\x00kind" to the stored generation time of a
+// persisted recommendation. Empty when serving recompute-from-graph (no times).
+func (s *Server) persistedRemTimes() map[string]string {
+	m := make(map[string]string, len(s.remParam))
+	for _, sr := range s.remParam {
+		if sr.Recommendation == nil || sr.CreatedAt.IsZero() {
+			continue
+		}
+		m[sr.Recommendation.IdentityID+"\x00"+sr.Recommendation.Kind] =
+			sr.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC")
+	}
+	return m
 }
 
 // apiRecommendation is a flat, identity-tagged remediation for the
@@ -124,6 +139,7 @@ func (s *Server) identitiesJSON() []apiIdentity {
 		alertCount[a.IdentityID]++
 	}
 	ids := s.graph.Identities()
+	remTimes := s.persistedRemTimes()
 	out := make([]apiIdentity, 0, len(ids))
 	for _, id := range ids {
 		var perms []apiPermission
@@ -155,6 +171,7 @@ func (s *Server) identitiesJSON() []apiIdentity {
 				Kind:        rem.Kind,
 				Explanation: rem.Explanation,
 				Code:        rem.Code,
+				CreatedAt:   remTimes[id.ID+"\x00"+rem.Kind],
 			}
 		}
 		var rotData *apiRemediation
@@ -163,6 +180,7 @@ func (s *Server) identitiesJSON() []apiIdentity {
 				Kind:        rem.Kind,
 				Explanation: rem.Explanation,
 				Code:        rem.Code,
+				CreatedAt:   remTimes[id.ID+"\x00"+rem.Kind],
 			}
 		}
 

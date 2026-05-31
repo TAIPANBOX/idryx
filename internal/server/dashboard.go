@@ -916,7 +916,8 @@ function renderDetails(id) {
       '<span>Terraform Right-Sizing Remediation</span>' +
       '<button onclick="copyToClipboard(\'' + esc(id.id) + '\')" id="copy-btn-' + esc(id.id) + '" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: var(--agent); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">Copy Terraform</button>' +
       '</div>' +
-      '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.remediation.explanation) + '</div>' +
+      '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.remediation.explanation) +
+      (id.remediation.created_at ? '<span style="opacity: 0.6;"> · generated ' + esc(id.remediation.created_at) + '</span>' : '') + '</div>' +
       '<pre id="remediation-code-' + esc(id.id) + '" style="background: #090d16; border: 1px solid var(--panel-border); border-radius: 0.5rem; padding: 1rem; font-family: monospace; font-size: 0.8rem; overflow-x: auto; color: #34d399; text-align: left; max-height: 200px;">' + esc(id.remediation.code) + '</pre>' +
       '</div>';
   }
@@ -925,7 +926,8 @@ function renderDetails(id) {
   if (id.rotation) {
     html += '<div class="delegation-section" style="border-color: rgba(234, 179, 8, 0.3);">' +
       '<div class="delegation-title" style="color: var(--medium);">Credential Rotation</div>' +
-      '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.rotation.explanation) + '</div>' +
+      '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.rotation.explanation) +
+      (id.rotation.created_at ? '<span style="opacity: 0.6;"> · generated ' + esc(id.rotation.created_at) + '</span>' : '') + '</div>' +
       '<pre style="background: #090d16; border: 1px solid var(--panel-border); border-radius: 0.5rem; padding: 1rem; font-family: monospace; font-size: 0.8rem; overflow-x: auto; color: #fde68a; text-align: left; max-height: 200px;">' + esc(id.rotation.code) + '</pre>' +
       '</div>';
   }
