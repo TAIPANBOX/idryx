@@ -279,6 +279,12 @@ See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
 
 ---
 
+## Security
+
+idryx is a security product, so its own trust boundaries are documented. See
+[`SECURITY.md`](SECURITY.md) for the threat model, the read-only / deterministic
+design invariants, and how to report a vulnerability privately.
+
 ## License
 
 [Apache-2.0](LICENSE).
