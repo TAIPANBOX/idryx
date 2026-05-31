@@ -681,7 +681,23 @@ let currentFilters = {
 
 function esc(s) {
   if (s === undefined || s === null) return '';
-  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// escJS escapes a value for use inside a JS string literal that itself sits in
+// an HTML attribute (e.g. onclick="f('<id>')"). Identity IDs come verbatim from
+// ingested inventory/IAM data and may contain quotes, backslashes or angle
+// brackets that would otherwise break out of the string and execute. We hex-
+// escape every non-alphanumeric character (\xHH); the result is pure
+// [A-Za-z0-9] plus \xHH sequences, which is safe in both the JS-string and the
+// surrounding HTML-attribute context with no quote/ampersand interaction.
+function escJS(s) {
+  if (s === undefined || s === null) return '';
+  return String(s).replace(/[^a-zA-Z0-9]/g, c => {
+    const h = c.charCodeAt(0);
+    return h < 256 ? '\\x' + h.toString(16).padStart(2, '0')
+                   : '\\u' + h.toString(16).padStart(4, '0');
+  });
 }
 
 function copyToClipboard(id) {
@@ -931,7 +947,7 @@ function renderDetails(id) {
     html += '<div class="delegation-section" style="border-color: rgba(16, 185, 129, 0.3);">' +
       '<div class="delegation-title" style="color: var(--agent); display: flex; justify-content: space-between; align-items: center;">' +
       '<span>Terraform Right-Sizing Remediation</span>' +
-      '<button onclick="copyToClipboard(\'' + esc(id.id) + '\')" id="copy-btn-' + esc(id.id) + '" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: var(--agent); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">Copy Terraform</button>' +
+      '<button onclick="copyToClipboard(\'' + escJS(id.id) + '\')" id="copy-btn-' + esc(id.id) + '" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: var(--agent); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">Copy Terraform</button>' +
       '</div>' +
       '<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">' + esc(id.remediation.explanation) +
       (id.remediation.created_at ? '<span style="opacity: 0.6;"> · generated ' + esc(id.remediation.created_at) + '</span>' : '') + '</div>' +
@@ -1030,7 +1046,7 @@ function renderAlertsTable() {
     return '<tr>' +
       '<td class="sev-col sev-' + esc(a.severity) + '">' + esc(a.severity) + '</td>' +
       '<td><span class="detector-code">' + esc(a.detector) + '</span></td>' +
-      '<td><a href="#" onclick="selectIdentity(\'' + esc(a.identity) + '\'); return false;" style="color: var(--accent); text-decoration: none; font-weight: 500;">' + esc(a.identity) + '</a></td>' +
+      '<td><a href="#" onclick="selectIdentity(\'' + escJS(a.identity) + '\'); return false;" style="color: var(--accent); text-decoration: none; font-weight: 500;">' + esc(a.identity) + '</a></td>' +
       '<td style="color: var(--text-muted);">' + esc(timeStr) + '</td>' +
       '<td style="font-weight: 500;">' + esc(a.summary) + '</td>' +
       '</tr>';
