@@ -47,3 +47,17 @@ CREATE TABLE IF NOT EXISTS permissions (
     used        BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (identity_id, name)
 );
+
+-- Generated remediation recommendations (right-size / rotation), so the dashboard
+-- and API can serve them from the persisted graph rather than recomputing.
+CREATE TABLE IF NOT EXISTS remediations (
+    id          BIGSERIAL PRIMARY KEY,
+    identity_id TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    explanation TEXT NOT NULL DEFAULT '',
+    code        TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (identity_id, kind)
+);
+
+CREATE INDEX IF NOT EXISTS remediations_identity ON remediations (identity_id);

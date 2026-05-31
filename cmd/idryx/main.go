@@ -493,6 +493,7 @@ func runRemediate(args []string) error {
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	outDir := fs.String("out", "", "write apply-ready Terraform artifacts to this directory instead of stdout")
+	saveDB := fs.String("save-db", "", "Postgres DSN to persist the generated recommendations into")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx remediate [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
@@ -518,6 +519,19 @@ func runRemediate(args []string) error {
 		if rem := remediation.GenerateRotation(*id); rem != nil {
 			recs = append(recs, rem)
 		}
+	}
+
+	if *saveDB != "" {
+		store, err := graph.OpenPg(context.Background(), *saveDB)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		if err := store.SaveRemediations(context.Background(), recs); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "idryx: persisted %d remediation(s) to postgres\n", len(recs))
+		return nil
 	}
 
 	if *outDir != "" {
