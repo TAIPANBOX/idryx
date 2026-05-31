@@ -186,6 +186,7 @@ make build
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
 ./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
 ./bin/idryx remediate --source aws_iam --out ./tf iam.json  # write .tf artifacts + manifest.json (read-only)
+./bin/idryx remediate --save-db "$DSN" iam.json     # persist recommendations into Postgres
 
 # serve: read-only web dashboard + JSON API
 ./bin/idryx serve <log.json>                        # dashboard on :8080
