@@ -12,7 +12,7 @@ for mid-market.
 [![Go version](https://img.shields.io/github/go-mod/go-version/TAIPANBOX/idryx?logo=go&logoColor=white)](go.mod)
 [![Detection](https://img.shields.io/badge/detection-deterministic-2dd4bf)](#detectors)
 [![Identities](https://img.shields.io/badge/identities-humans%20%C2%B7%20NHI%20%C2%B7%20keys%20%C2%B7%20agents-a371f7)](#one-graph-every-identity)
-[![Status](https://img.shields.io/badge/status-Phase%202%20%C2%B7%20NHI%20%2B%20agents-success)](#status--roadmap)
+[![Status](https://img.shields.io/badge/status-MVP%20%C2%B7%20detect%20%2B%20remediate-success)](#status--roadmap)
 [![Last commit](https://img.shields.io/github/last-commit/TAIPANBOX/idryx)](https://github.com/TAIPANBOX/idryx/commits/main/)
 
 <br/>
@@ -76,6 +76,12 @@ year.
    and alerts (SIEM / Slack / OTLP).
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
+
+idryx is a complete MVP for detection and remediation and has passed a security
+self-review (see [`SECURITY.md`](SECURITY.md)). Still ahead, per
+[`idryx-plan.md`](idryx-plan.md): the eBPF network-behavior layer. Blocking,
+`apply`-style enforcement is intentionally out of scope — idryx proposes, it
+never mutates.
 
 ---
 
@@ -261,7 +267,7 @@ Postgres service (`make test-integration` with `DATABASE_URL`).
 
 ## Status & roadmap
 
-**Phase 2 shipped:** on top of the Phase 0 ITDR core and the Phase 1 platform
+**Phase 3 shipped.** On the Phase 0 ITDR core and the Phase 1 platform
 (baseline engine, Slack/SIEM delivery, web dashboard, Postgres-backed graph), idryx
 now covers non-human identities across AWS, GCP and Azure, models AI agents as a
 first-class identity with a delegation graph, and detects shadow AI and unused
@@ -269,10 +275,10 @@ first-class identity with a delegation graph, and detects shadow AI and unused
 by both the in-memory and Postgres backends.
 
 ```
-Phase 0  ████████████████████  done   ITDR core · in-memory graph · CLI · CI
-Phase 1  ████████████████████  done   baseline · Entra/CloudTrail · Slack/SIEM · dashboard · Postgres
-Phase 2  ██████████████████░░  active NHI (AWS/GCP/Azure) · agents + delegation · shadow-AI · least-privilege
-Phase 3  ░░░░░░░░░░░░░░░░░░░░  later  remediation: least-privilege & rotation PRs · enforcement
+Phase 0  ████████████████████  done  ITDR core · in-memory graph · CLI · CI
+Phase 1  ████████████████████  done  baseline · Entra/CloudTrail · Slack/SIEM · dashboard · Postgres
+Phase 2  ████████████████████  done  NHI (AWS/GCP/Azure) · agents + delegation · shadow-AI/MCP · least-privilege
+Phase 3  ████████████████████  done  remediation: right-size & rotation Terraform · PR enforcement (read-only)
 ```
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
