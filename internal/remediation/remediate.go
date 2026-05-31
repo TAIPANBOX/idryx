@@ -102,6 +102,8 @@ func GenerateRotation(id model.Identity) *Recommendation {
 		code = rotateGCP(id)
 	case "azure":
 		code = rotateAzure(id)
+	case "agents":
+		code = rotateAgent(id)
 	default:
 		return nil
 	}
@@ -160,6 +162,23 @@ func rotateAzure(id model.Identity) string {
 	sb.WriteString(fmt.Sprintf("resource \"azuread_application_password\" \"%s\" {\n", name))
 	sb.WriteString(fmt.Sprintf("  application_id    = azuread_application.%s.id\n", name))
 	sb.WriteString("  end_date_relative = \"2160h\" # 90 days\n")
+	sb.WriteString("}\n")
+	return strings.TrimSpace(sb.String())
+}
+
+func rotateAgent(id model.Identity) string {
+	name := lastSegment(id.ID)
+	var sb strings.Builder
+	sb.WriteString("# AI Agent Credential Rotation\n")
+	sb.WriteString(fmt.Sprintf("# Revoke and reissue the long-lived API token for agent %q.\n", id.ID))
+	if id.OnBehalfOf != "" {
+		sb.WriteString(fmt.Sprintf("# This agent delegates from %s; rotating its token does not change that grant.\n", id.OnBehalfOf))
+	}
+	sb.WriteString(fmt.Sprintf("# 1. Issue a new token in the agent runtime/gateway for %q.\n", name))
+	sb.WriteString("# 2. Update the agent's secret store, then revoke the previous token.\n\n")
+	sb.WriteString(fmt.Sprintf("resource \"vault_token\" \"%s\" {\n", name))
+	sb.WriteString(fmt.Sprintf("  display_name = \"%s\"\n", name))
+	sb.WriteString("  ttl          = \"2160h\" # 90 days\n")
 	sb.WriteString("}\n")
 	return strings.TrimSpace(sb.String())
 }

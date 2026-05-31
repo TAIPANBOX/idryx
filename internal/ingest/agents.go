@@ -3,6 +3,7 @@ package ingest
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
@@ -20,6 +21,7 @@ type agentRecord struct {
 	Runtime    string   `json:"runtime"`
 	OnBehalfOf string   `json:"onBehalfOf"` // identity ID the agent delegates from
 	Owner      string   `json:"owner"`
+	Created    string   `json:"created"`   // when the agent's credential was issued (RFC3339, optional)
 	Tools      []string `json:"tools"`     // tool/scope names the agent may call
 	UsedTools  []string `json:"usedTools"` // tools actually observed in use (optional)
 }
@@ -42,6 +44,11 @@ func Agents(data []byte) ([]model.Identity, error) {
 			Owner:      a.Owner,
 			Runtime:    a.Runtime,
 			OnBehalfOf: a.OnBehalfOf,
+		}
+		if a.Created != "" {
+			if t, err := time.Parse(time.RFC3339, a.Created); err == nil {
+				id.Created = t
+			}
 		}
 		used := make(map[string]bool, len(a.UsedTools))
 		for _, t := range a.UsedTools {

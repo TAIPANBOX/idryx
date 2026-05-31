@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: build test test-integration vet fmt lint detect nhi serve clean
+.PHONY: build test test-integration vet fmt lint detect nhi remediate serve clean
 
 build:
 	go build $(LDFLAGS) -o bin/idryx ./cmd/idryx
@@ -35,6 +35,11 @@ nhi: build
 	./bin/idryx detect --source azure ./testdata/azure.json
 	@echo
 	./bin/idryx detect --source mcp ./testdata/mcp.json
+
+remediate: build
+	./bin/idryx remediate --source aws_iam ./testdata/aws_iam.json
+	@echo
+	./bin/idryx remediate --source agents ./testdata/agents.json
 
 serve: build
 	./bin/idryx serve ./testdata/baseline_events.json
