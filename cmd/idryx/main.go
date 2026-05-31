@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/TAIPANBOX/idryx/internal/detect"
@@ -424,6 +426,7 @@ func runRemediate(args []string) error {
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
+	outDir := fs.String("out", "", "write apply-ready Terraform artifacts to this directory instead of stdout")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx remediate [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
@@ -441,31 +444,90 @@ func runRemediate(args []string) error {
 		return err
 	}
 
-	var count int
+	var recs []*remediation.Recommendation
 	for _, id := range g.Identities() {
-		var recs []*remediation.Recommendation
 		if rem := remediation.Generate(*id); rem != nil {
 			recs = append(recs, rem)
 		}
 		if rem := remediation.GenerateRotation(*id); rem != nil {
 			recs = append(recs, rem)
 		}
-		for _, rem := range recs {
-			fmt.Printf("================================================================================\n")
-			fmt.Printf("REMEDIATION (%s) FOR: %s\n", rem.Kind, rem.IdentityID)
-			fmt.Printf("EXPLANATION: %s\n", rem.Explanation)
-			fmt.Printf("--------------------------------------------------------------------------------\n")
-			fmt.Printf("%s\n", rem.Code)
-			fmt.Printf("================================================================================\n\n")
-			count++
-		}
 	}
 
-	if count == 0 {
+	if *outDir != "" {
+		return writeRemediationArtifacts(*outDir, recs)
+	}
+
+	for _, rem := range recs {
+		fmt.Printf("================================================================================\n")
+		fmt.Printf("REMEDIATION (%s) FOR: %s\n", rem.Kind, rem.IdentityID)
+		fmt.Printf("EXPLANATION: %s\n", rem.Explanation)
+		fmt.Printf("--------------------------------------------------------------------------------\n")
+		fmt.Printf("%s\n", rem.Code)
+		fmt.Printf("================================================================================\n\n")
+	}
+
+	if len(recs) == 0 {
 		fmt.Println("All monitored identities are fully right-sized and within credential-rotation age.")
 	} else {
-		fmt.Printf("Generated %d remediation recommendation(s).\n", count)
+		fmt.Printf("Generated %d remediation recommendation(s).\n", len(recs))
 	}
 
 	return nil
+}
+
+// artifactEntry indexes one written remediation file in manifest.json.
+type artifactEntry struct {
+	Identity    string `json:"identity"`
+	Kind        string `json:"kind"`
+	File        string `json:"file"`
+	Explanation string `json:"explanation"`
+}
+
+// writeRemediationArtifacts writes each recommendation as an apply-ready
+// Terraform file plus a manifest.json index. idryx stays read-only on the cloud:
+// it emits files to review and apply, it never mutates the provider itself.
+func writeRemediationArtifacts(dir string, recs []*remediation.Recommendation) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	manifest := make([]artifactEntry, 0, len(recs))
+	used := map[string]bool{}
+	for _, rem := range recs {
+		name := fmt.Sprintf("%s__%s.tf", rem.Kind, sanitizeName(rem.IdentityID))
+		for n := 2; used[name]; n++ {
+			name = fmt.Sprintf("%s__%s_%d.tf", rem.Kind, sanitizeName(rem.IdentityID), n)
+		}
+		used[name] = true
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(rem.Code+"\n"), 0o644); err != nil {
+			return err
+		}
+		manifest = append(manifest, artifactEntry{
+			Identity:    rem.IdentityID,
+			Kind:        rem.Kind,
+			File:        name,
+			Explanation: rem.Explanation,
+		})
+	}
+	mb, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %d remediation artifact(s) and manifest.json to %s\n", len(recs), dir)
+	return nil
+}
+
+// sanitizeName makes an identity ID safe to use as a filename segment.
+func sanitizeName(id string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, id)
 }
