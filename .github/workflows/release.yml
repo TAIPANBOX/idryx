@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: build matrix
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            ext=""; [ "$GOOS" = "windows" ] && ext=".exe"
+            out="idryx_${VERSION}_${GOOS}_${GOARCH}"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/${out}/idryx${ext}" ./cmd/idryx
+            if [ "$GOOS" = "windows" ]; then
+              (cd dist && zip -qr "${out}.zip" "${out}")
+            else
+              tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+            fi
+            rm -r "dist/${out}"
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "idryx ${GITHUB_REF_NAME}" --generate-notes
