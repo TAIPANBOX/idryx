@@ -173,6 +173,26 @@ never in the detection path, which stays deterministic and auditable.
 
 ---
 
+## Install
+
+Prebuilt binaries (Linux, macOS, Windows) are published on the
+[Releases page](https://github.com/TAIPANBOX/idryx/releases) for every `v*` tag,
+with a `SHA256SUMS` file for verification:
+
+```sh
+tar -xzf idryx_v*_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz
+sha256sum -c SHA256SUMS --ignore-missing
+./idryx version
+```
+
+Or build from source (Go 1.26+):
+
+```sh
+make build   # → ./bin/idryx
+```
+
+> Maintainers: a release is cut automatically by CI on `git tag vX.Y.Z && git push --tags`.
+
 ## Quick start
 
 ```sh
