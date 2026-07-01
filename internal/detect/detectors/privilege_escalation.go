@@ -46,6 +46,44 @@ var dangerousPermissions = map[string]string{
 	"microsoft.compute/virtualmachines/runcommand/action": "Azure: Allow running arbitrary shell commands inside VMs",
 }
 
+// matchDangerous reports whether perm (already lowercased) refers to one of
+// the known escalation permissions. Beyond an exact match, it accepts the
+// permission embedded in a larger string (e.g. prefixed with an ARN or
+// suffixed with a resource path) only when the match is bounded by
+// non-identifier characters: "iam:passrole on role/deploy" matches, while
+// "iam:passrolespecial" does not.
+func matchDangerous(perm string) (string, bool) {
+	if desc, ok := dangerousPermissions[perm]; ok {
+		return desc, true
+	}
+	for k, desc := range dangerousPermissions {
+		for idx := strings.Index(perm, k); idx >= 0; {
+			startOK := idx == 0 || isPermBoundary(perm[idx-1])
+			end := idx + len(k)
+			endOK := end == len(perm) || isPermBoundary(perm[end])
+			if startOK && endOK {
+				return desc, true
+			}
+			next := strings.Index(perm[idx+1:], k)
+			if next < 0 {
+				break
+			}
+			idx += 1 + next
+		}
+	}
+	return "", false
+}
+
+// isPermBoundary reports whether c cannot be part of a permission token, i.e.
+// it separates the dangerous permission from an ARN prefix or resource suffix.
+func isPermBoundary(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		return false
+	}
+	return true
+}
+
 func (d *PrivilegeEscalation) Detect(g graph.Reader) []model.Alert {
 	var alerts []model.Alert
 	for _, id := range g.Identities() {
@@ -54,25 +92,7 @@ func (d *PrivilegeEscalation) Detect(g graph.Reader) []model.Alert {
 		}
 
 		for _, p := range id.Permissions {
-			lowerPerm := strings.ToLower(p.Name)
-			// Check if this is a dangerous permission (exact match or suffix match for AWS policies)
-			var matchedDesc string
-			var found bool
-
-			if desc, ok := dangerousPermissions[lowerPerm]; ok {
-				matchedDesc = desc
-				found = true
-			} else {
-				// Also handle common pattern cases where permission is specified with resource or full ARN
-				for k, desc := range dangerousPermissions {
-					if strings.Contains(lowerPerm, k) {
-						matchedDesc = desc
-						found = true
-						break
-					}
-				}
-			}
-
+			matchedDesc, found := matchDangerous(strings.ToLower(p.Name))
 			if found {
 				alerts = append(alerts, model.Alert{
 					Detector:   d.Name(),
