@@ -17,7 +17,7 @@ func NewPrivilegeEscalation() *PrivilegeEscalation { return &PrivilegeEscalation
 func (d *PrivilegeEscalation) Name() string { return "privilege_escalation" }
 
 // dangerousPermissions contains mappings of cloud-specific privilege escalation permissions.
-var dangerousPermissions = map[string]string{
+var dangerousPermissions = map[string]string{ // #nosec G101 -- these are cloud IAM permission identifiers, not credentials
 	// AWS
 	"iam:createaccesskey":         "AWS: Allow generating new access keys for users",
 	"iam:createuserpolicy":        "AWS: Allow inline user policy creation",

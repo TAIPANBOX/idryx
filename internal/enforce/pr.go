@@ -28,7 +28,8 @@ type ExecRunner struct{}
 
 // Run executes name+args in dir and returns combined stdout+stderr.
 func (ExecRunner) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	// name/args are internally constructed (git/gh invocations), not user-derived, and run without a shell
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
