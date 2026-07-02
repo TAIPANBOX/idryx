@@ -85,3 +85,33 @@ func TestPrivilegeEscalation(t *testing.T) {
 		t.Error("human identity should not be flagged")
 	}
 }
+
+func TestMatchDangerous(t *testing.T) {
+	cases := []struct {
+		perm string
+		want bool
+	}{
+		// Exact matches.
+		{"iam:passrole", true},
+		{"iam.serviceaccounts.actas", true},
+		{"microsoft.authorization/roleassignments/write", true},
+		// Embedded with resource or ARN context — still dangerous.
+		{"iam:passrole on arn:aws:iam::123456789012:role/deploy", true},
+		{"sts/iam:passrole", true},
+		{"microsoft.authorization/roleassignments/write/extra", true},
+		// Superstrings that merely contain a dangerous name — must NOT match.
+		{"iam:passrolespecial", false},
+		{"iam:passrole2", false},
+		{"iam:createaccesskeygrant", false},
+		{"iam.serviceaccounts.actassistant", false},
+		{"custom:iam:putrolepolicysafely", false},
+		// Benign permissions.
+		{"s3:getobject", false},
+		{"cloudwatchreadonly", false},
+	}
+	for _, tc := range cases {
+		if _, got := matchDangerous(tc.perm); got != tc.want {
+			t.Errorf("matchDangerous(%q) = %v, want %v", tc.perm, got, tc.want)
+		}
+	}
+}

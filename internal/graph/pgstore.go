@@ -29,12 +29,12 @@ func OpenPg(ctx context.Context, dsn string) (*PgStore, error) {
 		return nil, err
 	}
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	s := &PgStore{db: db}
 	if err := s.migrate(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil

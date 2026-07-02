@@ -42,7 +42,7 @@ func Human(w io.Writer, alerts []model.Alert) {
 			a.Severity, a.Detector, a.IdentityID,
 			a.Time.UTC().Format("2006-01-02 15:04Z"), a.Summary)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }
 
 type jsonAlert struct {

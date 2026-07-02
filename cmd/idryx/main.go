@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/TAIPANBOX/idryx/internal/detect"
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
@@ -361,7 +362,12 @@ func runServe(args []string) error {
 		shown = "localhost" + shown
 	}
 	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts)\n", shown, len(alerts))
-	return http.ListenAndServe(*addr, srv.Handler())
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return httpSrv.ListenAndServe()
 }
 
 func runLoad(args []string) error {

@@ -119,6 +119,7 @@ func TestPgIngestIdentitiesAndSnapshot(t *testing.T) {
 			Type:       model.IdentityServiceAccount,
 			Source:     "aws_iam",
 			Owner:      "human-owner@x.com",
+			OnBehalfOf: "human-owner@x.com",
 			Created:    createdTime,
 			LastUsed:   lastUsedTime,
 			Privileged: false,

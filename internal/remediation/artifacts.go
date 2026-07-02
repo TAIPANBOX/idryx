@@ -22,7 +22,7 @@ type Artifact struct {
 // itself. It is the single source of truth for both `remediate --out` and the
 // pull-request enforcement flow.
 func WriteArtifacts(dir string, recs []*Recommendation) ([]Artifact, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 	manifest := make([]Artifact, 0, len(recs))
@@ -33,7 +33,7 @@ func WriteArtifacts(dir string, recs []*Recommendation) ([]Artifact, error) {
 			name = fmt.Sprintf("%s__%s_%d.tf", rem.Kind, SanitizeName(rem.IdentityID), n)
 		}
 		used[name] = true
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(rem.Code+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(rem.Code+"\n"), 0o600); err != nil {
 			return nil, err
 		}
 		manifest = append(manifest, Artifact{
@@ -47,7 +47,7 @@ func WriteArtifacts(dir string, recs []*Recommendation) ([]Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0o600); err != nil {
 		return nil, err
 	}
 	return manifest, nil
