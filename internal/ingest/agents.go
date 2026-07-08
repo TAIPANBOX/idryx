@@ -19,7 +19,7 @@ type agentInventory struct {
 type agentRecord struct {
 	ID         string   `json:"id"`
 	Runtime    string   `json:"runtime"`
-	OnBehalfOf string   `json:"onBehalfOf"` // identity ID the agent delegates from
+	OnBehalfOf string   `json:"onBehalfOf"` // identity ID the agent delegates from (one hop; see model.Identity.OnBehalfOf)
 	Owner      string   `json:"owner"`
 	Created    string   `json:"created"`   // when the agent's credential was issued (RFC3339, optional)
 	Tools      []string `json:"tools"`     // tool/scope names the agent may call
@@ -38,12 +38,14 @@ func Agents(data []byte) ([]model.Identity, error) {
 	out := make([]model.Identity, 0, len(in.Agents))
 	for _, a := range in.Agents {
 		id := model.Identity{
-			ID:         a.ID,
-			Type:       model.IdentityAgent,
-			Source:     "agents",
-			Owner:      a.Owner,
-			Runtime:    a.Runtime,
-			OnBehalfOf: a.OnBehalfOf,
+			ID:      a.ID,
+			Type:    model.IdentityAgent,
+			Source:  "agents",
+			Owner:   a.Owner,
+			Runtime: a.Runtime,
+		}
+		if a.OnBehalfOf != "" {
+			id.OnBehalfOf = []string{a.OnBehalfOf}
 		}
 		if a.Created != "" {
 			if t, err := time.Parse(time.RFC3339, a.Created); err == nil {

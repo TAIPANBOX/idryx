@@ -171,8 +171,9 @@ func rotateAgent(id model.Identity) string {
 	var sb strings.Builder
 	sb.WriteString("# AI Agent Credential Rotation\n")
 	sb.WriteString(fmt.Sprintf("# Revoke and reissue the long-lived API token for agent %q.\n", id.ID))
-	if id.OnBehalfOf != "" {
-		sb.WriteString(fmt.Sprintf("# This agent delegates from %s; rotating its token does not change that grant.\n", id.OnBehalfOf))
+	if len(id.OnBehalfOf) > 0 {
+		immediate := id.OnBehalfOf[len(id.OnBehalfOf)-1]
+		sb.WriteString(fmt.Sprintf("# This agent delegates from %s; rotating its token does not change that grant.\n", immediate))
 	}
 	sb.WriteString(fmt.Sprintf("# 1. Issue a new token in the agent runtime/gateway for %q.\n", name))
 	sb.WriteString("# 2. Update the agent's secret store, then revoke the previous token.\n\n")

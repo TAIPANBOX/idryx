@@ -257,6 +257,7 @@ deterministic detectors.
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
+| `tokenfuse` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event/v0.1` envelopes (one file or a glob via `--load tokenfuse:path/*.ndjson`): agent/human identities from `agent_id`/`on_behalf_of`, plus behavioral events (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`, and any future type, tolerated generically) |
 
 **Detectors** — see the [Detectors](#detectors) section above: 14 detectors across ITDR ·
 NHI · agents/AI · least-privilege.

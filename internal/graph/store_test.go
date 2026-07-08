@@ -1,0 +1,140 @@
+package graph
+
+import (
+	"testing"
+
+	"github.com/TAIPANBOX/idryx/internal/model"
+)
+
+// These tests pin down WalkDelegationChain's documented contract without a
+// database: exact order/content of the returned chain, and — critically for a
+// security product ingesting attacker-influenceable on_behalf_of arrays from
+// external NDJSON — guaranteed termination on cycles, self-references, and
+// missing links. Simply completing under the test timeout is the termination
+// proof; the assertions pin the shape.
+
+// idx builds an identity index the way the excessive_agency detector does,
+// from ID -> chain (nil chain = node exists with no principals).
+func idx(chains map[string][]string) map[string]*model.Identity {
+	out := make(map[string]*model.Identity, len(chains))
+	for id, chain := range chains {
+		out[id] = &model.Identity{ID: id, OnBehalfOf: chain}
+	}
+	return out
+}
+
+func assertChain(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("chain = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("chain[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestWalkDelegationChainOneHop(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a":   {"principal"},
+		"principal": nil,
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"), []string{"agent:a", "principal"})
+}
+
+// A flattened multi-entry chain on one identity (the event-source case: the
+// full root-first array arrives on a single node). The walk returns the start,
+// then the array reversed — immediate principal first, root last.
+func TestWalkDelegationChainFlattenedArray(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"user://x/root", "agent://x/mid"}, // root-first per SPEC §5
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"),
+		[]string{"agent:a", "agent://x/mid", "user://x/root"})
+}
+
+// Cross-node stitching (the inventory-source case: one hop per node, three
+// nodes deep).
+func TestWalkDelegationChainStitched(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"agent:b"},
+		"agent:b": {"agent:c"},
+		"agent:c": nil,
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"),
+		[]string{"agent:a", "agent:b", "agent:c"})
+}
+
+// A two-node cycle A→B→A must terminate and return each principal exactly
+// once. Nothing about the input prevents this shape: on_behalf_of arrays come
+// from external NDJSON and are attacker-influenceable.
+func TestWalkDelegationChainTwoNodeCycle(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"agent:b"},
+		"agent:b": {"agent:a"},
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"), []string{"agent:a", "agent:b"})
+	// And from the other side of the cycle.
+	assertChain(t, WalkDelegationChain(index, "agent:b"), []string{"agent:b", "agent:a"})
+}
+
+// A self-referencing identity A→A terminates with just A.
+func TestWalkDelegationChainSelfReference(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"agent:a"},
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"), []string{"agent:a"})
+}
+
+// A chain entry with no corresponding graph node: the walk terminates cleanly
+// and the dangling entry is still included as a principal (it IS part of the
+// blast radius even if idryx has no inventory row for it yet).
+func TestWalkDelegationChainMissingLink(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"ghost://nowhere"},
+	})
+	assertChain(t, WalkDelegationChain(index, "agent:a"), []string{"agent:a", "ghost://nowhere"})
+}
+
+// A start ID absent from the index entirely still returns itself.
+func TestWalkDelegationChainUnknownStart(t *testing.T) {
+	assertChain(t, WalkDelegationChain(idx(nil), "agent:unknown"), []string{"agent:unknown"})
+}
+
+// A longer cycle reached mid-walk (A→B→C→B) and a flattened array containing
+// a back-reference to the walker itself (A→[A, P]) — both must terminate,
+// dedupe, and keep the legitimate principals.
+func TestWalkDelegationChainCycleVariants(t *testing.T) {
+	deep := idx(map[string][]string{
+		"agent:a": {"agent:b"},
+		"agent:b": {"agent:c"},
+		"agent:c": {"agent:b"},
+	})
+	assertChain(t, WalkDelegationChain(deep, "agent:a"),
+		[]string{"agent:a", "agent:b", "agent:c"})
+
+	selfInArray := idx(map[string][]string{
+		"agent:a":   {"agent:a", "principal"}, // hostile: walker named as its own root
+		"principal": nil,
+	})
+	assertChain(t, WalkDelegationChain(selfInArray, "agent:a"),
+		[]string{"agent:a", "principal"})
+}
+
+// Store.DelegationChain is the same walk through the public in-memory Store
+// path (AddIdentity → DelegationChain), covering the wrapper and AddIdentity's
+// chain-copy behavior — including a cycle assembled across AddIdentity calls.
+func TestStoreDelegationChain(t *testing.T) {
+	g := New(nil)
+	g.AddIdentity(model.Identity{ID: "human@x.com"})
+	g.AddIdentity(model.Identity{ID: "role:deploy", Type: model.IdentityServiceAccount, OnBehalfOf: []string{"human@x.com"}})
+	g.AddIdentity(model.Identity{ID: "agent:bot", Type: model.IdentityAgent, OnBehalfOf: []string{"role:deploy"}})
+	assertChain(t, g.DelegationChain("agent:bot"),
+		[]string{"agent:bot", "role:deploy", "human@x.com"})
+
+	// Cycle via the store: two agents naming each other.
+	g.AddIdentity(model.Identity{ID: "agent:p", Type: model.IdentityAgent, OnBehalfOf: []string{"agent:q"}})
+	g.AddIdentity(model.Identity{ID: "agent:q", Type: model.IdentityAgent, OnBehalfOf: []string{"agent:p"}})
+	assertChain(t, g.DelegationChain("agent:p"), []string{"agent:p", "agent:q"})
+}

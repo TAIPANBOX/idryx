@@ -22,21 +22,29 @@ func agentGraph() *graph.Store {
 	// agent one hop from admin -> high
 	g.AddIdentity(model.Identity{
 		ID: "agent:direct", Type: model.IdentityAgent, Source: "agents",
-		OnBehalfOf: "role:admin", Owner: "x",
+		OnBehalfOf: []string{"role:admin"}, Owner: "x",
 	})
 	// agent two hops from admin via a sub-agent -> critical
 	g.AddIdentity(model.Identity{
 		ID: "agent:sub", Type: model.IdentityAgent, Source: "agents",
-		OnBehalfOf: "role:admin", Owner: "x",
+		OnBehalfOf: []string{"role:admin"}, Owner: "x",
 	})
 	g.AddIdentity(model.Identity{
 		ID: "agent:deep", Type: model.IdentityAgent, Source: "agents",
-		OnBehalfOf: "agent:sub", Owner: "x",
+		OnBehalfOf: []string{"agent:sub"}, Owner: "x",
 	})
 	// agent that only reaches a reader -> no alert
 	g.AddIdentity(model.Identity{
 		ID: "agent:safe", Type: model.IdentityAgent, Source: "agents",
-		OnBehalfOf: "role:reader", Owner: "x",
+		OnBehalfOf: []string{"role:reader"}, Owner: "x",
+	})
+	// agent whose OnBehalfOf already carries a full flattened chain (as an
+	// event source that never truncates would produce, agent-passport SPEC
+	// §5): root=role:admin, immediate principal=role:reader. Admin is still
+	// reachable even though it isn't the last (immediate) hop.
+	g.AddIdentity(model.Identity{
+		ID: "agent:flat-chain", Type: model.IdentityAgent, Source: "tokenfuse",
+		OnBehalfOf: []string{"role:admin", "role:reader"}, Owner: "x",
 	})
 	return g
 }
@@ -63,6 +71,12 @@ func TestExcessiveAgency(t *testing.T) {
 	if _, ok := got["role:admin"]; ok {
 		t.Error("non-agent identities must not be flagged by excessive_agency")
 	}
+
+	if a, ok := got["agent:flat-chain"]; !ok {
+		t.Error("agent:flat-chain should reach admin via a non-immediate hop in its own chain array")
+	} else if a.Severity != model.SeverityCritical {
+		t.Errorf("agent:flat-chain severity = %v, want critical (chain depth 2)", a.Severity)
+	}
 }
 
 func TestDelegationChainAndEffectivePerms(t *testing.T) {
@@ -86,5 +100,30 @@ func TestDelegationChainAndEffectivePerms(t *testing.T) {
 	}
 	if !admin {
 		t.Error("agent:deep effective permissions should include admin")
+	}
+}
+
+func TestDelegationChainFlattenedArray(t *testing.T) {
+	g := agentGraph()
+	chain := g.DelegationChain("agent:flat-chain")
+	want := []string{"agent:flat-chain", "role:reader", "role:admin"}
+	if len(chain) != len(want) {
+		t.Fatalf("chain = %v, want %v", chain, want)
+	}
+	for i := range want {
+		if chain[i] != want[i] {
+			t.Errorf("chain[%d] = %q, want %q", i, chain[i], want[i])
+		}
+	}
+
+	perms := g.EffectivePermissions("agent:flat-chain")
+	admin := false
+	for _, p := range perms {
+		if p.Admin {
+			admin = true
+		}
+	}
+	if !admin {
+		t.Error("agent:flat-chain effective permissions should include admin from the root of its own chain")
 	}
 }

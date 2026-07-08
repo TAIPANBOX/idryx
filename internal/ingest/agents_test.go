@@ -33,8 +33,8 @@ func TestAgents(t *testing.T) {
 	if triage.Type != model.IdentityAgent || triage.Source != "agents" {
 		t.Errorf("triage type/source = %v/%q", triage.Type, triage.Source)
 	}
-	if triage.Runtime != "langgraph" || triage.OnBehalfOf != "arn:aws:iam::1:role/support" {
-		t.Errorf("triage runtime/obo = %q/%q", triage.Runtime, triage.OnBehalfOf)
+	if triage.Runtime != "langgraph" || len(triage.OnBehalfOf) != 1 || triage.OnBehalfOf[0] != "arn:aws:iam::1:role/support" {
+		t.Errorf("triage runtime/obo = %q/%v", triage.Runtime, triage.OnBehalfOf)
 	}
 	if triage.HasAdmin() {
 		t.Error("triage tools are low-risk; should not be admin")

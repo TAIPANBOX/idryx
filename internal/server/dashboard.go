@@ -995,20 +995,36 @@ function renderDetails(id) {
   container.innerHTML = html;
 }
 
-// Compute delegation chain path recursively
+// Compute the delegation chain path, mirroring graph.WalkDelegationChain on
+// the server: on_behalf_of is now a full array (agent-passport SPEC §5,
+// ordered root-first, last = immediate principal), so each node can itself
+// contribute several hops. We add them immediate-principal-first (i.e. the
+// array in reverse), then keep walking from the root of that array in case it
+// is itself a node with a further chain of its own to stitch on.
 function getDelegationChain(startId) {
   const chain = [];
   const seen = new Set();
+  const add = (id) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    chain.push(id);
+    return true;
+  };
+
+  if (!add(startId)) return chain;
+
   let currentId = startId;
-  
-  while (currentId) {
-    if (seen.has(currentId)) break; // cycle guard
-    seen.add(currentId);
-    chain.push(currentId);
-    
+  for (;;) {
     const obj = globalIdentities.find(x => x.id === currentId);
-    if (!obj || !obj.on_behalf_of) break;
-    currentId = obj.on_behalf_of;
+    const obo = obj && obj.on_behalf_of;
+    if (!obo || obo.length === 0) break;
+
+    let next = null;
+    for (let i = obo.length - 1; i >= 0; i--) {
+      if (add(obo[i])) next = obo[i];
+    }
+    if (next === null) break;
+    currentId = next;
   }
   return chain;
 }

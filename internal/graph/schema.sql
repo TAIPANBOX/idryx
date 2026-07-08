@@ -6,8 +6,7 @@ CREATE TABLE IF NOT EXISTS identities (
     owner        TEXT NOT NULL DEFAULT '',
     created      TIMESTAMPTZ,
     last_used    TIMESTAMPTZ,
-    runtime      TEXT NOT NULL DEFAULT '',
-    on_behalf_of TEXT REFERENCES identities(id) ON DELETE SET NULL
+    runtime      TEXT NOT NULL DEFAULT ''
 );
 
 -- Ensure existing database instances are migrated if they only have the Phase 0/1 columns.
@@ -17,7 +16,42 @@ ALTER TABLE identities ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS created TIMESTAMPTZ;
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS last_used TIMESTAMPTZ;
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT '';
-ALTER TABLE identities ADD COLUMN IF NOT EXISTS on_behalf_of TEXT REFERENCES identities(id) ON DELETE SET NULL;
+
+-- Phase 5.1: OnBehalfOf became a full delegation chain (agent-passport SPEC §5:
+-- ordered root-first, last = immediate principal) instead of one hop, so the
+-- single self-referencing on_behalf_of column is replaced by an ordered join
+-- table. Principals are opaque strings (agent://, user://, or legacy plain
+-- IDs) that may not (yet) have their own identities row, so this table
+-- intentionally has no FK on principal — only on the owning identity.
+CREATE TABLE IF NOT EXISTS on_behalf_of (
+    identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    position    INT  NOT NULL,
+    principal   TEXT NOT NULL,
+    PRIMARY KEY (identity_id, position)
+);
+
+-- Backfill: a legacy single-hop on_behalf_of value is exactly a chain of
+-- length one, i.e. position 0. Guarded on the old column still existing so
+-- re-running this script is a no-op (matching the additive IF NOT EXISTS
+-- style used above), and ON CONFLICT DO NOTHING so a partially-migrated
+-- database is never overwritten. Only after the backfill is the old column
+-- dropped — the migration never discards data.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'identities'
+          AND column_name = 'on_behalf_of'
+    ) THEN
+        INSERT INTO on_behalf_of (identity_id, position, principal)
+        SELECT id, 0, on_behalf_of FROM identities
+        WHERE on_behalf_of IS NOT NULL AND on_behalf_of <> ''
+        ON CONFLICT (identity_id, position) DO NOTHING;
+    END IF;
+END $$;
+
+ALTER TABLE identities DROP COLUMN IF EXISTS on_behalf_of;
 
 CREATE TABLE IF NOT EXISTS events (
     id          BIGSERIAL PRIMARY KEY,
@@ -31,11 +65,16 @@ CREATE TABLE IF NOT EXISTS events (
     lat         DOUBLE PRECISION NOT NULL DEFAULT 0,
     lon         DOUBLE PRECISION NOT NULL DEFAULT 0,
     device      TEXT NOT NULL DEFAULT '',
-    resource    TEXT NOT NULL DEFAULT ''
+    resource    TEXT NOT NULL DEFAULT '',
+    severity    TEXT NOT NULL DEFAULT ''
 );
 
 -- Ensure existing event tables have the resource column for shadow_ai
 ALTER TABLE events ADD COLUMN IF NOT EXISTS resource TEXT NOT NULL DEFAULT '';
+
+-- Producer-assigned event severity (agent-passport SPEC §6.1), used by the
+-- tokenfuse source; empty for sources without the concept.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS events_identity_ts ON events (identity_id, ts);
 

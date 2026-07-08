@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
 // TestMultiSourceStitchesAgentAndMCP is the regression test for the cross-layer
@@ -63,5 +65,49 @@ func TestLoadListSet(t *testing.T) {
 	}
 	if err := l.Set(":nopath"); err == nil {
 		t.Error("expected error for empty source")
+	}
+}
+
+// TestLoadTokenFuseStitchesIdentitiesAndEvents is the CLI-level wiring check
+// for the tokenfuse connector (agent-passport SPEC §6.3): --load tokenfuse:path
+// must populate the graph with both the agent/human identities and the
+// behavioral events from the same NDJSON file, and the delegation chain
+// carried in on_behalf_of must survive into the graph unchanged.
+func TestLoadTokenFuseStitchesIdentitiesAndEvents(t *testing.T) {
+	loads := loadList{
+		{Source: "tokenfuse", Path: "../../testdata/tokenfuse.ndjson"},
+	}
+	g, err := buildGraph("", "", "", "", "", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+
+	ids := g.Identities()
+	if len(ids) != 4 {
+		t.Fatalf("got %d identities, want 4 (2 agents seen directly + 1 sub-agent + 1 human)", len(ids))
+	}
+
+	var sub *model.Identity
+	var totalEvents int
+	for _, id := range ids {
+		totalEvents += len(id.Events)
+		if id.ID == "agent://acme-bank.example/support/sub-agent" {
+			sub = id
+		}
+	}
+	if totalEvents != 10 {
+		t.Errorf("total events across the graph = %d, want 10", totalEvents)
+	}
+	if sub == nil {
+		t.Fatal("expected agent://acme-bank.example/support/sub-agent in the graph")
+	}
+	wantChain := []string{"user://acme-bank.example/j.doe", "agent://acme-bank.example/support/orchestrator"}
+	if len(sub.OnBehalfOf) != len(wantChain) {
+		t.Fatalf("sub-agent chain = %v, want %v", sub.OnBehalfOf, wantChain)
+	}
+	for i := range wantChain {
+		if sub.OnBehalfOf[i] != wantChain[i] {
+			t.Errorf("sub-agent chain[%d] = %q, want %q", i, sub.OnBehalfOf[i], wantChain[i])
+		}
 	}
 }

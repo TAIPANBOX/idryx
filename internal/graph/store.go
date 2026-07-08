@@ -63,8 +63,8 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if in.Runtime != "" {
 		id.Runtime = in.Runtime
 	}
-	if in.OnBehalfOf != "" {
-		id.OnBehalfOf = in.OnBehalfOf
+	if len(in.OnBehalfOf) > 0 {
+		id.OnBehalfOf = append([]string(nil), in.OnBehalfOf...)
 	}
 	if in.Shadow {
 		id.Shadow = true
@@ -75,21 +75,58 @@ func (s *Store) AddIdentity(in model.Identity) {
 
 // DelegationChain returns the chain of identity IDs an agent acts through,
 // starting at id and following OnBehalfOf upward to the ultimate principal.
-// The starting id is included; a cycle or missing link terminates the walk.
+// The starting id is included first, then each principal in id's own chain
+// (walked immediate-principal-first, i.e. OnBehalfOf in reverse, since that
+// array is stored root-first per agent-passport SPEC §5). If the root of that
+// chain is itself a graph identity with a further OnBehalfOf chain of its own
+// (e.g. reconstructed hop-by-hop from an inventory source), the walk
+// continues from there — so a chain can be assembled either from one
+// identity's fully-populated array (an event source that never truncates it)
+// or by stitching one-hop links across several identities (an inventory
+// source), or a mix of both. A cycle or missing link terminates the walk.
 func (s *Store) DelegationChain(id string) []string {
+	return WalkDelegationChain(s.identities, id)
+}
+
+// WalkDelegationChain is the backend-agnostic implementation shared with the
+// excessive_agency detector, which indexes graph.Reader identities itself
+// (it can't reuse *Store directly, since it must also work over PgStore
+// snapshots and any future graph.Reader backend).
+func WalkDelegationChain(index map[string]*model.Identity, start string) []string {
 	var chain []string
 	seen := map[string]bool{}
-	for cur := id; cur != ""; {
-		if seen[cur] {
-			break // cycle guard
+	add := func(id string) bool {
+		if seen[id] {
+			return false
 		}
-		seen[cur] = true
-		chain = append(chain, cur)
-		node, ok := s.identities[cur]
+		seen[id] = true
+		chain = append(chain, id)
+		return true
+	}
+
+	if !add(start) {
+		return chain
+	}
+	for cur := start; ; {
+		node, ok := index[cur]
 		if !ok {
 			break
 		}
-		cur = node.OnBehalfOf
+		// Append this node's own chain, immediate principal first (i.e. its
+		// OnBehalfOf array in reverse — that array is root-first per
+		// agent-passport SPEC §5). Continue the outer walk from the root of
+		// this array, in case that root is itself a node with a further
+		// chain to stitch on (the inventory-source case: one hop per node).
+		next := ""
+		for i := len(node.OnBehalfOf) - 1; i >= 0; i-- {
+			if p := node.OnBehalfOf[i]; add(p) {
+				next = p
+			}
+		}
+		if next == "" {
+			break
+		}
+		cur = next
 	}
 	return chain
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/enforce"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
+	"github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/remediation"
 	"github.com/TAIPANBOX/idryx/internal/report"
@@ -139,6 +140,25 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath string, loads lo
 // populate ingests one source spec into g. Inventory sources add identities;
 // event sources add events; aws_iam/gcp_iam optionally fold in usage enrichment.
 func populate(g *graph.Store, spec loadSpec) error {
+	// tokenfuse is a hybrid source (agent-passport SPEC §6.3): it produces
+	// both identities and behavioral events from the same NDJSON envelopes,
+	// and spec.Path may be a glob rather than a single file, so it is
+	// special-cased before the generic os.ReadFile below.
+	if spec.Source == "tokenfuse" {
+		ids, events, rep, err := tokenfuse.Load(spec.Path)
+		if err != nil {
+			return fmt.Errorf("parse tokenfuse: %w", err)
+		}
+		for _, id := range ids {
+			g.AddIdentity(id)
+		}
+		for _, e := range events {
+			g.AddEvent(e)
+		}
+		reportTokenFuse(spec.Path, rep)
+		return nil
+	}
+
 	data, err := os.ReadFile(spec.Path)
 	if err != nil {
 		return err
@@ -197,6 +217,17 @@ func populate(g *graph.Store, spec loadSpec) error {
 	return nil
 }
 
+// reportTokenFuse prints a one-line stderr summary when a tokenfuse batch had
+// anything worth flagging (agent-passport SPEC §6.1/§7: unknown fields and
+// types are tolerated, never errors, but they are still worth surfacing).
+func reportTokenFuse(pathOrGlob string, rep tokenfuse.Report) {
+	if rep.Malformed == 0 && len(rep.UnknownTypes) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "idryx: tokenfuse %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
+		pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+}
+
 // runDetectors runs all detectors over the graph and returns their alerts.
 func runDetectors(g graph.Reader) []model.Alert {
 	ds := []detect.Detector{
@@ -249,7 +280,7 @@ func runDetect(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
@@ -312,7 +343,7 @@ func runServe(args []string) error {
 	var (
 		addr       = fs.String("addr", ":8080", "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 	)
@@ -374,7 +405,7 @@ func runLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	var (
 		db         = fs.String("db", "", "Postgres DSN (required)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 	)
 	fs.Usage = func() {
@@ -390,12 +421,7 @@ func runLoad(args []string) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return fmt.Errorf("load requires exactly one input file")
-	}
-
-	data, err := os.ReadFile(fs.Arg(0))
-	if err != nil {
-		return err
+		return fmt.Errorf("load requires exactly one input file or glob")
 	}
 
 	store, err := graph.OpenPg(context.Background(), *db)
@@ -403,6 +429,37 @@ func runLoad(args []string) error {
 		return err
 	}
 	defer store.Close()
+
+	// tokenfuse is a hybrid source (identities + events from the same NDJSON
+	// envelopes) and its path argument may be a glob, so — like populate()
+	// for the file-graph path — it is special-cased ahead of the generic
+	// os.ReadFile below.
+	if *source == "tokenfuse" {
+		ids, events, rep, err := tokenfuse.Load(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		privSet := privilegedSet(*privileged)
+		for i := range ids {
+			if privSet[ids[i].ID] {
+				ids[i].Privileged = true
+			}
+		}
+		if err := store.IngestIdentities(context.Background(), ids); err != nil {
+			return err
+		}
+		if err := store.Ingest(context.Background(), events, privSet); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities and %d events from tokenfuse into postgres\n", len(ids), len(events))
+		reportTokenFuse(fs.Arg(0), rep)
+		return nil
+	}
+
+	data, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
 
 	if ids, isInventory, err := parseInventory(*source, data); isInventory {
 		if err != nil {

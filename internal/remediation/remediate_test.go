@@ -246,7 +246,7 @@ func TestGenerateRotationAgent(t *testing.T) {
 		ID:         "agent:deploy-bot",
 		Type:       model.IdentityAgent,
 		Source:     "agents",
-		OnBehalfOf: "aws:arn:aws:iam::1:role/deploy",
+		OnBehalfOf: []string{"aws:arn:aws:iam::1:role/deploy"},
 		Created:    at.Add(-200 * 24 * time.Hour),
 	}
 	rem := GenerateRotation(agent)

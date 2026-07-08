@@ -72,10 +72,10 @@ func (s *PgStore) Ingest(ctx context.Context, events []model.Event, privileged m
 			seen[e.IdentityID] = true
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO events (identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			`INSERT INTO events (identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 			e.IdentityID, e.Time, string(e.Type), e.Outcome,
-			e.IP, e.City, e.Country, e.Lat, e.Lon, e.Device, e.Resource); err != nil {
+			e.IP, e.City, e.Country, e.Lat, e.Lon, e.Device, e.Resource, e.Severity); err != nil {
 			return fmt.Errorf("insert event: %w", err)
 		}
 	}
@@ -83,9 +83,11 @@ func (s *PgStore) Ingest(ctx context.Context, events []model.Event, privileged m
 }
 
 // IngestIdentities writes fully-described identities and their permissions to the database.
-// To handle the recursive self-reference on on_behalf_of, we insert/upsert the base
-// identity fields first without setting on_behalf_of, then update on_behalf_of in a
-// second pass. This avoids foreign key constraint issues if parent agents aren't created yet.
+// To handle the recursive self-reference the delegation chain can create (an
+// agent's principal is often another agent row in the same batch), we
+// insert/upsert the base identity fields first, then write each identity's
+// on_behalf_of chain in a second pass. This avoids ordering issues if a
+// principal referenced by ID isn't inserted yet.
 func (s *PgStore) IngestIdentities(ctx context.Context, identities []model.Identity) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -133,13 +135,18 @@ func (s *PgStore) IngestIdentities(ctx context.Context, identities []model.Ident
 		}
 	}
 
-	// Pass 2: Update on_behalf_of values now that all identities are present.
+	// Pass 2: Write each identity's delegation chain now that all identities
+	// are present. Replace-in-place (delete then insert) keeps re-ingestion
+	// idempotent, same as the permissions handling above.
 	for _, id := range identities {
-		if id.OnBehalfOf != "" {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM on_behalf_of WHERE identity_id = $1", id.ID); err != nil {
+			return fmt.Errorf("clear on_behalf_of for %q: %w", id.ID, err)
+		}
+		for i, principal := range id.OnBehalfOf {
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE identities SET on_behalf_of = $1 WHERE id = $2`,
-				id.OnBehalfOf, id.ID); err != nil {
-				return fmt.Errorf("update on_behalf_of for %q: %w", id.ID, err)
+				`INSERT INTO on_behalf_of (identity_id, position, principal) VALUES ($1, $2, $3)`,
+				id.ID, i, principal); err != nil {
+				return fmt.Errorf("insert on_behalf_of[%d] for %q: %w", i, id.ID, err)
 			}
 		}
 	}
@@ -172,9 +179,10 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 
 	store := New(priv)
 
-	// Retrieve all full identities (including NHIs, agents, and delegation chains)
+	// Retrieve all full identities (including NHIs and agents; delegation
+	// chains are loaded separately below)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, source, owner, created, last_used, runtime, on_behalf_of, privileged
+		`SELECT id, type, source, owner, created, last_used, runtime, privileged
 		 FROM identities`)
 	if err != nil {
 		return nil, err
@@ -184,8 +192,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		var id model.Identity
 		var typStr string
 		var createdVal, lastUsedVal sql.NullTime
-		var onBehalfOfVal sql.NullString
-		if err := rows.Scan(&id.ID, &typStr, &id.Source, &id.Owner, &createdVal, &lastUsedVal, &id.Runtime, &onBehalfOfVal, &id.Privileged); err != nil {
+		if err := rows.Scan(&id.ID, &typStr, &id.Source, &id.Owner, &createdVal, &lastUsedVal, &id.Runtime, &id.Privileged); err != nil {
 			return nil, err
 		}
 		id.Type = model.IdentityType(typStr)
@@ -195,12 +202,30 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		if lastUsedVal.Valid {
 			id.LastUsed = lastUsedVal.Time
 		}
-		if onBehalfOfVal.Valid {
-			id.OnBehalfOf = onBehalfOfVal.String
-		}
 		store.AddIdentity(id)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Retrieve every identity's delegation chain (agent-passport SPEC §5:
+	// ordered root-first) and attach it in position order.
+	oboRows, err := s.db.QueryContext(ctx,
+		`SELECT identity_id, principal FROM on_behalf_of ORDER BY identity_id, position`)
+	if err != nil {
+		return nil, err
+	}
+	defer oboRows.Close()
+	for oboRows.Next() {
+		var identityID, principal string
+		if err := oboRows.Scan(&identityID, &principal); err != nil {
+			return nil, err
+		}
+		if idNode := store.ensure(identityID); idNode != nil {
+			idNode.OnBehalfOf = append(idNode.OnBehalfOf, principal)
+		}
+	}
+	if err := oboRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -227,7 +252,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 
 	// Retrieve all events and attach them
 	evRows, err := s.db.QueryContext(ctx,
-		`SELECT identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource
+		`SELECT identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity
 		 FROM events ORDER BY identity_id, ts`)
 	if err != nil {
 		return nil, err
@@ -237,7 +262,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		var e model.Event
 		var typ string
 		if err := evRows.Scan(&e.IdentityID, &e.Time, &typ, &e.Outcome,
-			&e.IP, &e.City, &e.Country, &e.Lat, &e.Lon, &e.Device, &e.Resource); err != nil {
+			&e.IP, &e.City, &e.Country, &e.Lat, &e.Lon, &e.Device, &e.Resource, &e.Severity); err != nil {
 			return nil, err
 		}
 		e.Type = model.EventType(typ)

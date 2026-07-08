@@ -11,6 +11,18 @@ const (
 	EventMFAChallenge EventType = "mfa_challenge"
 	EventEgress       EventType = "egress"
 	EventOther        EventType = "other"
+
+	// TokenFuse behavioral event types (agent-passport SPEC §6.2, source
+	// "tokenfuse"). Values match the wire `type` field verbatim so the
+	// tokenfuse connector can pass raw types straight through unchanged.
+	EventBudgetExhausted EventType = "budget_exhausted"
+	EventSustainedLoop   EventType = "sustained_loop"
+	EventSpendSpike      EventType = "spend_spike"
+	EventFanoutExplosion EventType = "fanout_explosion"
+	EventBreakerTripped  EventType = "breaker_tripped"
+	EventDLPBlock        EventType = "dlp_block"
+	EventTaintBlock      EventType = "taint_block"
+	EventMCPDrift        EventType = "mcp_drift"
 )
 
 // Event is a single normalized observation about an identity, produced by a
@@ -27,6 +39,13 @@ type Event struct {
 	Lon        float64
 	Device     string // user agent or device fingerprint
 	Resource   string // destination host/service for egress events (e.g. api.openai.com)
+
+	// Severity is the producer-assigned severity for sources whose events
+	// carry one (agent-passport SPEC §6.1: info|low|medium|high|critical,
+	// e.g. tokenfuse). Empty for sources without the concept (Okta, Entra,
+	// CloudTrail, egress) — the zero value leaves all existing connectors
+	// and detectors untouched.
+	Severity string
 }
 
 // IdentityType distinguishes humans from non-human identities (NHIs) and, in
@@ -65,8 +84,14 @@ type Identity struct {
 	Permissions []Permission // granted permissions
 
 	// Agent / delegation metadata (zero for non-agents).
-	Runtime    string // where the agent executes, e.g. "langgraph", "bedrock"
-	OnBehalfOf string // identity ID this agent acts on behalf of (one hop up)
+	Runtime string // where the agent executes, e.g. "langgraph", "bedrock"
+
+	// OnBehalfOf is the agent's delegation chain (agent-passport SPEC §5):
+	// ordered root-first, the last element is the immediate principal that
+	// invoked this identity. Entries are agent:// or user:// URIs, or a
+	// legacy plain identity ID — all treated as opaque strings. An empty
+	// chain means the identity acts autonomously.
+	OnBehalfOf []string
 
 	// MCP metadata (zero for non-MCP identities).
 	Shadow bool // MCP server in use but absent from the sanctioned registry

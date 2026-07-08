@@ -8,9 +8,11 @@ import (
 )
 
 // ExcessiveAgency measures an agent's blast radius: the permissions it reaches
-// through its delegation chain (OnBehalfOf up to the ultimate principal). An
-// agent that can act, transitively, as an admin identity is the highest-value
-// target when compromised by prompt injection (OWASP LLM06 Excessive Agency).
+// through its delegation chain (OnBehalfOf, root-first, up to the ultimate
+// principal — agent-passport SPEC §5). An agent that can act, transitively, as
+// an admin identity, or as any admin principal named anywhere in its chain, is
+// the highest-value target when compromised by prompt injection (OWASP LLM06
+// Excessive Agency).
 //
 // It is backend-agnostic: it indexes the identities returned by graph.Reader and
 // walks OnBehalfOf itself, so it works over the in-memory or Postgres graph.
@@ -31,7 +33,7 @@ func (d *ExcessiveAgency) Detect(g graph.Reader) []model.Alert {
 		if !id.IsAgent() {
 			continue
 		}
-		chain := delegationChain(index, id.ID)
+		chain := graph.WalkDelegationChain(index, id.ID)
 		adminVia, ok := adminInChain(index, chain)
 		if !ok {
 			continue
@@ -57,25 +59,6 @@ func (d *ExcessiveAgency) Detect(g graph.Reader) []model.Alert {
 		})
 	}
 	return alerts
-}
-
-// delegationChain walks OnBehalfOf from start upward, guarding against cycles.
-func delegationChain(index map[string]*model.Identity, start string) []string {
-	var chain []string
-	seen := map[string]bool{}
-	for cur := start; cur != ""; {
-		if seen[cur] {
-			break
-		}
-		seen[cur] = true
-		chain = append(chain, cur)
-		node, ok := index[cur]
-		if !ok {
-			break
-		}
-		cur = node.OnBehalfOf
-	}
-	return chain
 }
 
 // adminInChain reports the first identity in the chain holding admin-equivalent

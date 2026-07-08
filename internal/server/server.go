@@ -125,7 +125,7 @@ type apiIdentity struct {
 	Created     string          `json:"created,omitempty"`
 	LastUsed    string          `json:"last_used,omitempty"`
 	Runtime     string          `json:"runtime,omitempty"`
-	OnBehalfOf  string          `json:"on_behalf_of,omitempty"`
+	OnBehalfOf  []string        `json:"on_behalf_of,omitempty"`
 	Permissions []apiPermission `json:"permissions,omitempty"`
 	Remediation *apiRemediation `json:"remediation,omitempty"`
 	Rotation    *apiRemediation `json:"rotation,omitempty"`
