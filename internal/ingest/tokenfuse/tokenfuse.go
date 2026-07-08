@@ -190,7 +190,7 @@ func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
 	var events []model.Event
 
 	for _, path := range matches {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- path is an operator-supplied CLI argument/glob, not untrusted input
 		if err != nil {
 			return nil, nil, Report{}, fmt.Errorf("tokenfuse: read %s: %w", path, err)
 		}
