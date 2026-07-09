@@ -12,7 +12,6 @@ package tokenfuse
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,23 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TAIPANBOX/agent-stack-go/event"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
-
-// envelope is the wire shape of one taipanbox.dev/agent-event NDJSON line.
-// Only the fields idryx needs are decoded; `data` and any other top-level
-// field are ignored, per SPEC §6.1's forward-compatibility rule — a producer
-// adding fields must never break this connector.
-type envelope struct {
-	Schema     string   `json:"schema"`
-	TS         string   `json:"ts"`
-	Source     string   `json:"source"`
-	Type       string   `json:"type"`
-	Severity   string   `json:"severity"`
-	AgentID    string   `json:"agent_id"`
-	RunID      string   `json:"run_id"`
-	OnBehalfOf []string `json:"on_behalf_of"`
-}
 
 // knownTypes is the v0.1 tokenfuse event-type registry (SPEC §6.2). The map
 // values equal their keys by construction (model.EventType is a string type
@@ -91,8 +76,9 @@ func (r *Report) merge(o Report) {
 //     any other type is carried through as-is — model.EventType is just a
 //     string, so this is tolerant by construction, never an error.
 //
-// A line that isn't valid JSON, or is missing a required field (schema, ts,
-// source, type, agent_id — §6.1), or has an unparseable ts, is counted in
+// A line that isn't valid JSON, or is missing a required envelope field
+// (schema, ts, source, type, agent_id, per SPEC §6.1 and
+// agentstack/event.Unmarshal), or has an unparseable ts, is counted in
 // Report.Malformed and skipped; it never aborts the rest of the file.
 func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 	rep := newReport()
@@ -110,15 +96,13 @@ func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 		}
 		rep.Lines++
 
-		var env envelope
-		if err := json.Unmarshal(line, &env); err != nil {
+		env, err := event.Unmarshal(line)
+		if err != nil {
 			rep.Malformed++
 			continue
 		}
-		if env.Schema == "" || env.TS == "" || env.Source == "" || env.Type == "" || env.AgentID == "" {
-			rep.Malformed++
-			continue
-		}
+		// event.Unmarshal only checks that ts is non-empty; the RFC3339
+		// shape check stays here, unchanged from before.
 		ts, err := time.Parse(time.RFC3339, env.TS)
 		if err != nil {
 			rep.Malformed++

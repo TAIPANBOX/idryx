@@ -12,37 +12,14 @@
 package passport
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 
+	agentpassport "github.com/TAIPANBOX/agent-stack-go/passport"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
-
-// requiredSchema is the only Passport schema version this connector
-// understands (SPEC §4, §8.4). A document declaring a different (or
-// missing) schema string is treated as malformed rather than best-effort
-// parsed — a future schema version needs its own connector logic, not a
-// silent guess at compatibility.
-const requiredSchema = "taipanbox.dev/agent-passport/v0.1"
-
-// document is the wire shape of one Passport JSON file (SPEC §4;
-// schemas/agent-passport.schema.json). Only the fields idryx maps into the
-// graph are decoded; `display_name`, `labels`, `created_at`, and any other
-// field are ignored — the schema itself declares additionalProperties:
-// true, so an unrecognized field must never be an error.
-type document struct {
-	Schema      string `json:"schema"`
-	ID          string `json:"id"`
-	Owner       string `json:"owner"`
-	Runtime     string `json:"runtime"`
-	Parent      string `json:"parent"`
-	Attestation struct {
-		Method string `json:"method"`
-	} `json:"attestation"`
-}
 
 // Report summarizes one Load call: how many passport files were attempted
 // and how many were malformed and skipped. Mirrors tokenfuse.Report's
@@ -54,21 +31,28 @@ type Report struct {
 	Malformed int
 }
 
-// Parse decodes one Passport JSON document into a model.Identity. It
-// returns an error — meaning the file is malformed to the caller — only
-// when the document isn't valid JSON, its schema isn't requiredSchema, or
-// either of the SPEC §4.1-required fields beyond schema (id, owner) is
-// missing. Every other field is optional, per SPEC §4.1.
+// Parse decodes one Passport JSON document into a model.Identity, using the
+// shared wire type from agent-stack-go/passport instead of a private,
+// hand-rolled struct. It returns an error, meaning the file is malformed to
+// the caller, whenever agentpassport.Parse does: the document isn't valid
+// JSON, its schema isn't the supported taipanbox.dev/agent-passport/v0.1, id
+// or owner is missing, or id is not a well-formed agent:// URI.
+//
+// That last check is new relative to Idryx's previous hand-rolled decode,
+// which treated id as an opaque string and never validated its shape.
+// agent-stack-go validates it, so a passport whose id is not a well-formed
+// agent:// URI now counts as malformed here where it previously did not.
+// Load already treats every Parse error the same way (count in
+// Report.Malformed, skip, never fatal), so this only tightens what is
+// accepted; it does not change the tolerant contract.
 func Parse(data []byte) (model.Identity, error) {
-	var doc document
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return model.Identity{}, fmt.Errorf("invalid json: %w", err)
+	doc, err := agentpassport.Parse(data)
+	if err != nil {
+		return model.Identity{}, fmt.Errorf("passport: %w", err)
 	}
-	if doc.Schema != requiredSchema {
-		return model.Identity{}, fmt.Errorf("unsupported schema %q, want %q", doc.Schema, requiredSchema)
-	}
-	if doc.ID == "" || doc.Owner == "" {
-		return model.Identity{}, fmt.Errorf("missing required field(s): id and owner are required")
+	attestation := ""
+	if doc.Attestation != nil {
+		attestation = doc.Attestation.Method
 	}
 	return model.Identity{
 		ID:          doc.ID,
@@ -77,7 +61,7 @@ func Parse(data []byte) (model.Identity, error) {
 		Owner:       doc.Owner,
 		Runtime:     doc.Runtime,
 		Parent:      doc.Parent,
-		Attestation: doc.Attestation.Method,
+		Attestation: attestation,
 	}, nil
 }
 

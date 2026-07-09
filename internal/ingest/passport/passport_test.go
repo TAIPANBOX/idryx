@@ -72,6 +72,7 @@ func TestParseMalformed(t *testing.T) {
 		"testdata/malformed_missing_owner.json",
 		"testdata/malformed_bad_schema.json",
 		"testdata/malformed_not_json.json",
+		"testdata/malformed_bad_uri.json",
 	}
 	for _, path := range cases {
 		data, err := os.ReadFile(path)
@@ -84,16 +85,38 @@ func TestParseMalformed(t *testing.T) {
 	}
 }
 
+// TestParseRejectsMalformedAgentURI covers a behavior change introduced by
+// adopting agent-stack-go/passport for the wire decode: the shared Parse
+// validates that id is a well-formed agent:// URI, where Idryx's previous
+// hand-rolled decode treated id as an opaque non-empty string. The fixture
+// here (schema correct, id and owner both non-empty, id missing the
+// agent:// scheme) is exactly the shape that the old Parse used to accept
+// and the new one rejects. Load's tolerant handling (Report.Malformed,
+// skip, never fatal) contains the change: nothing crashes, but this
+// passport now counts as malformed instead of producing an Identity.
+func TestParseRejectsMalformedAgentURI(t *testing.T) {
+	data, err := os.ReadFile("testdata/malformed_bad_uri.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data); err == nil {
+		t.Error("Parse: expected an error for a non-agent:// id, got nil (stricter URI validation from agent-stack-go/passport did not apply)")
+	}
+}
+
 func TestLoadDirectory(t *testing.T) {
 	identities, rep, err := Load("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Files != 6 {
-		t.Errorf("Files = %d, want 6", rep.Files)
+	// 7 files on disk: 3 valid, 4 malformed (bad owner, bad schema, not
+	// json, and malformed_bad_uri.json added for the agent:// URI
+	// validation now enforced by agent-stack-go/passport).
+	if rep.Files != 7 {
+		t.Errorf("Files = %d, want 7", rep.Files)
 	}
-	if rep.Malformed != 3 {
-		t.Errorf("Malformed = %d, want 3", rep.Malformed)
+	if rep.Malformed != 4 {
+		t.Errorf("Malformed = %d, want 4", rep.Malformed)
 	}
 	if len(identities) != 3 {
 		t.Fatalf("identities = %d, want 3: %+v", len(identities), identities)
