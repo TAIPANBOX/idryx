@@ -1,0 +1,6 @@
+{
+  "schema": "taipanbox.dev/agent-passport/v0.1",
+  "id": "agent://acme-bank.example/eng/standalone",
+  "owner": "team-eng@acme-bank.example",
+  "attestation": { "method": "none" }
+}

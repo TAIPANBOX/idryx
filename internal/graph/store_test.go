@@ -138,3 +138,44 @@ func TestStoreDelegationChain(t *testing.T) {
 	g.AddIdentity(model.Identity{ID: "agent:q", Type: model.IdentityAgent, OnBehalfOf: []string{"agent:p"}})
 	assertChain(t, g.DelegationChain("agent:p"), []string{"agent:p", "agent:q"})
 }
+
+// TestBlastRadiusDedupesByName pins the index-based BlastRadius helper's
+// documented contract: permissions are unioned across the whole delegation
+// chain, but a name shared by two links in the chain counts once, and the
+// nearer (starting) identity's copy of that permission wins.
+func TestBlastRadiusDedupesByName(t *testing.T) {
+	index := idx(map[string][]string{
+		"agent:a": {"agent:b"},
+		"agent:b": nil,
+	})
+	index["agent:a"].Permissions = []model.Permission{{Name: "shared", Admin: false}, {Name: "a-only"}}
+	index["agent:b"].Permissions = []model.Permission{{Name: "shared", Admin: true}, {Name: "b-only"}}
+
+	got := BlastRadius(index, "agent:a")
+	if len(got) != 3 {
+		t.Fatalf("BlastRadius = %+v, want 3 de-duplicated permissions", got)
+	}
+	byName := map[string]model.Permission{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	if _, ok := byName["a-only"]; !ok {
+		t.Error("missing a-only")
+	}
+	if _, ok := byName["b-only"]; !ok {
+		t.Error("missing b-only")
+	}
+	if p, ok := byName["shared"]; !ok || p.Admin {
+		t.Errorf("shared = %+v, want the nearer (agent:a) non-admin copy to win", p)
+	}
+}
+
+// TestBlastRadiusEmptyForUnknownStart mirrors
+// TestWalkDelegationChainUnknownStart: a start ID absent from the index has
+// no permissions of its own and nothing to union, so BlastRadius is empty,
+// not an error.
+func TestBlastRadiusEmptyForUnknownStart(t *testing.T) {
+	if got := BlastRadius(idx(nil), "agent:unknown"); len(got) != 0 {
+		t.Errorf("BlastRadius = %+v, want empty", got)
+	}
+}

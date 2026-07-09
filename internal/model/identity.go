@@ -93,6 +93,26 @@ type Identity struct {
 	// chain means the identity acts autonomously.
 	OnBehalfOf []string
 
+	// Parent is the agent's static provisioning parent (agent-passport SPEC
+	// §4.2: "the agent that provisions/spawns this one, if any — an org-chart
+	// relationship"), as recorded in its Passport document. It is distinct
+	// from OnBehalfOf, which is the *dynamic*, per-request delegation chain
+	// (SPEC §5) — a sub-agent's static Parent and its runtime OnBehalfOf
+	// principal are usually, but not necessarily, the same identity. Zero
+	// value means no Passport (or a Passport without `parent`) was ingested
+	// for this identity.
+	Parent string
+
+	// Attestation is how the org binds this identity's name to a workload
+	// (agent-passport SPEC §4.3: attestation.method — one of "none", "oidc",
+	// "spiffe-svid", "enclave-key", "mtls-cert"), as recorded in its Passport
+	// document. The zero value means unknown/none: either no Passport was
+	// ingested for this identity, or its Passport explicitly declared
+	// "none". Both are indistinguishable on purpose — SPEC §4.3 treats "none"
+	// as the honest default and expects idryx to surface it, not hide the
+	// distinction from "not evaluated yet".
+	Attestation string
+
 	// MCP metadata (zero for non-MCP identities).
 	Shadow bool // MCP server in use but absent from the sanctioned registry
 }

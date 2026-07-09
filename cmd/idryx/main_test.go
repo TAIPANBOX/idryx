@@ -16,7 +16,7 @@ func TestMultiSourceStitchesAgentAndMCP(t *testing.T) {
 		{Source: "agents", Path: "../../testdata/demo_agents.json"},
 		{Source: "mcp", Path: "../../testdata/demo_mcp.json"},
 	}
-	g, err := buildGraph("", "", "", "", "", "", loads)
+	g, err := buildGraph("", "", "", "", "", "", "", loads)
 	if err != nil {
 		t.Fatalf("buildGraph: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestLoadTokenFuseStitchesIdentitiesAndEvents(t *testing.T) {
 	loads := loadList{
 		{Source: "tokenfuse", Path: "../../testdata/tokenfuse.ndjson"},
 	}
-	g, err := buildGraph("", "", "", "", "", "", loads)
+	g, err := buildGraph("", "", "", "", "", "", "", loads)
 	if err != nil {
 		t.Fatalf("buildGraph: %v", err)
 	}
@@ -109,5 +109,50 @@ func TestLoadTokenFuseStitchesIdentitiesAndEvents(t *testing.T) {
 		if sub.OnBehalfOf[i] != wantChain[i] {
 			t.Errorf("sub-agent chain[%d] = %q, want %q", i, sub.OnBehalfOf[i], wantChain[i])
 		}
+	}
+}
+
+// TestBuildGraphLayersPassports is the CLI-level wiring check for
+// --passports: it enriches an identity already produced by another source
+// (here, an agent tokenfuse also observed) with static Passport metadata,
+// and adds an identity that exists only as a Passport (no behavioral events
+// at all) as its own agent identity.
+func TestBuildGraphLayersPassports(t *testing.T) {
+	loads := loadList{
+		{Source: "tokenfuse", Path: "../../testdata/tokenfuse.ndjson"},
+	}
+	g, err := buildGraph("", "", "", "", "", "", "../../testdata/passports", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+
+	byID := map[string]*model.Identity{}
+	for _, id := range g.Identities() {
+		byID[id.ID] = id
+	}
+
+	tier1 := byID["agent://acme-bank.example/support/tier1-bot"]
+	if tier1 == nil {
+		t.Fatal("expected tier1-bot (from tokenfuse) in the graph")
+	}
+	if tier1.Attestation != "spiffe-svid" {
+		t.Errorf("tier1-bot Attestation = %q, want spiffe-svid (from passport)", tier1.Attestation)
+	}
+	if tier1.Parent != "agent://acme-bank.example/support/orchestrator" {
+		t.Errorf("tier1-bot Parent = %q, want agent://acme-bank.example/support/orchestrator", tier1.Parent)
+	}
+	if len(tier1.Events) == 0 {
+		t.Error("tier1-bot should keep its tokenfuse events after passport enrichment merges in")
+	}
+
+	standalone := byID["agent://acme-bank.example/eng/standalone"]
+	if standalone == nil {
+		t.Fatal("expected standalone (passport-only) agent in the graph")
+	}
+	if standalone.Attestation != "none" {
+		t.Errorf("standalone Attestation = %q, want none", standalone.Attestation)
+	}
+	if standalone.Type != model.IdentityAgent {
+		t.Errorf("standalone Type = %q, want agent", standalone.Type)
 	}
 }

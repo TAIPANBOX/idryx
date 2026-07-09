@@ -66,6 +66,12 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if len(in.OnBehalfOf) > 0 {
 		id.OnBehalfOf = append([]string(nil), in.OnBehalfOf...)
 	}
+	if in.Parent != "" {
+		id.Parent = in.Parent
+	}
+	if in.Attestation != "" {
+		id.Attestation = in.Attestation
+	}
 	if in.Shadow {
 		id.Shadow = true
 	}
@@ -139,6 +145,34 @@ func (s *Store) EffectivePermissions(id string) []model.Permission {
 	for _, link := range s.DelegationChain(id) {
 		if node, ok := s.identities[link]; ok {
 			out = append(out, node.Permissions...)
+		}
+	}
+	return out
+}
+
+// BlastRadius returns the de-duplicated (by permission name, first occurrence
+// wins — the starting identity's own grant of a name shadows a same-named
+// grant further up the chain) union of permissions reachable from start
+// through WalkDelegationChain. It is the backend-agnostic, index-based
+// counterpart to EffectivePermissions: detectors that depend only on
+// graph.Reader (not the concrete *Store, e.g. runaway_agent) index the
+// identities they're given and call this directly, so there is exactly one
+// delegation walker (WalkDelegationChain) and one blast-radius definition,
+// shared by the in-memory Store, the dashboard's size metric, and detectors.
+func BlastRadius(index map[string]*model.Identity, start string) []model.Permission {
+	seen := map[string]bool{}
+	var out []model.Permission
+	for _, link := range WalkDelegationChain(index, start) {
+		node, ok := index[link]
+		if !ok {
+			continue
+		}
+		for _, p := range node.Permissions {
+			if seen[p.Name] {
+				continue
+			}
+			seen[p.Name] = true
+			out = append(out, p)
 		}
 	}
 	return out

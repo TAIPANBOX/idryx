@@ -106,17 +106,19 @@ func (s *PgStore) IngestIdentities(ctx context.Context, identities []model.Ident
 		}
 
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO identities (id, privileged, type, source, owner, created, last_used, runtime)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			 ON CONFLICT (id) DO UPDATE SET 
+			`INSERT INTO identities (id, privileged, type, source, owner, created, last_used, runtime, parent, attestation)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 ON CONFLICT (id) DO UPDATE SET
 			 	privileged = identities.privileged OR EXCLUDED.privileged,
 			 	type = CASE WHEN EXCLUDED.type <> '' THEN EXCLUDED.type ELSE identities.type END,
 			 	source = CASE WHEN EXCLUDED.source <> '' THEN EXCLUDED.source ELSE identities.source END,
 			 	owner = CASE WHEN EXCLUDED.owner <> '' THEN EXCLUDED.owner ELSE identities.owner END,
 			 	created = COALESCE(EXCLUDED.created, identities.created),
 			 	last_used = CASE WHEN EXCLUDED.last_used > identities.last_used OR identities.last_used IS NULL THEN EXCLUDED.last_used ELSE identities.last_used END,
-			 	runtime = CASE WHEN EXCLUDED.runtime <> '' THEN EXCLUDED.runtime ELSE identities.runtime END`,
-			id.ID, id.Privileged, string(id.Type), id.Source, id.Owner, createdVal, lastUsedVal, id.Runtime); err != nil {
+			 	runtime = CASE WHEN EXCLUDED.runtime <> '' THEN EXCLUDED.runtime ELSE identities.runtime END,
+			 	parent = CASE WHEN EXCLUDED.parent <> '' THEN EXCLUDED.parent ELSE identities.parent END,
+			 	attestation = CASE WHEN EXCLUDED.attestation <> '' THEN EXCLUDED.attestation ELSE identities.attestation END`,
+			id.ID, id.Privileged, string(id.Type), id.Source, id.Owner, createdVal, lastUsedVal, id.Runtime, id.Parent, id.Attestation); err != nil {
 			return fmt.Errorf("upsert identity %q: %w", id.ID, err)
 		}
 
@@ -182,7 +184,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 	// Retrieve all full identities (including NHIs and agents; delegation
 	// chains are loaded separately below)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, source, owner, created, last_used, runtime, privileged
+		`SELECT id, type, source, owner, created, last_used, runtime, privileged, parent, attestation
 		 FROM identities`)
 	if err != nil {
 		return nil, err
@@ -192,7 +194,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		var id model.Identity
 		var typStr string
 		var createdVal, lastUsedVal sql.NullTime
-		if err := rows.Scan(&id.ID, &typStr, &id.Source, &id.Owner, &createdVal, &lastUsedVal, &id.Runtime, &id.Privileged); err != nil {
+		if err := rows.Scan(&id.ID, &typStr, &id.Source, &id.Owner, &createdVal, &lastUsedVal, &id.Runtime, &id.Privileged, &id.Parent, &id.Attestation); err != nil {
 			return nil, err
 		}
 		id.Type = model.IdentityType(typStr)

@@ -16,6 +16,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/enforce"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
+	"github.com/TAIPANBOX/idryx/internal/ingest/passport"
 	"github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/remediation"
@@ -106,15 +107,25 @@ func (l *loadList) Set(v string) error {
 
 // buildGraph returns an identity graph from one of: a Postgres snapshot (db set),
 // several stitched sources (loads set), or a single source file. Exactly one of
-// the three is used, in that precedence.
-func buildGraph(source, privileged, path, db, ctPath, auditPath string, loads loadList) (graph.Reader, error) {
+// the three is used, in that precedence. passports, when non-empty, is layered on
+// top of whichever of the three produced the graph — a Passport document only
+// enriches an identity's static metadata (owner/runtime/parent/attestation), it
+// never substitutes for a behavioral or inventory source.
+func buildGraph(source, privileged, path, db, ctPath, auditPath, passports string, loads loadList) (graph.Reader, error) {
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
 			return nil, err
 		}
 		defer store.Close()
-		return store.Snapshot(context.Background())
+		snap, err := store.Snapshot(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		if err := loadPassports(snap, passports); err != nil {
+			return nil, err
+		}
+		return snap, nil
 	}
 
 	g := graph.New(privilegedSet(privileged))
@@ -127,6 +138,9 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath string, loads lo
 				return nil, err
 			}
 		}
+		if err := loadPassports(g, passports); err != nil {
+			return nil, err
+		}
 		return g, nil
 	}
 
@@ -134,7 +148,39 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath string, loads lo
 	if err := populate(g, loadSpec{Source: source, Path: path, CTPath: ctPath, AuditPath: auditPath}); err != nil {
 		return nil, err
 	}
+	if err := loadPassports(g, passports); err != nil {
+		return nil, err
+	}
 	return g, nil
+}
+
+// loadPassports reads every Agent Passport document under dirOrGlob (a
+// directory or glob, per the passport package) and merges each into g via
+// AddIdentity — the same enrichment path aws_iam/gcp_iam usage data takes.
+// A no-op when dirOrGlob is empty (the flag was not set).
+func loadPassports(g *graph.Store, dirOrGlob string) error {
+	if dirOrGlob == "" {
+		return nil
+	}
+	ids, rep, err := passport.Load(dirOrGlob)
+	if err != nil {
+		return fmt.Errorf("load passports: %w", err)
+	}
+	for _, id := range ids {
+		g.AddIdentity(id)
+	}
+	reportPassports(dirOrGlob, rep)
+	return nil
+}
+
+// reportPassports prints a one-line stderr summary when a passport batch had
+// any malformed files, mirroring reportTokenFuse.
+func reportPassports(dirOrGlob string, rep passport.Report) {
+	if rep.Malformed == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "idryx: passports %s: %d file(s) read, %d malformed\n",
+		dirOrGlob, rep.Files, rep.Malformed)
 }
 
 // populate ingests one source spec into g. Inventory sources add identities;
@@ -245,6 +291,8 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewSharedCredential(),
 		detectors.NewShadowMCP(),
 		detectors.NewAgentShadowTool(),
+		detectors.NewRunawayAgent(),
+		detectors.NewAttestationMissing(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -286,6 +334,7 @@ func runDetect(args []string) error {
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
@@ -302,7 +351,7 @@ func runDetect(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, *passports, loads)
 	if err != nil {
 		return err
 	}
@@ -346,6 +395,7 @@ func runServe(args []string) error {
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
@@ -362,7 +412,7 @@ func runServe(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, *passports, loads)
 	if err != nil {
 		return err
 	}
@@ -407,6 +457,7 @@ func runLoad(args []string) error {
 		db         = fs.String("db", "", "Postgres DSN (required)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx load --db <dsn> [flags] <log.json>\n\nflags:\n")
@@ -453,7 +504,7 @@ func runLoad(args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities and %d events from tokenfuse into postgres\n", len(ids), len(events))
 		reportTokenFuse(fs.Arg(0), rep)
-		return nil
+		return ingestPassportsPg(store, *passports)
 	}
 
 	data, err := os.ReadFile(fs.Arg(0))
@@ -476,7 +527,7 @@ func runLoad(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities into postgres\n", len(ids))
-		return nil
+		return ingestPassportsPg(store, *passports)
 	}
 
 	events, err := parseSource(*source, data)
@@ -488,6 +539,25 @@ func runLoad(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "idryx: ingested %d events into postgres\n", len(events))
+	return ingestPassportsPg(store, *passports)
+}
+
+// ingestPassportsPg loads every Agent Passport document under dirOrGlob and
+// ingests each as an identity into the Postgres graph, mirroring the
+// tokenfuse hybrid-source ingestion above. A no-op when dirOrGlob is empty.
+func ingestPassportsPg(store *graph.PgStore, dirOrGlob string) error {
+	if dirOrGlob == "" {
+		return nil
+	}
+	ids, rep, err := passport.Load(dirOrGlob)
+	if err != nil {
+		return fmt.Errorf("load passports: %w", err)
+	}
+	if err := store.IngestIdentities(context.Background(), ids); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "idryx: ingested %d identities from passports into postgres\n", len(ids))
+	reportPassports(dirOrGlob, rep)
 	return nil
 }
 
@@ -591,7 +661,10 @@ func runRemediate(args []string) error {
 		return err
 	}
 
-	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, loads)
+	// remediate has no --passports flag (out of scope: it consumes the
+	// graph's permissions/usage, not agent identity metadata), so no
+	// passport directory is layered on here.
+	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, "", loads)
 	if err != nil {
 		return err
 	}

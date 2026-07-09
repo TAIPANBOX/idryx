@@ -1,0 +1,14 @@
+{
+  "schema": "taipanbox.dev/agent-passport/v0.1",
+  "id": "agent://acme-bank.example/support/tier1-bot",
+  "display_name": "Tier-1 support bot",
+  "owner": "team-support@acme-bank.example",
+  "runtime": "langgraph",
+  "parent": "agent://acme-bank.example/support/orchestrator",
+  "attestation": {
+    "method": "spiffe-svid",
+    "detail": "spiffe://acme-bank.example/agent/support/tier1-bot"
+  },
+  "labels": { "env": "prod", "cost_center": "cs-eu" },
+  "created_at": "2026-07-09T00:00:00Z"
+}

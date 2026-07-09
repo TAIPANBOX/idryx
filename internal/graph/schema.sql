@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS identities (
     owner        TEXT NOT NULL DEFAULT '',
     created      TIMESTAMPTZ,
     last_used    TIMESTAMPTZ,
-    runtime      TEXT NOT NULL DEFAULT ''
+    runtime      TEXT NOT NULL DEFAULT '',
+    parent       TEXT NOT NULL DEFAULT '',
+    attestation  TEXT NOT NULL DEFAULT ''
 );
 
 -- Ensure existing database instances are migrated if they only have the Phase 0/1 columns.
@@ -16,6 +18,13 @@ ALTER TABLE identities ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS created TIMESTAMPTZ;
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS last_used TIMESTAMPTZ;
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT '';
+
+-- Passport-file ingestion (agent-passport SPEC §4.2/§4.3): the agent's
+-- static provisioning parent and its attestation posture. Both are
+-- capture-only metadata from a Passport document, distinct from the dynamic
+-- on_behalf_of chain below (§5).
+ALTER TABLE identities ADD COLUMN IF NOT EXISTS parent TEXT NOT NULL DEFAULT '';
+ALTER TABLE identities ADD COLUMN IF NOT EXISTS attestation TEXT NOT NULL DEFAULT '';
 
 -- Phase 5.1: OnBehalfOf became a full delegation chain (agent-passport SPEC §5:
 -- ordered root-first, last = immediate principal) instead of one hop, so the

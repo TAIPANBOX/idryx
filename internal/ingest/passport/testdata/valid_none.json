@@ -1,0 +1,7 @@
+{
+  "schema": "taipanbox.dev/agent-passport/v0.1",
+  "id": "agent://acme-bank.example/support/orchestrator",
+  "owner": "team-support@acme-bank.example",
+  "runtime": "langgraph",
+  "attestation": { "method": "none" }
+}

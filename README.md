@@ -144,6 +144,19 @@ learning period to avoid false positives.
   shared tool is high-risk (shell / exec / admin). Needs the `agents` and `mcp`
   sources stitched into one graph:
   `idryx detect --load agents:agents.json --load mcp:mcp.json`
+- `runaway_agent` — correlates a TokenFuse spend/runaway incident
+  (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`,
+  `breaker_tripped`) with everything else idryx knows about the agent that
+  triggered it: standing privilege, delegation depth, attestation state, and
+  blast radius (`graph.BlastRadius`, reusing the same delegation-chain walker
+  as `excessive_agency`). One finding per agent. Severity is base **medium**
+  (at least one spend event in the last 30 days), **high** at 2 corroborating
+  facts, **critical** at 3+ — see the doc comment on
+  `internal/detect/detectors/runaway_agent.go` for the exact, fixed mapping
+- `attestation_missing` — a privileged AI agent (`Privileged` or `HasAdmin()`)
+  whose identity has no attestation on record (agent-passport SPEC §4.3:
+  `attestation.method` absent or `none`) — high severity. The SPEC's own
+  worked example of posture that must be surfaced, not just tolerated
 
 **Least-privilege**
 - `least_privilege` — granted permissions never exercised, with a revocation
@@ -211,6 +224,10 @@ make build
 ./bin/idryx detect --source aws_iam --cloudtrail ct.json iam.json    # mark used AWS permissions
 ./bin/idryx detect --source gcp_iam --gcp-audit  audit.json iam.json # mark used GCP roles
 
+# agent-passport: layer static Passport documents onto any graph
+./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson  # owner/runtime/parent/attestation
+./bin/idryx detect --load tokenfuse:events.ndjson --passports "passports/*.json"
+
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
 ./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
 ./bin/idryx remediate --source aws_iam --out ./tf iam.json  # write .tf artifacts + manifest.json (read-only)
@@ -258,8 +275,9 @@ deterministic detectors.
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
 | `tokenfuse` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event/v0.1` envelopes (one file or a glob via `--load tokenfuse:path/*.ndjson`): agent/human identities from `agent_id`/`on_behalf_of`, plus behavioral events (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`, and any future type, tolerated generically) |
+| `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent (a directory of `*.json` files, or a glob), layered onto whichever source/`--load`/`--db` built the graph: `owner`, `runtime`, `parent` (static provisioning parent — distinct from the dynamic `on_behalf_of` chain), and `attestation.method` (`Identity.Attestation`); available on `detect`, `serve`, and `load` alongside their existing source flags |
 
-**Detectors** — see the [Detectors](#detectors) section above: 14 detectors across ITDR ·
+**Detectors** — see the [Detectors](#detectors) section above: 16 detectors across ITDR ·
 NHI · agents/AI · least-privilege.
 
 **Baseline engine** (`internal/baseline`) — learns what is normal per identity and
