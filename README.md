@@ -33,12 +33,15 @@ for mid-market.
 - [Why](#why)
 - [What it does](#what-it-does)
 - [One graph, every identity](#one-graph-every-identity)
+- [Agent identities and the Agent Passport](#agent-identities-and-the-agent-passport)
 - [Detectors](#detectors)
 - [Architecture](#architecture)
 - [Stack](#stack)
+- [Install](#install)
 - [Quick start](#quick-start)
 - [What works today](#what-works-today)
 - [Status & roadmap](#status--roadmap)
+- [Security](#security)
 - [License](#license)
 
 ---
@@ -99,6 +102,44 @@ what lets idryx compute an identity's true blast radius.
 admin-equivalent permissions **through its delegation chain** — agent → sub-agent →
 service account → human. An agent's blast radius is the **union** of what every
 identity it can act as may do, and severity rises with delegation depth.
+
+---
+
+## Agent identities and the Agent Passport
+
+Agents and the humans in their delegation chain share one identifier scheme —
+`agent://` and `user://` URIs — across two complementary connectors that both
+speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
+
+- **Agent Passport documents** (`--passports <dir-or-glob>`) — one small, static
+  JSON file per agent: `owner`, `runtime`, `parent` (the static provisioning
+  parent, an org-chart relationship distinct from the dynamic chain below), and
+  `attestation.method` (`none` / `oidc` / `spiffe-svid` / `enclave-key` /
+  `mtls-cert`). Capture-only metadata, layered onto whichever graph a
+  `--source`, `--load`, or `--db` already built.
+- **TokenFuse behavioral events** (`--source tokenfuse` / `--load
+  tokenfuse:<path|glob>`) — NDJSON `taipanbox.dev/agent-event/v0.1` envelopes: agent/human
+  identities from `agent_id`/`on_behalf_of`, plus a stream of events
+  (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`,
+  `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`, and any future
+  type, tolerated generically). Each event may carry a producer-assigned
+  `Severity` (info/low/medium/high/critical).
+
+Both sources populate `Identity.OnBehalfOf` — an **ordered, root-first
+delegation chain** — which idryx walks cycle-safely (`graph.WalkDelegationChain`)
+to compute a **blast radius**: the de-duplicated union of every permission
+reachable through the chain (`graph.BlastRadius`). It's the same walker and the
+same blast-radius definition shared by `excessive_agency`, `runaway_agent`, and
+the dashboard's delegation view — one core, reused everywhere agent reach
+matters.
+
+Two detectors read this agent-governance state directly:
+- `attestation_missing` — fires on standing privilege alone: a privileged/admin
+  agent with no attestation on record.
+- `runaway_agent` — correlates a TokenFuse spend/runaway incident with
+  everything else idryx knows about that agent (privilege, delegation depth,
+  attestation, blast radius) and escalates as corroborating facts accumulate:
+  medium by default, high at 2 facts, critical at 3+.
 
 ---
 
@@ -170,8 +211,32 @@ learning period to avoid false positives.
 
 One core (graph + baseline + detection), many connectors on the input. Each direction
 — ITDR, NHI, least-privilege, eBPF, agents — is a new connector of the same core, not
-a separate product. The LLM is used only as an interface (NL queries, explanations),
-never in the detection path, which stays deterministic and auditable.
+a separate product. Data flows **source → graph → detectors → output**:
+
+```
+cmd/idryx/main.go          CLI: detect | serve | load | version
+internal/model              Identity, Event, Permission, Alert, Severity (shared types)
+internal/ingest               source connectors -> []model.Event or []model.Identity
+internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
+internal/ingest/passport        Agent Passport JSON documents (identity enrichment)
+internal/graph               Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
+internal/baseline            per-identity behavioral baseline (Build / NewProfile+Observe / Score)
+internal/detect               Detector interface
+internal/detect/detectors      the concrete detectors
+internal/report               human + JSON alert rendering
+internal/sink                 Slack + generic webhook delivery
+internal/server               read-only HTTP dashboard + JSON API
+```
+
+Design principles, held as hard rules:
+- **Deterministic detection.** Detectors are statistics + rules over the graph.
+  The LLM is used only as an interface (NL queries, explanations) — it is never
+  in the detection path, which stays deterministic and auditable.
+- **Read-only.** idryx observes; it never mutates the IdP or cloud. `remediate`
+  proposes Terraform and can open a PR — it never applies.
+- **One `graph.Reader`.** Detectors depend on the interface, never the concrete
+  `*graph.Store`, so the same detectors run unchanged against the Postgres
+  backend.
 
 ---
 
@@ -214,7 +279,7 @@ make build
 # detect: run detectors, print or deliver alerts
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
-./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp
+./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
@@ -224,8 +289,8 @@ make build
 ./bin/idryx detect --source aws_iam --cloudtrail ct.json iam.json    # mark used AWS permissions
 ./bin/idryx detect --source gcp_iam --gcp-audit  audit.json iam.json # mark used GCP roles
 
-# agent-passport: layer static Passport documents onto any graph
-./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson  # owner/runtime/parent/attestation
+# agent identities: TokenFuse events + Passport enrichment (owner/runtime/parent/attestation)
+./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson
 ./bin/idryx detect --load tokenfuse:events.ndjson --passports "passports/*.json"
 
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
@@ -298,7 +363,13 @@ self-contained HTML dashboard and a JSON API (`/api/alerts`, `/api/identities`,
 
 **Postgres graph** (`internal/graph`, pgx) — `idryx load --db <dsn>` persists events
 into Postgres; `detect` / `serve --db` read a snapshot back. The snapshot implements
-the same `graph.Reader` the in-memory store does, so detectors run unchanged.
+the same `graph.Reader` the in-memory store does, so detectors run unchanged. The
+schema (`internal/graph/schema.sql`) additionally carries a producer-assigned
+`events.severity` column (`model.Event.Severity`, used by `tokenfuse`), the
+Passport-derived `identities.parent`/`identities.attestation` columns, and an
+ordered `on_behalf_of` join table for full delegation chains (agent-passport
+SPEC §5) — all applied as additive `IF NOT EXISTS` migrations, so an existing
+database upgrades in place.
 Integration tests live behind the `integration` build tag and run in CI against a
 Postgres service (`make test-integration` with `DATABASE_URL`).
 
