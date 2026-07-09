@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TAIPANBOX/idryx/internal/bom"
 	"github.com/TAIPANBOX/idryx/internal/detect"
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
 	"github.com/TAIPANBOX/idryx/internal/enforce"
@@ -43,6 +44,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "detect":
 		return runDetect(args[1:])
+	case "bom":
+		return runBom(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "load":
@@ -63,14 +66,16 @@ func usage() {
 
 commands:
   detect     ingest a log, run detectors, print/deliver alerts
+  bom        ingest a log, emit an Agent Bill of Materials (CycloneDX JSON)
   serve      ingest a log and serve a read-only web dashboard
   load       ingest a log into a Postgres graph (--db)
   remediate  generate Terraform right-sizing snippets for unused permissions
   version    print version
 
-detect, serve and remediate also accept --db to read from Postgres, or one or
-more --load source:path to stitch several sources into one graph (needed for
-cross-layer detectors like agent_shadow_tool, which spans agents + mcp).`)
+detect, bom, serve and remediate also accept --db to read from Postgres, or
+one or more --load source:path to stitch several sources into one graph
+(needed for cross-layer detectors like agent_shadow_tool, which spans
+agents + mcp).`)
 }
 
 // loadSpec is one source to ingest into the graph: a source kind and the file
@@ -293,6 +298,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewAgentShadowTool(),
 		detectors.NewRunawayAgent(),
 		detectors.NewAttestationMissing(),
+		detectors.NewBOMIncomplete(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -385,6 +391,59 @@ func runDetect(args []string) error {
 		}
 	}
 	return nil
+}
+
+// runBom builds the same graph detect does and renders it as an Agent Bill
+// of Materials instead of alerts: a defensive governance inventory of the
+// operator's own agent identities (owner/runtime/attestation/tools/
+// delegation/blast radius), not a detection pass. -format defaults to json
+// (the CycloneDX-shaped machine artifact is the primary output; -format
+// human is for a quick terminal read). -source defaults to "agents" rather
+// than detect/serve/load's "okta": only agent-type identities produce
+// Agent-BOM entries, so an IdP event source alone would emit an empty BOM.
+func runBom(args []string) error {
+	fs := flag.NewFlagSet("bom", flag.ContinueOnError)
+	var (
+		format     = fs.String("format", "json", "output format: json|human")
+		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		source     = fs.String("source", "agents", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse")
+		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
+	)
+	var loads loadList
+	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
+	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx bom [flags] <log.json>\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path, err := inputArg(fs, *db, loads)
+	if err != nil {
+		return err
+	}
+
+	// bom has no --cloudtrail/--gcp-audit flags: usage-enrichment data feeds
+	// detectors' least_privilege/over_privileged judgments, not the static
+	// inventory fields an Agent-BOM records, so it is out of scope here
+	// (mirroring remediate's own precedent of narrowing buildGraph's args to
+	// what the command actually consumes).
+	g, err := buildGraph(*source, *privileged, path, *db, "", "", *passports, loads)
+	if err != nil {
+		return err
+	}
+
+	b := bom.Build(g)
+	switch *format {
+	case "json":
+		return bom.JSON(os.Stdout, b, version)
+	case "human":
+		bom.Human(os.Stdout, b)
+		return nil
+	default:
+		return fmt.Errorf("unknown format %q", *format)
+	}
 }
 
 func runServe(args []string) error {

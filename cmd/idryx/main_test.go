@@ -1,8 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"os"
+	"strings"
 	"testing"
 
+	"github.com/TAIPANBOX/idryx/internal/bom"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -154,5 +159,117 @@ func TestBuildGraphLayersPassports(t *testing.T) {
 	}
 	if standalone.Type != model.IdentityAgent {
 		t.Errorf("standalone Type = %q, want agent", standalone.Type)
+	}
+}
+
+// TestBomBuildOverAgentsSource is the CLI-level wiring check for `idryx bom`:
+// it must build its graph through the same buildGraph path detect uses, and
+// bom.Build must see the resulting agent identities with their tools intact.
+func TestBomBuildOverAgentsSource(t *testing.T) {
+	g, err := buildGraph("agents", "", "../../testdata/demo_agents.json", "", "", "", "", nil)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+	b := bom.Build(g)
+	if len(b.Agents) != 3 {
+		t.Fatalf("got %d agents, want 3", len(b.Agents))
+	}
+
+	byID := map[string]bom.AgentBOM{}
+	for _, a := range b.Agents {
+		byID[a.ID] = a
+	}
+	helper, ok := byID["agent:ops-helper"]
+	if !ok {
+		t.Fatal("expected agent:ops-helper in the BOM")
+	}
+	if !helper.Privileged {
+		t.Error("agent:ops-helper holds shell_exec (admin-equivalent); should be privileged")
+	}
+	foundAdminTool := false
+	for _, tool := range helper.Tools {
+		if tool.Name == "shell_exec" && tool.Admin {
+			foundAdminTool = true
+		}
+	}
+	if !foundAdminTool {
+		t.Errorf("agent:ops-helper tools missing admin shell_exec: %+v", helper.Tools)
+	}
+
+	// demo_agents.json never sets attestation, so the BOM should faithfully
+	// show that gap rather than inventing a value.
+	for id, a := range byID {
+		if a.Attestation != "" {
+			t.Errorf("%s: Attestation = %q, want empty (demo_agents.json has no attestation field)", id, a.Attestation)
+		}
+	}
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it, so the runBom smoke tests below can assert on
+// its actual printed output instead of only its error return.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	fn()
+	_ = w.Close()
+	os.Stdout = old
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	return string(data)
+}
+
+// TestRunBomJSONSmoke is the CLI-level smoke test for `idryx bom`: real flag
+// parsing, the same buildGraph path detect uses, bom.Build, and JSON
+// rendering, all wired together end to end and printing valid CycloneDX JSON.
+func TestRunBomJSONSmoke(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := runBom([]string{"-source", "agents", "../../testdata/demo_agents.json"}); err != nil {
+			t.Fatalf("runBom: %v", err)
+		}
+	})
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("runBom -format json did not print valid JSON: %v\n%s", err, out)
+	}
+	if doc["bomFormat"] != "CycloneDX" {
+		t.Errorf("bomFormat = %v, want CycloneDX", doc["bomFormat"])
+	}
+	comps, ok := doc["components"].([]any)
+	if !ok || len(comps) != 3 {
+		t.Errorf("components = %v, want 3 entries (ops-helper, notetaker, clean-bot)", doc["components"])
+	}
+}
+
+// TestRunBomHumanSmoke exercises the -format human path end to end.
+func TestRunBomHumanSmoke(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := runBom([]string{"-source", "agents", "-format", "human", "../../testdata/demo_agents.json"}); err != nil {
+			t.Fatalf("runBom: %v", err)
+		}
+	})
+	if !strings.Contains(out, "idryx agent-bom: 3 agent(s)") {
+		t.Errorf("human output missing summary line:\n%s", out)
+	}
+	if !strings.Contains(out, "agent:ops-helper") {
+		t.Errorf("human output missing agent:ops-helper:\n%s", out)
+	}
+}
+
+// TestRunBomUnknownFormat asserts an invalid -format is a hard error, the
+// same contract runDetect gives its own -format flag.
+func TestRunBomUnknownFormat(t *testing.T) {
+	err := runBom([]string{"-source", "agents", "-format", "bogus", "../../testdata/demo_agents.json"})
+	if err == nil {
+		t.Fatal("expected an error for an unknown -format")
 	}
 }
