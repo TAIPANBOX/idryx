@@ -1,5 +1,9 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+# Static-analysis binary. Overridable, e.g. STATICCHECK=$(go env GOPATH)/bin/staticcheck.
+# Without this the `staticcheck` target expanded `$(STATICCHECK)` to empty, so
+# `command -v` always failed and static analysis was silently skipped for everyone.
+STATICCHECK ?= staticcheck
 
 .PHONY: build test test-integration vet fmt lint detect nhi remediate serve clean
 
