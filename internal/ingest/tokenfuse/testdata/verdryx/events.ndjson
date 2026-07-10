@@ -1,0 +1,2 @@
+{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-07-10T11:00:00Z","source":"verdryx","type":"quality_drift","severity":"medium","agent_id":"agent://acme-bank.example/support/tier1-bot","run_id":"qd-1","on_behalf_of":["user://acme-bank.example/j.doe"],"data":{"metric":"refund_accuracy","delta":-0.12}}
+{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-07-10T11:05:00Z","source":"verdryx","type":"quality_drift","severity":"low","agent_id":"agent://acme-bank.example/support/orchestrator","run_id":"qd-2","on_behalf_of":["user://acme-bank.example/j.doe"]}

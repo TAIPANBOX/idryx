@@ -46,6 +46,20 @@ type Event struct {
 	// CloudTrail, egress) — the zero value leaves all existing connectors
 	// and detectors untouched.
 	Severity string
+
+	// Source is the agent-event bus producer that emitted this event:
+	// tokenfuse, wardryx, mockryx, verdryx, or any future emitter on the
+	// shared taipanbox.dev/agent-event bus (agent-passport SPEC §6.3),
+	// taken verbatim from the envelope's own `source` field, never a
+	// hardcoded literal. Several bus producers can emit events for the same
+	// agent identity, so this is recorded per event, not just once on the
+	// Identity: Identity.Source recognizes only one connector name at a
+	// time, but an agent's Events slice can legitimately mix tokenfuse
+	// spend events with wardryx policy events with verdryx quality events,
+	// all attached to the same identity node. Empty for sources without the
+	// concept (Okta, Entra, CloudTrail, egress); the zero value leaves all
+	// existing connectors and detectors untouched.
+	Source string
 }
 
 // IdentityType distinguishes humans from non-human identities (NHIs) and, in

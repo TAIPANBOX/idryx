@@ -1,12 +1,26 @@
-// Package tokenfuse ingests TokenFuse behavioral events for AI agents: NDJSON
-// files of taipanbox.dev/agent-event/v0.1 envelopes (agent-passport SPEC §6).
-// It is a hybrid connector — unlike the single-purpose event or inventory
-// sources, it produces both agent/human identities (from agent_id and
-// on_behalf_of) and behavioral events in one pass, since the two live in the
-// same envelope. Parsing is strictly deterministic and read-only: it never
-// mutates anything, and a malformed line never aborts the run — it is
-// counted in Report and the rest of the file is still processed, per the
-// spec's forward-compatibility rule (§6.1, §7).
+// Package tokenfuse ingests agent-event NDJSON: one shared envelope shape,
+// taipanbox.dev/agent-event (agent-passport SPEC §6), written by every
+// producer on the agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx, and
+// any future emitter). It is a hybrid connector: unlike the single-purpose
+// event or inventory sources, it produces both agent/human identities (from
+// agent_id and on_behalf_of) and behavioral events in one pass, since the
+// two live in the same envelope. Parsing is strictly deterministic and
+// read-only: it never mutates anything, and a malformed line never aborts
+// the run (it is counted in Report and the rest of the file is still
+// processed), per the spec's forward-compatibility rule (§6.1, §7).
+//
+// The package kept the name "tokenfuse" for backward compatibility (it began
+// as a TokenFuse-only connector, before Wardryx/Mockryx/Verdryx joined the
+// same bus), but Parse and Load are fully generic: every identity's and
+// every event's Source is read from the envelope's own `source` field,
+// never assumed from whichever --load prefix selected this loader. cmd/idryx's
+// --load tokenfuse:/wardryx:/mockryx:/verdryx: prefixes all resolve to this
+// same connector for exactly that reason (see populate() and
+// agentBusSources in cmd/idryx/main.go): the parsing is identical, so a
+// TokenFuse file loaded via --load wardryx:<path> by mistake still comes
+// out labeled "tokenfuse" (from its own envelopes), and a Wardryx file
+// loaded via --load tokenfuse:<path> still comes out labeled "wardryx".
+// Nothing here special-cases any one producer name.
 package tokenfuse
 
 import (
@@ -23,12 +37,17 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
-// knownTypes is the v0.1 tokenfuse event-type registry (SPEC §6.2). The map
+// knownTypes is the v0.1 tokenfuse event-type registry (SPEC §6.2), for
+// tokenfuse's own event types specifically, not the bus as a whole. The map
 // values equal their keys by construction (model.EventType is a string type
-// whose tokenfuse constants match the wire values verbatim) — the map exists
+// whose tokenfuse constants match the wire values verbatim); the map exists
 // so callers can name these types (e.g. in future detectors) without
 // stringly-typed literals scattered around, and so Report can tell a known
-// type from one outside the v0.1 registry.
+// type from one outside the v0.1 registry. A type from a different bus
+// producer (e.g. wardryx's policy_deny, mockryx's sim_finding, verdryx's
+// quality_drift) is never in this map by design: it falls through the same
+// generic, tolerant path as an unrecognized tokenfuse type below, carried
+// through as a model.EventType(string), never dropped and never an error.
 var knownTypes = map[string]model.EventType{
 	"budget_exhausted": model.EventBudgetExhausted,
 	"sustained_loop":   model.EventSustainedLoop,
@@ -42,7 +61,7 @@ var knownTypes = map[string]model.EventType{
 
 // Report summarizes one Parse or Load call: how many lines were read, how
 // many were malformed and skipped, and which event types fell outside the
-// v0.1 registry (still ingested — just tallied for visibility).
+// v0.1 registry (still ingested, just tallied for visibility).
 type Report struct {
 	Lines        int
 	Malformed    int
@@ -61,20 +80,28 @@ func (r *Report) merge(o Report) {
 	}
 }
 
-// Parse decodes one NDJSON blob of taipanbox.dev/agent-event/v0.1 envelopes
+// Parse decodes one NDJSON blob of taipanbox.dev/agent-event envelopes
+// (schema v0.1 or v0.2; agent-stack-go/event's Unmarshal accepts either)
 // into identities and behavioral events.
 //
 //   - Each event with an agent_id not seen earlier in this blob yields an
-//     Identity{Type: IdentityAgent, ID: agent_id, Source: "tokenfuse"}.
+//     Identity{Type: IdentityAgent, ID: agent_id, Source: env.Source}. The
+//     Source always comes from the envelope's own `source` field (e.g.
+//     "tokenfuse", "wardryx", "mockryx", "verdryx"); Parse never assumes or
+//     hardcodes which producer wrote the file.
 //   - Every on_behalf_of entry becomes part of that agent's delegation chain
 //     (model.Identity.OnBehalfOf, agent-passport SPEC §5). Entries with the
-//     user:// scheme also create an IdentityHuman identity (ID = the URI)
-//     the first time they're seen, when not already produced.
-//   - Every well-formed line also yields a model.Event so it feeds the
-//     graph's normal behavioral pipeline (baselines, detectors). Types in
-//     the v0.1 registry (§6.2) map to their named model.EventType constant;
-//     any other type is carried through as-is — model.EventType is just a
-//     string, so this is tolerant by construction, never an error.
+//     user:// scheme also create an IdentityHuman identity (ID = the URI,
+//     Source = env.Source) the first time they're seen, when not already
+//     produced.
+//   - Every well-formed line also yields a model.Event, also carrying
+//     Source = env.Source, so it feeds the graph's normal behavioral
+//     pipeline (baselines, detectors). Types in the tokenfuse v0.1/v0.2
+//     registry (§6.2) map to their named model.EventType constant; any
+//     other type, whether an unrecognized tokenfuse type or a type from a
+//     different bus producer entirely, is carried through as-is
+//     (model.EventType is just a string, so this is tolerant by
+//     construction, never an error).
 //
 // A line that isn't valid JSON, or is missing a required envelope field
 // (schema, ts, source, type, agent_id, per SPEC §6.1 and
@@ -112,9 +139,12 @@ func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 		if !seenAgents[env.AgentID] {
 			seenAgents[env.AgentID] = true
 			identities = append(identities, model.Identity{
-				ID:         env.AgentID,
-				Type:       model.IdentityAgent,
-				Source:     "tokenfuse",
+				ID:   env.AgentID,
+				Type: model.IdentityAgent,
+				// From the envelope's own field, never a hardcoded literal
+				// (review finding L3): a wardryx/mockryx/verdryx file must
+				// not come out mislabeled "tokenfuse".
+				Source:     env.Source,
 				OnBehalfOf: append([]string(nil), env.OnBehalfOf...),
 			})
 		}
@@ -125,9 +155,11 @@ func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 			if strings.HasPrefix(p, "user://") && !seenHumans[p] {
 				seenHumans[p] = true
 				identities = append(identities, model.Identity{
-					ID:     p,
-					Type:   model.IdentityHuman,
-					Source: "tokenfuse",
+					ID:   p,
+					Type: model.IdentityHuman,
+					// Same fix as the agent identity above: from the
+					// envelope, never hardcoded.
+					Source: env.Source,
 				})
 			}
 		}
@@ -142,6 +174,11 @@ func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 			IdentityID: env.AgentID,
 			Type:       evType,
 			Severity:   env.Severity,
+			// From the envelope's own field, same fix as the identities
+			// above: lets events from several bus producers mix correctly
+			// on one agent's Events slice (e.g. tokenfuse spend events
+			// alongside wardryx policy events for the same agent_id).
+			Source: env.Source,
 		})
 	}
 	return identities, events, rep

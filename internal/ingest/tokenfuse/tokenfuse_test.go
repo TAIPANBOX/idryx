@@ -168,3 +168,139 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("expected an error for a missing, non-glob file")
 	}
 }
+
+// TestParseDerivesSourceFromEnvelope is the regression test for the
+// source-attribution bug (agent-passport SPEC §6.3): Parse must take every
+// identity's and event's Source from the envelope's own `source` field,
+// never hardcode "tokenfuse" regardless of which producer actually wrote
+// the line. A wardryx-sourced envelope must yield Source "wardryx", not
+// "tokenfuse".
+func TestParseDerivesSourceFromEnvelope(t *testing.T) {
+	line := []byte(`{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-07-10T09:00:00Z","source":"wardryx","type":"policy_deny","severity":"high","agent_id":"agent://acme-bank.example/support/tier1-bot","on_behalf_of":["user://acme-bank.example/j.doe"]}` + "\n")
+
+	identities, events, rep := Parse(line)
+	if rep.Malformed != 0 {
+		t.Fatalf("Malformed = %d, want 0: %+v", rep.Malformed, rep)
+	}
+	if len(identities) != 2 {
+		t.Fatalf("identities = %d, want 2 (agent + human)", len(identities))
+	}
+	for _, id := range identities {
+		if id.Source != "wardryx" {
+			t.Errorf("identity %s Source = %q, want %q (must come from the envelope, never hardcoded)", id.ID, id.Source, "wardryx")
+		}
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if events[0].Source != "wardryx" {
+		t.Errorf("event Source = %q, want %q (must come from the envelope, never hardcoded)", events[0].Source, "wardryx")
+	}
+}
+
+// TestParseBusFixtures proves each new agent-event-bus producer (Wardryx,
+// Mockryx, Verdryx) parses through the same connector as TokenFuse, using
+// the on-disk fixtures under testdata/{wardryx,mockryx,verdryx}: every
+// identity and event they produce must be attributed to that producer's
+// own source (never "tokenfuse"), and the on_behalf_of chain must still
+// populate the identity graph the same way it does for TokenFuse.
+func TestParseBusFixtures(t *testing.T) {
+	const humanID = "user://acme-bank.example/j.doe"
+	tests := []struct {
+		name           string
+		file           string
+		wantIdentities int
+		wantEvents     int
+		wantUnknown    int // len(rep.UnknownTypes): distinct unknown type strings
+		wantAgentIDs   []string
+	}{
+		{
+			name:           "wardryx",
+			file:           "testdata/wardryx/events.ndjson",
+			wantIdentities: 3, // tier1-bot, orchestrator, human
+			wantEvents:     3,
+			wantUnknown:    3, // policy_deny, approval_requested, approval_granted
+			wantAgentIDs: []string{
+				"agent://acme-bank.example/support/tier1-bot",
+				"agent://acme-bank.example/support/orchestrator",
+			},
+		},
+		{
+			name:           "mockryx",
+			file:           "testdata/mockryx/events.ndjson",
+			wantIdentities: 2, // tier1-bot, human
+			wantEvents:     2,
+			wantUnknown:    2, // sim_finding, blast_radius_measured
+			wantAgentIDs: []string{
+				"agent://acme-bank.example/support/tier1-bot",
+			},
+		},
+		{
+			name:           "verdryx",
+			file:           "testdata/verdryx/events.ndjson",
+			wantIdentities: 3, // tier1-bot, orchestrator, human
+			wantEvents:     2,
+			wantUnknown:    1, // both lines share the type "quality_drift"
+			wantAgentIDs: []string{
+				"agent://acme-bank.example/support/tier1-bot",
+				"agent://acme-bank.example/support/orchestrator",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := os.ReadFile(tt.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identities, events, rep := Parse(data)
+
+			if rep.Malformed != 0 {
+				t.Errorf("Malformed = %d, want 0", rep.Malformed)
+			}
+			if len(rep.UnknownTypes) != tt.wantUnknown {
+				t.Errorf("len(UnknownTypes) = %d, want %d: %v", len(rep.UnknownTypes), tt.wantUnknown, rep.UnknownTypes)
+			}
+			if len(identities) != tt.wantIdentities {
+				t.Fatalf("identities = %d, want %d: %+v", len(identities), tt.wantIdentities, identities)
+			}
+			if len(events) != tt.wantEvents {
+				t.Fatalf("events = %d, want %d", len(events), tt.wantEvents)
+			}
+
+			byID := map[string]model.Identity{}
+			for _, id := range identities {
+				byID[id.ID] = id
+				// Every identity in this single-producer file must carry
+				// that producer's own source, never a hardcoded "tokenfuse".
+				if id.Source != tt.name {
+					t.Errorf("identity %s Source = %q, want %q", id.ID, id.Source, tt.name)
+				}
+			}
+			for _, e := range events {
+				if e.Source != tt.name {
+					t.Errorf("event %s/%s Source = %q, want %q", e.IdentityID, e.Type, e.Source, tt.name)
+				}
+			}
+
+			human, ok := byID[humanID]
+			if !ok || human.Type != model.IdentityHuman {
+				t.Errorf("expected human identity %s, got %+v", humanID, byID)
+			}
+			for _, agentID := range tt.wantAgentIDs {
+				agent, ok := byID[agentID]
+				if !ok {
+					t.Errorf("expected agent identity %s in %+v", agentID, byID)
+					continue
+				}
+				if agent.Type != model.IdentityAgent {
+					t.Errorf("%s Type = %q, want agent", agentID, agent.Type)
+				}
+				if len(agent.OnBehalfOf) != 1 || agent.OnBehalfOf[0] != humanID {
+					t.Errorf("%s OnBehalfOf = %v, want [%s]", agentID, agent.OnBehalfOf, humanID)
+				}
+			}
+		})
+	}
+}

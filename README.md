@@ -117,13 +117,19 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   `attestation.method` (`none` / `oidc` / `spiffe-svid` / `enclave-key` /
   `mtls-cert`). Capture-only metadata, layered onto whichever graph a
   `--source`, `--load`, or `--db` already built.
-- **TokenFuse behavioral events** (`--source tokenfuse` / `--load
-  tokenfuse:<path|glob>`) — NDJSON `taipanbox.dev/agent-event/v0.1` envelopes: agent/human
-  identities from `agent_id`/`on_behalf_of`, plus a stream of events
-  (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`,
-  `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`, and any future
-  type, tolerated generically). Each event may carry a producer-assigned
-  `Severity` (info/low/medium/high/critical).
+- **Agent-event bus behavioral events** (`--source tokenfuse|wardryx|mockryx|verdryx`
+  / `--load tokenfuse:` / `wardryx:` / `mockryx:` / `verdryx:<path|glob>`): NDJSON
+  `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2), the shared wire
+  format every producer on the bus writes: **TokenFuse** (spend), **Wardryx**
+  (policy), **Mockryx** (pre-prod rehearsal), **Verdryx** (quality/drift), and
+  any future emitter. Agent/human identities come from `agent_id`/`on_behalf_of`;
+  each event carries its producer's own `source` field verbatim, so a Wardryx
+  policy event and a TokenFuse spend event on the same agent are never confused
+  with one another. Known TokenFuse event types (`budget_exhausted`,
+  `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`,
+  `dlp_block`, `taint_block`, `mcp_drift`) map to named constants; any other
+  type, from TokenFuse or another producer, is tolerated generically. Each
+  event may carry a producer-assigned `Severity` (info/low/medium/high/critical).
 
 Both sources populate `Identity.OnBehalfOf` — an **ordered, root-first
 delegation chain** — which idryx walks cycle-safely (`graph.WalkDelegationChain`)
@@ -281,9 +287,10 @@ flowchart TB
   SPEC[["agent-passport: the spec"]] -.->|governs| BUS
 ```
 
-- **Consumes**: **TokenFuse** agent-event NDJSON and Agent Passports, both via **agent-stack-go**.
+- **Consumes**: agent-event NDJSON from every bus producer (**TokenFuse**, **Wardryx**,
+  **Mockryx**, **Verdryx**) and Agent Passports, both via **agent-stack-go**.
 - **Produces**: the identity graph, detector findings (`runaway_agent`, `attestation_missing`, `bom_incomplete`), and an Agent-BOM (CycloneDX).
-- **Talks to**: **TokenFuse** (event source), **agent-passport** (identity schema it validates against); imports **agent-stack-go**.
+- **Talks to**: **TokenFuse**, **Wardryx**, **Mockryx**, **Verdryx** (event sources), **agent-passport** (identity schema it validates against); imports **agent-stack-go**.
 
 The full stack is TokenFuse (spend), Wardryx (policy), Engram (memory), Idryx (access), Qryx (crypto), Verdryx (quality), Mockryx (pre-prod), on the shared Agent Passport + agent-event contract (agent-stack-go / agent-passport), configured via terraform-provider-taipan.
 
@@ -317,7 +324,7 @@ make build
 # detect: run detectors, print or deliver alerts
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
-./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse
+./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
@@ -330,6 +337,10 @@ make build
 # agent identities: TokenFuse events + Passport enrichment (owner/runtime/parent/attestation)
 ./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson
 ./bin/idryx detect --load tokenfuse:events.ndjson --passports "passports/*.json"
+
+# whole agent-event bus: stitch TokenFuse + Wardryx + Mockryx + Verdryx into one graph
+./bin/idryx detect --load tokenfuse:tf.ndjson --load wardryx:wx.ndjson \
+  --load mockryx:mx.ndjson --load verdryx:vx.ndjson
 
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
 ./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
@@ -377,7 +388,7 @@ deterministic detectors.
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
-| `tokenfuse` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event/v0.1` envelopes (one file or a glob via `--load tokenfuse:path/*.ndjson`): agent/human identities from `agent_id`/`on_behalf_of`, plus behavioral events (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`, and any future type, tolerated generically) |
+| `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer: agent/human identities from `agent_id`/`on_behalf_of`, plus behavioral events attributed to each event's own `source` field, never to the `--load` prefix that selected the loader; known TokenFuse types (`budget_exhausted`, `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`, `dlp_block`, `taint_block`, `mcp_drift`) map to named constants, and any other type, from TokenFuse or another producer, is tolerated generically |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent (a directory of `*.json` files, or a glob), layered onto whichever source/`--load`/`--db` built the graph: `owner`, `runtime`, `parent` (static provisioning parent — distinct from the dynamic `on_behalf_of` chain), and `attestation.method` (`Identity.Attestation`); available on `detect`, `serve`, and `load` alongside their existing source flags |
 
 **Detectors** — see the [Detectors](#detectors) section above: 16 detectors across ITDR ·

@@ -117,6 +117,106 @@ func TestLoadTokenFuseStitchesIdentitiesAndEvents(t *testing.T) {
 	}
 }
 
+// TestLoadAgentBusSourcesAttributeCorrectSource is the CLI-level wiring
+// check for the three new agent-event-bus prefixes (agent-passport SPEC
+// §6.3): --load wardryx:/mockryx:/verdryx:<path> must all reach ingestion
+// through the same connector as --load tokenfuse:<path> (no "unknown
+// source" error), and every identity/event they produce in the graph must
+// be attributed to its own real source, never the literal "tokenfuse" the
+// connector package happens to be named after.
+func TestLoadAgentBusSourcesAttributeCorrectSource(t *testing.T) {
+	tests := []struct {
+		source string
+		path   string
+	}{
+		{"wardryx", "../../internal/ingest/tokenfuse/testdata/wardryx/events.ndjson"},
+		{"mockryx", "../../internal/ingest/tokenfuse/testdata/mockryx/events.ndjson"},
+		{"verdryx", "../../internal/ingest/tokenfuse/testdata/verdryx/events.ndjson"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.source, func(t *testing.T) {
+			loads := loadList{{Source: tt.source, Path: tt.path}}
+			g, err := buildGraph("", "", "", "", "", "", "", loads)
+			if err != nil {
+				t.Fatalf("buildGraph --load %s:%s: %v", tt.source, tt.path, err)
+			}
+
+			ids := g.Identities()
+			if len(ids) == 0 {
+				t.Fatal("expected at least one identity in the graph")
+			}
+			sawEvent := false
+			for _, id := range ids {
+				if id.Source != tt.source {
+					t.Errorf("identity %s Source = %q, want %q", id.ID, id.Source, tt.source)
+				}
+				for _, e := range id.Events {
+					sawEvent = true
+					if e.Source != tt.source {
+						t.Errorf("event %s/%s Source = %q, want %q", id.ID, e.Type, e.Source, tt.source)
+					}
+				}
+			}
+			if !sawEvent {
+				t.Error("expected at least one event in the graph")
+			}
+		})
+	}
+}
+
+// TestLoadWholeAgentEventBusStitchesAllProducers is the end-to-end proof
+// that idryx can ingest the whole agent-event bus into one graph: TokenFuse,
+// Wardryx, Mockryx and Verdryx all emit events for the same agent
+// (agent://.../tier1-bot), and stitching all four --load sources together
+// must merge them onto one identity node, each event keeping its own
+// producer's Source rather than collapsing to "tokenfuse".
+func TestLoadWholeAgentEventBusStitchesAllProducers(t *testing.T) {
+	loads := loadList{
+		{Source: "tokenfuse", Path: "../../internal/ingest/tokenfuse/testdata/events.ndjson"},
+		{Source: "wardryx", Path: "../../internal/ingest/tokenfuse/testdata/wardryx/events.ndjson"},
+		{Source: "mockryx", Path: "../../internal/ingest/tokenfuse/testdata/mockryx/events.ndjson"},
+		{Source: "verdryx", Path: "../../internal/ingest/tokenfuse/testdata/verdryx/events.ndjson"},
+	}
+	g, err := buildGraph("", "", "", "", "", "", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+
+	byID := map[string]*model.Identity{}
+	var totalEvents int
+	for _, id := range g.Identities() {
+		byID[id.ID] = id
+		totalEvents += len(id.Events)
+	}
+	if totalEvents != 17 { // 10 tokenfuse + 3 wardryx + 2 mockryx + 2 verdryx
+		t.Errorf("total events across the graph = %d, want 17", totalEvents)
+	}
+
+	tier1 := byID["agent://acme-bank.example/support/tier1-bot"]
+	if tier1 == nil {
+		t.Fatal("expected tier1-bot in the graph")
+	}
+	gotSources := map[string]bool{}
+	for _, e := range tier1.Events {
+		gotSources[e.Source] = true
+	}
+	for _, want := range []string{"tokenfuse", "wardryx", "mockryx", "verdryx"} {
+		if !gotSources[want] {
+			t.Errorf("tier1-bot events missing a %s-sourced event; got sources %v", want, gotSources)
+		}
+	}
+
+	// sub-agent only appears in the tokenfuse fixture: single-producer, so
+	// its Identity.Source is unambiguous.
+	sub := byID["agent://acme-bank.example/support/sub-agent"]
+	if sub == nil {
+		t.Fatal("expected sub-agent (tokenfuse-only) in the graph")
+	}
+	if sub.Source != "tokenfuse" {
+		t.Errorf("sub-agent Source = %q, want tokenfuse", sub.Source)
+	}
+}
+
 // TestBuildGraphLayersPassports is the CLI-level wiring check for
 // --passports: it enriches an identity already produced by another source
 // (here, an agent tokenfuse also observed) with static Passport metadata,
