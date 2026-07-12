@@ -142,7 +142,7 @@ func defaultBody(recs []*remediation.Recommendation) string {
 	var sb strings.Builder
 	sb.WriteString("Automated least-privilege and credential-rotation remediations proposed by idryx.\n\n")
 	sb.WriteString("idryx is read-only against your cloud and IdP — this PR is a proposal. ")
-	sb.WriteString("Review the Terraform under the artifacts directory and apply via your normal plan/apply workflow.\n\n")
+	sb.WriteString("The files under the artifacts directory are human-readable proposed diffs, not drop-in Terraform: review each one, fold the change into your own configuration, and apply through your normal plan/apply workflow.\n\n")
 	for _, rem := range recs {
 		fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", rem.IdentityID, rem.Kind, rem.Explanation)
 	}

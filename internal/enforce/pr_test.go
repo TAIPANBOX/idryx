@@ -103,6 +103,12 @@ func TestOpenPRBodyMentionsReadOnly(t *testing.T) {
 	if !strings.Contains(body, "arn:aws:iam::1:role/etl") {
 		t.Error("PR body should list each remediation identity")
 	}
+	if strings.Contains(body, "Review the Terraform under the artifacts directory and apply via your normal plan/apply workflow.") {
+		t.Error("PR body still claims the generated Terraform is directly apply-able")
+	}
+	if !strings.Contains(body, "proposed diff") {
+		t.Error("PR body should tell the reviewer the artifacts are a proposed diff, not a drop-in file")
+	}
 }
 
 func TestOpenPRGuards(t *testing.T) {

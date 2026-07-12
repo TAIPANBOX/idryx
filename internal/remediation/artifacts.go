@@ -16,11 +16,16 @@ type Artifact struct {
 	Explanation string `json:"explanation"`
 }
 
-// WriteArtifacts writes each recommendation as an apply-ready Terraform file plus
-// a manifest.json index into dir, and returns the manifest. idryx stays read-only
-// on the cloud: it emits files to review and apply, never mutating the provider
-// itself. It is the single source of truth for both `remediate --out` and the
-// pull-request enforcement flow.
+// WriteArtifacts writes each recommendation as a .tf file plus a manifest.json
+// index into dir, and returns the manifest. The .tf content is a human-readable
+// proposed diff, not a directly terraform-apply-able file: right-size output
+// marks the lines to remove from your existing configuration (it is not a
+// complete standalone resource definition, since idryx has no visibility into
+// your actual Terraform state/config to know the real resource address), and
+// even rotation output should be reviewed and adapted, not applied blind.
+// idryx stays read-only on the cloud: it emits files to review and fold into
+// your own IaC, never mutating the provider itself. It is the single source of
+// truth for both `remediate --out` and the pull-request enforcement flow.
 func WriteArtifacts(dir string, recs []*Recommendation) ([]Artifact, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err

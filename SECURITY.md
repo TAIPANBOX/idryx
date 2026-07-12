@@ -47,9 +47,11 @@ These are load-bearing security properties. A change that breaks one is a bug.
 
 ### What idryx deliberately does NOT defend against
 
-- **The contents of generated Terraform.** Remediation `.tf` is a proposal for a
-  human to review and apply through their own plan/apply workflow. idryx does not
-  execute it; an operator who applies unreviewed generated IaC owns that risk.
+- **The contents of generated Terraform.** Remediation `.tf` is a human-readable
+  proposed diff, not a drop-in file: a human is expected to review it, fold the
+  change into their own configuration, and apply through their own plan/apply
+  workflow. idryx does not execute it; an operator who applies unreviewed
+  generated IaC owns that risk.
 - **Credentials and access for the connectors themselves.** idryx reads whatever
   logs/inventory you feed it; securing those exports and any cloud read
   credentials is the operator's responsibility.

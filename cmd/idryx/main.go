@@ -727,7 +727,7 @@ func runRemediate(args []string) error {
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
-	outDir := fs.String("out", "", "write apply-ready Terraform artifacts to this directory instead of stdout")
+	outDir := fs.String("out", "", "write proposed-diff Terraform artifacts (for review, not direct apply) to this directory instead of stdout")
 	saveDB := fs.String("save-db", "", "Postgres DSN to persist the generated recommendations into")
 	openPR := fs.Bool("open-pr", false, "open a GitHub PR with the remediation artifacts against --repo (needs git + gh)")
 	repoDir := fs.String("repo", "", "path to the IaC git repo to open the remediation PR against")
@@ -814,10 +814,11 @@ func runRemediate(args []string) error {
 	return nil
 }
 
-// writeRemediationArtifacts writes the apply-ready Terraform files plus a
+// writeRemediationArtifacts writes the proposed-diff Terraform files (for
+// review, not direct apply; see remediation.WriteArtifacts) plus a
 // manifest.json via the shared remediation writer (one source of truth with the
 // pull-request flow). idryx stays read-only on the cloud: it emits files to
-// review and apply, it never mutates the provider itself.
+// review and fold into your own IaC, it never mutates the provider itself.
 func writeRemediationArtifacts(dir string, recs []*remediation.Recommendation) error {
 	manifest, err := remediation.WriteArtifacts(dir, recs)
 	if err != nil {
