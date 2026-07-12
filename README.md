@@ -17,7 +17,7 @@ idryx is a security layer on top of an organization's existing IdPs, clouds, and
 gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
-identity / access graph. Seventeen deterministic detectors then surface excessive
+identity / access graph. Twenty deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open-core, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
@@ -185,6 +185,9 @@ suppresses scoring during a learning period to avoid false positives.
 | `runaway_agent` | Agents / AI | medium base, high at 2 corroborating facts, critical at 3+ | a TokenFuse spend/runaway incident correlated with the agent's privilege, delegation depth, attestation, and blast radius |
 | `attestation_missing` | Agents / AI | high | a privileged AI agent whose identity has no attestation on record (agent-passport SPEC §4.3) |
 | `bom_incomplete` | Agents / AI | medium | an agent missing the governance-critical fields an Agent-BOM needs: owner, runtime, or attestation |
+| `data_exfiltration` | Agents / AI | high, critical at 2x threshold or if privileged/admin | an AI agent accumulating DLP-blocked actions within a 24h window, a repeated attempt to move sensitive data out |
+| `tainted_agent` | Agents / AI | high, critical on repeat or if privileged/admin | an AI agent with a taint-tracked action blocked, a traced injection/exfiltration attempt stopped before it landed |
+| `mcp_drift` | Agents / AI | high, critical on repeat or if privileged/admin | an MCP server's config or exposed tooling changing under an agent, a supply-chain/config-integrity signal |
 | `least_privilege` | Least-privilege | medium, high for an unused admin grant | granted permissions never exercised, with a revocation recommendation |
 
 `agent_shadow_tool` needs the `agents` and `mcp` sources stitched into one
@@ -342,7 +345,7 @@ runs deterministic detectors.
 | `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
-**Detectors** - see the [Detectors](#detectors) table above: 17 detectors across
+**Detectors** - see the [Detectors](#detectors) table above: 20 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
 
 **Baseline engine** (`internal/baseline`) - learns what is normal per identity
@@ -392,7 +395,7 @@ and run in CI against a Postgres service (`make test-integration` with
 - [x] Phase 1 - baseline engine, Entra/CloudTrail connectors, Slack/SIEM delivery, web dashboard, Postgres graph
 - [x] Phase 2 - NHI (AWS/GCP/Azure), agents + delegation graph, shadow AI/MCP, least-privilege
 - [x] Phase 3 - remediation: right-sizing + rotation Terraform, PR enforcement (read-only)
-- [x] 17 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
+- [x] 20 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [ ] eBPF network-behavior layer

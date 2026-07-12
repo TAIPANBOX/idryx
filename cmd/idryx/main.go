@@ -320,6 +320,9 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewRunawayAgent(),
 		detectors.NewAttestationMissing(),
 		detectors.NewBOMIncomplete(),
+		detectors.NewDataExfiltration(),
+		detectors.NewTaintedAgent(),
+		detectors.NewMCPDrift(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
