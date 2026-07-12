@@ -100,3 +100,36 @@ func TestMFAFatigueOneAlertPerIdentity(t *testing.T) {
 		t.Errorf("alert identity = %q, want frank@x.com", alerts[0].IdentityID)
 	}
 }
+
+// TestMFAFatigueNotInflatedByReplay is the concrete false-positive scenario
+// replay inflation causes: 3 genuine MFA challenges (below the threshold of
+// 5) must stay below threshold even if the same source file is loaded twice
+// (e.g. `idryx load --source okta okta.json` run twice, or the same file
+// named in --load more than once). Without dedup in Store.AddEvent, 3
+// genuine events become 6 after the second load and cross the threshold,
+// firing a push-bombing alert that never happened.
+func TestMFAFatigueNotInflatedByReplay(t *testing.T) {
+	withFixedNow(t)
+	base := fixedNow().Add(-1 * time.Hour)
+	g := graph.New(nil)
+
+	events := []model.Event{
+		mfaChallenge("gina@x.com", base),
+		mfaChallenge("gina@x.com", base.Add(1*time.Minute)),
+		mfaChallenge("gina@x.com", base.Add(2*time.Minute)),
+	}
+	// Load the same 3 events twice, simulating a re-ingested source file.
+	for _, e := range events {
+		g.AddEvent(e)
+	}
+	for _, e := range events {
+		g.AddEvent(e)
+	}
+
+	if got := len(g.Identities()[0].Events); got != 3 {
+		t.Fatalf("got %d events after loading the same 3-event file twice, want 3 (deduped)", got)
+	}
+	if got := detect(NewMFAFatigue(), g); len(got) != 0 {
+		t.Errorf("3 genuine MFA challenges replayed once must not cross the threshold, got alert: %v", got)
+	}
+}

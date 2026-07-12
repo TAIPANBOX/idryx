@@ -20,6 +20,7 @@ type Reader interface {
 type Store struct {
 	privileged map[string]bool
 	identities map[string]*model.Identity
+	seenEvents map[model.Event]bool
 }
 
 // New returns a Store. The privileged set marks identities whose anomalies are
@@ -28,11 +29,22 @@ func New(privileged map[string]bool) *Store {
 	return &Store{
 		privileged: privileged,
 		identities: make(map[string]*model.Identity),
+		seenEvents: make(map[model.Event]bool),
 	}
 }
 
-// AddEvent records an event, creating the identity if needed.
+// AddEvent records an event, creating the identity if needed. Re-adding an
+// event identical in every field (the natural key: identity, time, type, and
+// every other recorded detail) is a no-op, so replaying a source file (e.g.
+// `idryx load --source okta okta.json` run twice, or the same file named in
+// --load more than once) cannot double-count events and inflate threshold
+// detectors like mfa_fatigue. model.Event has only comparable fields, so it
+// can be used directly as a set key.
 func (s *Store) AddEvent(e model.Event) {
+	if s.seenEvents[e] {
+		return
+	}
+	s.seenEvents[e] = true
 	id := s.ensure(e.IdentityID)
 	id.Events = append(id.Events, e)
 }

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"testing"
+	"time"
 
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
@@ -177,5 +178,49 @@ func TestBlastRadiusDedupesByName(t *testing.T) {
 func TestBlastRadiusEmptyForUnknownStart(t *testing.T) {
 	if got := BlastRadius(idx(nil), "agent:unknown"); len(got) != 0 {
 		t.Errorf("BlastRadius = %+v, want empty", got)
+	}
+}
+
+// TestAddEventDedupesOnNaturalKey is the regression test for replay
+// inflation: re-running `idryx load --source okta okta.json` twice (or
+// stitching the same file into --load more than once) must not double-count
+// events. AddEvent must dedupe on the natural key (identity, time, type, and
+// the rest of the record), not append unconditionally.
+func TestAddEventDedupesOnNaturalKey(t *testing.T) {
+	g := New(nil)
+	e := model.Event{
+		IdentityID: "bob@x.com",
+		Time:       time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC),
+		Type:       model.EventMFAChallenge,
+		Outcome:    "DENY",
+		IP:         "1.2.3.4",
+		Device:     "iPhone",
+	}
+	// Simulate the same source file being loaded three times.
+	g.AddEvent(e)
+	g.AddEvent(e)
+	g.AddEvent(e)
+
+	ids := g.Identities()
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+	if len(ids[0].Events) != 1 {
+		t.Fatalf("got %d events after re-ingesting the identical event 3x, want 1 (deduped)", len(ids[0].Events))
+	}
+
+	// A genuinely different event (different IP) for the same identity/time/type
+	// is not a duplicate and must still be recorded.
+	distinct := e
+	distinct.IP = "5.6.7.8"
+	g.AddEvent(distinct)
+	if got := len(g.Identities()[0].Events); got != 2 {
+		t.Fatalf("got %d events after adding a genuinely distinct event, want 2 (must not over-dedupe)", got)
+	}
+
+	// The same distinct event replayed again must still dedupe.
+	g.AddEvent(distinct)
+	if got := len(g.Identities()[0].Events); got != 2 {
+		t.Fatalf("got %d events after replaying the distinct event again, want 2", got)
 	}
 }

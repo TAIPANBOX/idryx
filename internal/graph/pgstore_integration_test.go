@@ -112,6 +112,59 @@ func TestPgIngestIdempotentPrivilege(t *testing.T) {
 	}
 }
 
+// TestPgIngestDedupesEventsOnReplay is the Postgres-backed counterpart to
+// graph.TestAddEventDedupesOnNaturalKey: re-ingesting the same event file
+// (e.g. `idryx load --source okta okta.json` run twice) must not double the
+// stored event count or inflate threshold detectors like mfa_fatigue. Ingest
+// upserts on the natural key (identity, ts, type, and the rest of the
+// record) with ON CONFLICT DO NOTHING, mirroring the in-memory Store.
+func TestPgIngestDedupesEventsOnReplay(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC)
+	events := []model.Event{
+		{IdentityID: "dana@x.com", Time: base, Type: model.EventMFAChallenge, Outcome: "DENY"},
+		{IdentityID: "dana@x.com", Time: base.Add(time.Minute), Type: model.EventMFAChallenge, Outcome: "DENY"},
+		{IdentityID: "dana@x.com", Time: base.Add(2 * time.Minute), Type: model.EventMFAChallenge, Outcome: "DENY"},
+	}
+
+	// Ingest the same file twice, exactly as a re-run of `idryx load` would.
+	if err := s.Ingest(ctx, events, nil); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	if err := s.Ingest(ctx, events, nil); err != nil {
+		t.Fatalf("second ingest (replay): %v", err)
+	}
+
+	store, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	ids := store.Identities()
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+	if len(ids[0].Events) != 3 {
+		t.Fatalf("got %d events after replaying a 3-event file, want 3 (deduped)", len(ids[0].Events))
+	}
+
+	// A genuinely different event (different outcome) for the same
+	// identity/time/type is not a duplicate and must still be recorded.
+	distinct := events[0]
+	distinct.Outcome = "SUCCESS"
+	if err := s.Ingest(ctx, []model.Event{distinct}, nil); err != nil {
+		t.Fatalf("ingest distinct event: %v", err)
+	}
+	store, err = s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot after distinct event: %v", err)
+	}
+	if got := len(store.Identities()[0].Events); got != 4 {
+		t.Fatalf("got %d events after adding a genuinely distinct event, want 4 (must not over-dedupe)", got)
+	}
+}
+
 func TestPgIngestIdentitiesAndSnapshot(t *testing.T) {
 	s := testDB(t)
 	ctx := context.Background()

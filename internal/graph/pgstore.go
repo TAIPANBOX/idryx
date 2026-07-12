@@ -73,7 +73,8 @@ func (s *PgStore) Ingest(ctx context.Context, events []model.Event, privileged m
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO events (identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			 ON CONFLICT (identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity) DO NOTHING`,
 			e.IdentityID, e.Time, string(e.Type), e.Outcome,
 			e.IP, e.City, e.Country, e.Lat, e.Lon, e.Device, e.Resource, e.Severity); err != nil {
 			return fmt.Errorf("insert event: %w", err)

@@ -87,6 +87,36 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS events_identity_ts ON events (identity_id, ts);
 
+-- Re-running `idryx load --source okta okta.json` twice (or naming the same
+-- file in --load more than once) re-parses and re-inserts every event.
+-- Without a natural-key constraint, Ingest's plain INSERT doubled every
+-- event, inflating threshold detectors like mfa_fatigue (3 genuine
+-- challenges became 6 and crossed the fire threshold). Remove any
+-- duplicates a prior double-ingest left behind, keeping the lowest
+-- surrogate id, so this migration is safe to apply to an already-affected
+-- database before the unique index is created below.
+DELETE FROM events a USING events b
+WHERE a.id > b.id
+  AND a.identity_id = b.identity_id
+  AND a.ts = b.ts
+  AND a.type = b.type
+  AND a.outcome = b.outcome
+  AND a.ip = b.ip
+  AND a.city = b.city
+  AND a.country = b.country
+  AND a.lat = b.lat
+  AND a.lon = b.lon
+  AND a.device = b.device
+  AND a.resource = b.resource
+  AND a.severity = b.severity;
+
+-- Natural key for an event: the same identity, timestamp, type, and every
+-- other recorded detail. Ingest upserts against this with ON CONFLICT DO
+-- NOTHING, mirroring the idempotent-upsert treatment identities/permissions
+-- already get, so replaying a source file cannot double-count events.
+CREATE UNIQUE INDEX IF NOT EXISTS events_natural_key ON events
+    (identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity);
+
 CREATE TABLE IF NOT EXISTS permissions (
     id          BIGSERIAL PRIMARY KEY,
     identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
