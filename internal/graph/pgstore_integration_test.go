@@ -89,6 +89,55 @@ func TestPgIngestAndSnapshot(t *testing.T) {
 	}
 }
 
+// TestPgEventsSnapshotOrdersEqualTimestampsDeterministically is the
+// live-Postgres counterpart to TestEventsSnapshotOrderHasIDTiebreaker: two
+// events for the same identity with an identical ts must come back from
+// Snapshot in a stable, deterministic order (insertion order, via the id
+// tiebreaker), matching what the in-memory Store gives for the same
+// sequence of AddEvent calls. Before the id tiebreaker, Postgres gives no
+// guaranteed order for the tie, so which event new_device/impossible_travel
+// treats as the baseline vs the anomaly could flip between snapshots.
+func TestPgEventsSnapshotOrdersEqualTimestampsDeterministically(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	sameTS := time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC)
+	first := model.Event{IdentityID: "erin@x.com", Time: sameTS, Type: model.EventLogin, Outcome: "SUCCESS", Device: "laptop-A"}
+	second := model.Event{IdentityID: "erin@x.com", Time: sameTS, Type: model.EventLogin, Outcome: "SUCCESS", Device: "laptop-B"}
+
+	// Insert in a specific order, across two separate Ingest calls (as two
+	// separate loads would), so the surrogate id order matches this order.
+	if err := s.Ingest(ctx, []model.Event{first}, nil); err != nil {
+		t.Fatalf("ingest first: %v", err)
+	}
+	if err := s.Ingest(ctx, []model.Event{second}, nil); err != nil {
+		t.Fatalf("ingest second: %v", err)
+	}
+
+	store, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	ids := store.Identities()
+	if len(ids) != 1 || len(ids[0].Events) != 2 {
+		t.Fatalf("got %+v, want 1 identity with 2 events", ids)
+	}
+	if ids[0].Events[0].Device != "laptop-A" || ids[0].Events[1].Device != "laptop-B" {
+		t.Fatalf("events with equal ts came back in a non-deterministic order: %+v", ids[0].Events)
+	}
+
+	// Repeated snapshots must agree: this is "a" deterministic order, not an
+	// accident of one query plan.
+	store2, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+	ids2 := store2.Identities()
+	if ids2[0].Events[0].Device != ids[0].Events[0].Device || ids2[0].Events[1].Device != ids[0].Events[1].Device {
+		t.Errorf("repeated snapshots produced different orders for equal-ts events: %+v vs %+v", ids[0].Events, ids2[0].Events)
+	}
+}
+
 func TestPgIngestIdempotentPrivilege(t *testing.T) {
 	s := testDB(t)
 	ctx := context.Background()

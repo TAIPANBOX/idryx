@@ -13,6 +13,18 @@ import (
 //go:embed schema.sql
 var schema string
 
+// eventsOrderBy orders Snapshot's events query chronologically per identity,
+// with the surrogate id as an explicit tiebreaker. Postgres does not
+// guarantee any particular order for rows with equal ts beyond the ORDER BY
+// clause given, while the in-memory Store's Identities sorts with
+// sort.SliceStable, which preserves append (insertion) order for equal
+// timestamps. Without the id tiebreaker here, two events with identical ts
+// could order differently across backends (and across repeated snapshots of
+// the same data), flipping which one new_device/impossible_travel treats as
+// the baseline versus the anomaly. id is BIGSERIAL, so ordering by it
+// matches insertion order, the same tiebreak the in-memory Store gives.
+const eventsOrderBy = `ORDER BY identity_id, ts, id`
+
 // PgStore is a Postgres-backed persistence layer for the identity graph. It is
 // the durable counterpart to the in-memory Store: Ingest writes events,
 // Snapshot reads them all back into an in-memory Store, which implements Reader.
@@ -256,7 +268,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 	// Retrieve all events and attach them
 	evRows, err := s.db.QueryContext(ctx,
 		`SELECT identity_id, ts, type, outcome, ip, city, country, lat, lon, device, resource, severity
-		 FROM events ORDER BY identity_id, ts`)
+		 FROM events `+eventsOrderBy)
 	if err != nil {
 		return nil, err
 	}
