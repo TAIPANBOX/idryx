@@ -46,7 +46,13 @@ func MCP(data []byte) ([]model.Identity, error) {
 			sanctioned = *s.Sanctioned
 		}
 		id := model.Identity{
-			ID:     "mcp:" + s.Name,
+			// Keyed by Name+URL, not Name alone: two servers can share a
+			// display Name (e.g. two teams both calling theirs
+			// "internal-tools"), and keying on Name alone collapsed them
+			// onto one graph node, so Shadow (a sticky OR in
+			// Store.AddIdentity) and permissions from an unsanctioned
+			// server leaked onto a sanctioned one sharing its name.
+			ID:     "mcp:" + s.Name + "@" + s.URL,
 			Type:   model.IdentityMCPServer,
 			Source: "mcp",
 			Owner:  s.Owner,
