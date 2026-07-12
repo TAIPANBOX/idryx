@@ -14,9 +14,9 @@
 </div>
 
 idryx is a security layer on top of an organization's existing IdPs, clouds, and
-gateways: it reads the data Okta, Entra, AWS, GCP, Azure, and Keycloak already
-generate, plus the whole TAIPANBOX agent-event bus, and stitches every identity
-type, humans, service accounts, keys, MCP servers, and AI agents, into a single
+gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
+plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
+humans, service accounts, keys, MCP servers, and AI agents, into a single
 identity / access graph. Seventeen deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open-core, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
@@ -212,6 +212,8 @@ internal/baseline            per-identity behavioral baseline (Build / NewProfil
 internal/detect               Detector interface
 internal/detect/detectors      the concrete detectors
 internal/bom                  Agent-BOM builder + CycloneDX-shaped rendering
+internal/remediation          right-sizing + credential-rotation Terraform generation
+internal/enforce              opens a GitHub PR from remediation output (git+gh; never applies)
 internal/report               human + JSON alert rendering
 internal/sink                 Slack + generic webhook delivery
 internal/server               read-only HTTP dashboard + JSON API
@@ -364,8 +366,8 @@ for SIEM/SOAR (`--webhook`). Fully-filtered batches make no network call.
 
 **Web dashboard** (`internal/server`, `idryx serve`) - a read-only HTTP server
 with a self-contained HTML dashboard and a JSON API (`/api/alerts`,
-`/api/identities`, `/healthz`). Read-only by design: idryx observes, it never
-mutates the IdP.
+`/api/identities`, `/api/remediations`, `/healthz`). Read-only by design: idryx
+observes, it never mutates the IdP.
 
 **Postgres graph** (`internal/graph`, pgx) - `idryx load --db <dsn>` persists
 events into Postgres; `detect` / `serve --db` read a snapshot back. The
