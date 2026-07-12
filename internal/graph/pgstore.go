@@ -129,10 +129,10 @@ func (s *PgStore) IngestIdentities(ctx context.Context, identities []model.Ident
 		}
 		for _, p := range id.Permissions {
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO permissions (identity_id, name, admin, used)
-				 VALUES ($1, $2, $3, $4)
-				 ON CONFLICT (identity_id, name) DO UPDATE SET admin = EXCLUDED.admin, used = EXCLUDED.used`,
-				id.ID, p.Name, p.Admin, p.Used); err != nil {
+				`INSERT INTO permissions (identity_id, name, admin, used, arn)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT (identity_id, name) DO UPDATE SET admin = EXCLUDED.admin, used = EXCLUDED.used, arn = EXCLUDED.arn`,
+				id.ID, p.Name, p.Admin, p.Used, p.ARN); err != nil {
 				return fmt.Errorf("insert permission %q for %q: %w", p.Name, id.ID, err)
 			}
 		}
@@ -234,7 +234,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 
 	// Retrieve all permissions and attach them to their identities in the store
 	permRows, err := s.db.QueryContext(ctx,
-		`SELECT identity_id, name, admin, used FROM permissions`)
+		`SELECT identity_id, name, admin, used, arn FROM permissions`)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 	for permRows.Next() {
 		var identityID string
 		var p model.Permission
-		if err := permRows.Scan(&identityID, &p.Name, &p.Admin, &p.Used); err != nil {
+		if err := permRows.Scan(&identityID, &p.Name, &p.Admin, &p.Used, &p.ARN); err != nil {
 			return nil, err
 		}
 		if idNode := store.ensure(identityID); idNode != nil {

@@ -79,12 +79,14 @@ func principalToIdentity(p awsPrincipal, inline []awsInline) model.Identity {
 	for _, m := range p.AttachedManaged {
 		id.Permissions = append(id.Permissions, model.Permission{
 			Name:  m.PolicyName,
+			ARN:   m.PolicyArn, // real ARN, aws- or customer-managed; remediation must use this, not reconstruct it
 			Admin: isAdminPolicy(m.PolicyName, m.PolicyArn),
 		})
 	}
 	for _, in := range inline {
 		id.Permissions = append(id.Permissions, model.Permission{
-			Name:  in.PolicyName,
+			Name: in.PolicyName,
+			// Inline policies have no ARN of their own in AWS; ARN stays empty.
 			Admin: isAdminPolicy(in.PolicyName, ""),
 		})
 	}

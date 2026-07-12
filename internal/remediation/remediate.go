@@ -208,9 +208,18 @@ func generateAWS(id model.Identity, unused []model.Permission) string {
 	sb.WriteString("# Revoke unused policy attachments from the IAM role\n\n")
 
 	for i, p := range unused {
-		policyARN := p.Name
-		if !strings.HasPrefix(policyARN, "arn:") {
-			policyARN = fmt.Sprintf("arn:aws:iam::aws:policy/%s", p.Name)
+		// Prefer the real ARN the aws_iam connector carried through from
+		// PolicyArn. Reconstructing arn:aws:iam::aws:policy/<name> is only
+		// correct for AWS-managed policies; a customer-managed policy's real
+		// ARN is arn:aws:iam::<account-id>:policy/<name> and cannot be
+		// derived from the name alone. Only guess when no ARN is known at
+		// all (e.g. an inline policy, which has no ARN in AWS).
+		policyARN := p.ARN
+		if policyARN == "" {
+			policyARN = p.Name
+			if !strings.HasPrefix(policyARN, "arn:") {
+				policyARN = fmt.Sprintf("arn:aws:iam::aws:policy/%s", p.Name)
+			}
 		}
 		resName := fmt.Sprintf("revoke_unused_%d", i)
 

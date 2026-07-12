@@ -81,6 +81,16 @@ type Permission struct {
 	Name  string // policy, grant, or tool name
 	Admin bool   // grants admin-equivalent access
 	Used  bool   // whether this grant has been observed in use (when usage data exists)
+
+	// ARN is the connector-reported real resource identifier for this grant,
+	// when the source provides one (e.g. an AWS attached managed policy's
+	// PolicyArn). It is authoritative and must be preferred over any
+	// heuristic reconstruction: an AWS customer-managed policy's real ARN is
+	// arn:aws:iam::<account-id>:policy/<name>, which cannot be derived from
+	// the name alone (only the aws-managed arn:aws:iam::aws:policy/<name>
+	// shape can). Empty when the source has no ARN concept for the grant
+	// (e.g. an inline policy, or a GCP/Azure/agent permission).
+	ARN string
 }
 
 // Identity is an actor in the graph: a human, service account, key, or agent.

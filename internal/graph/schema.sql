@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS permissions (
     UNIQUE (identity_id, name)
 );
 
+-- Real connector-reported ARN (e.g. an AWS attached managed policy's
+-- PolicyArn), when the source provides one. Empty for grants without an ARN
+-- concept (inline policies, GCP/Azure/agent permissions). Remediation must
+-- use this instead of reconstructing an ARN from the name.
+ALTER TABLE permissions ADD COLUMN IF NOT EXISTS arn TEXT NOT NULL DEFAULT '';
+
 -- Generated remediation recommendations (right-size / rotation), so the dashboard
 -- and API can serve them from the persisted graph rather than recomputing.
 CREATE TABLE IF NOT EXISTS remediations (

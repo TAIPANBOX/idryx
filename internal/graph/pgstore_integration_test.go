@@ -188,7 +188,12 @@ func TestPgIngestIdentitiesAndSnapshot(t *testing.T) {
 			LastUsed:   lastUsedTime,
 			Privileged: false,
 			Permissions: []model.Permission{
-				{Name: "AdministratorAccess", Admin: true, Used: false},
+				// Customer-managed policy: real account-scoped ARN, distinct
+				// from the aws-managed arn:aws:iam::aws:policy/<name> shape
+				// remediation would otherwise reconstruct. Must round-trip
+				// through Postgres unchanged (see TestGenerateAWSUsesRealCustomerManagedARN
+				// in internal/remediation for why this matters).
+				{Name: "AdministratorAccess", ARN: "arn:aws:iam::123456789012:policy/AdministratorAccess", Admin: true, Used: false},
 				{Name: "S3ReadOnly", Admin: false, Used: true},
 			},
 		},
@@ -260,6 +265,12 @@ func TestPgIngestIdentitiesAndSnapshot(t *testing.T) {
 	sortPermissions(sa.Permissions)
 	if sa.Permissions[0].Name != "AdministratorAccess" || !sa.Permissions[0].Admin || sa.Permissions[0].Used {
 		t.Errorf("invalid permission 0: %+v", sa.Permissions[0])
+	}
+	if sa.Permissions[0].ARN != "arn:aws:iam::123456789012:policy/AdministratorAccess" {
+		t.Errorf("permission ARN did not round-trip through Postgres: %+v", sa.Permissions[0])
+	}
+	if sa.Permissions[1].ARN != "" {
+		t.Errorf("S3ReadOnly should have no ARN (none was set), got %+v", sa.Permissions[1])
 	}
 
 	agent := byID["ai-agent-1"]

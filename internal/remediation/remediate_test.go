@@ -41,6 +41,41 @@ func TestGenerateAWS(t *testing.T) {
 	}
 }
 
+// TestGenerateAWSUsesRealCustomerManagedARN is the regression test for the
+// discarded-ARN bug: generateAWS used to reconstruct
+// "arn:aws:iam::aws:policy/<name>" for any permission name that didn't
+// already start with "arn:", which is only correct for AWS-managed
+// policies. A customer-managed policy's real ARN is
+// "arn:aws:iam::<account-id>:policy/<name>"; guessing the aws-managed shape
+// for it points the generated Terraform at an ARN that does not exist, so
+// applying it silently fails to revoke the real grant. Remediation must use
+// Permission.ARN (populated by the aws_iam connector from the real
+// PolicyArn) when present, instead of guessing.
+func TestGenerateAWSUsesRealCustomerManagedARN(t *testing.T) {
+	const realARN = "arn:aws:iam::123456789012:policy/CustomDataAccess"
+	id := model.Identity{
+		ID:     "arn:aws:iam::123456789012:role/data-pipeline",
+		Type:   model.IdentityServiceAccount,
+		Source: "aws_iam",
+		Permissions: []model.Permission{
+			{Name: "CustomDataAccess", ARN: realARN, Admin: false, Used: false},
+			{Name: "S3ReadOnly", Admin: false, Used: true},
+		},
+	}
+
+	rem := Generate(id)
+	if rem == nil {
+		t.Fatal("expected recommendation, got nil")
+	}
+	if !strings.Contains(rem.Code, realARN) {
+		t.Errorf("expected the real customer-managed ARN %q in generated code:\n%s", realARN, rem.Code)
+	}
+	wrongARN := "arn:aws:iam::aws:policy/CustomDataAccess"
+	if strings.Contains(rem.Code, wrongARN) {
+		t.Errorf("generated code references the reconstructed aws-managed ARN %q, which does not exist for a customer-managed policy:\n%s", wrongARN, rem.Code)
+	}
+}
+
 func TestGenerateGCP(t *testing.T) {
 	id := model.Identity{
 		ID:     "data-pipeline-sa@my-gcp-project.iam.gserviceaccount.com",
