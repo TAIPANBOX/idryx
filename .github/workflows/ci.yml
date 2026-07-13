@@ -54,11 +54,19 @@ jobs:
           go-version: "1.26.5"
           cache: true
       - name: system deps
-        run: sudo apt-get update && sudo apt-get install -y clang linux-tools-common linux-tools-generic
-      - name: regenerate vmlinux.h from this runner's BTF
+        run: sudo apt-get update && sudo apt-get install -y clang
+      # bpftool from a static release, not the linux-tools-generic apt
+      # package: that package is tied to a specific installed kernel
+      # package version and 404s whenever the runner's actual running
+      # kernel doesn't match one, e.g. Azure-hosted runners' own
+      # backported kernel flavor.
+      - name: install bpftool
         run: |
-          BPFTOOL=$(command -v bpftool || echo /usr/lib/linux-tools-$(uname -r)/bpftool)
-          "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
+          curl -fsSL -o /tmp/bpftool.tar.gz \
+            https://github.com/libbpf/bpftool/releases/download/v7.7.0/bpftool-v7.7.0-amd64.tar.gz
+          sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin bpftool
+      - name: regenerate vmlinux.h from this runner's BTF
+        run: sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
       - name: go generate (bpf2go) -- catches connect.c/committed-output drift
         run: go generate ./internal/ebpfcapture/...
       - name: build
