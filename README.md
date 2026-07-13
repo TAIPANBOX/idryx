@@ -61,6 +61,16 @@ flowchart TB
 
 The full stack is TokenFuse (spend), Wardryx (policy), Engram (memory), Idryx (access), Qryx (crypto), Verdryx (quality), Mockryx (pre-prod), on the shared Agent Passport + agent-event contract (agent-stack-go / agent-passport), configured via terraform-provider-taipan.
 
+## Live infrastructure validation
+
+Before any public launch, Idryx was run against a real Postgres 16 backend and real agent-fleet event
+data: 16/16 integration tests pass, the delegation-chain backfill migration is correct and idempotent,
+and the full detector suite fires correctly off Postgres-backed state.
+
+![Idryx identity/access dashboard: agent fleet spend by non-human identity, 3 detectors fired live, CycloneDX Agent-BOM generated](assets/06-idryx.png)
+
+Full write-up and all numbers: [`VALIDATION.md`](VALIDATION.md).
+
 ---
 
 ## What it does
