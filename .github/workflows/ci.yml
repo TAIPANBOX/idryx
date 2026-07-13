@@ -53,11 +53,14 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
-      # llvm, not just clang: bpf2go strips DWARF from the compiled object
-      # via llvm-strip by default, a separate binary clang alone doesn't
-      # provide.
+      # clang compiles connect.c; llvm provides llvm-strip, which bpf2go
+      # shells out to by default to strip DWARF from the compiled object;
+      # libbpf-dev provides the <bpf/bpf_helpers.h> and <bpf/bpf_core_read.h>
+      # headers connect.c includes (vmlinux.h itself is self-generated below
+      # and doesn't need the kernel's own linux-headers package -- that's
+      # the point of CO-RE).
       - name: system deps
-        run: sudo apt-get update && sudo apt-get install -y clang llvm
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev
       # bpftool from a static release, not the linux-tools-generic apt
       # package: that package is tied to a specific installed kernel
       # package version and 404s whenever the runner's actual running
