@@ -53,8 +53,11 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
+      # llvm, not just clang: bpf2go strips DWARF from the compiled object
+      # via llvm-strip by default, a separate binary clang alone doesn't
+      # provide.
       - name: system deps
-        run: sudo apt-get update && sudo apt-get install -y clang
+        run: sudo apt-get update && sudo apt-get install -y clang llvm
       # bpftool from a static release, not the linux-tools-generic apt
       # package: that package is tied to a specific installed kernel
       # package version and 404s whenever the runner's actual running
