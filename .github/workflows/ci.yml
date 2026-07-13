@@ -65,8 +65,12 @@ jobs:
           curl -fsSL -o /tmp/bpftool.tar.gz \
             https://github.com/libbpf/bpftool/releases/download/v7.7.0/bpftool-v7.7.0-amd64.tar.gz
           sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin bpftool
+          sudo chmod +x /usr/local/bin/bpftool
+      # Absolute path, not "sudo bpftool": sudo's secure_path can put a
+      # runner-image-preinstalled, kernel-version-locked bpftool wrapper
+      # ahead of the one just installed above, silently shadowing it.
       - name: regenerate vmlinux.h from this runner's BTF
-        run: sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
+        run: sudo /usr/local/bin/bpftool btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
       - name: go generate (bpf2go) -- catches connect.c/committed-output drift
         run: go generate ./internal/ebpfcapture/...
       - name: build
