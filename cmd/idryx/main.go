@@ -4,16 +4,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/TAIPANBOX/idryx/internal/bom"
 	"github.com/TAIPANBOX/idryx/internal/detect"
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
+	"github.com/TAIPANBOX/idryx/internal/ebpfcapture"
 	"github.com/TAIPANBOX/idryx/internal/enforce"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
@@ -52,6 +56,8 @@ func run(args []string) error {
 		return runLoad(args[1:])
 	case "remediate":
 		return runRemediate(args[1:])
+	case "ebpf-capture":
+		return runEBPFCapture(args[1:])
 	case "version":
 		fmt.Println("idryx", version)
 		return nil
@@ -65,17 +71,20 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: idryx <command> [flags] <log.json>
 
 commands:
-  detect     ingest a log, run detectors, print/deliver alerts
-  bom        ingest a log, emit an Agent Bill of Materials (CycloneDX JSON)
-  serve      ingest a log and serve a read-only web dashboard
-  load       ingest a log into a Postgres graph (--db)
-  remediate  generate Terraform right-sizing snippets for unused permissions
-  version    print version
+  detect        ingest a log, run detectors, print/deliver alerts
+  bom           ingest a log, emit an Agent Bill of Materials (CycloneDX JSON)
+  serve         ingest a log and serve a read-only web dashboard
+  load          ingest a log into a Postgres graph (--db)
+  remediate     generate Terraform right-sizing snippets for unused permissions
+  ebpf-capture  capture live outbound connections via eBPF, write an egress log (Linux, root, see SECURITY.md)
+  version       print version
 
 detect, bom, serve and remediate also accept --db to read from Postgres, or
 one or more --load source:path to stitch several sources into one graph
 (needed for cross-layer detectors like agent_shadow_tool, which spans
-agents + mcp).`)
+agents + mcp). ebpf-capture's own output is exactly one more --load
+egress:<path> away from the same detect/bom/serve/load/remediate pipeline
+every other source uses.`)
 }
 
 // loadSpec is one source to ingest into the graph: a source kind and the file
@@ -323,6 +332,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewDataExfiltration(),
 		detectors.NewTaintedAgent(),
 		detectors.NewMCPDrift(),
+		detectors.NewUnmanagedEgress(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -825,5 +835,64 @@ func writeRemediationArtifacts(dir string, recs []*remediation.Recommendation) e
 		return err
 	}
 	fmt.Printf("Wrote %d remediation artifact(s) and manifest.json to %s\n", len(manifest), dir)
+	return nil
+}
+
+// ebpfCaptureFunc performs the actual capture; runEBPFCapture is the only
+// caller. Exactly one of ebpf_linux.go (the real capture, via
+// internal/ebpfcapture.Run) or ebpf_other.go (a clear "not supported"
+// error) sets this via init(), selected by GOOS at compile time -- so this
+// file needs no build tag of its own even though the real implementation is
+// Linux-only.
+var ebpfCaptureFunc func(ctx context.Context, duration time.Duration) ([]ebpfcapture.Flow, error)
+
+// runEBPFCapture drives idryx's Linux-only eBPF network-behavior sensor
+// (internal/ebpfcapture): capture live outbound connections and write them
+// out in exactly the wire shape internal/ingest/egress.go's Egress already
+// parses, so the result plugs straight into the same
+// detect/bom/serve/load/remediate pipeline every other source uses, via
+// --load egress:<path>.
+func runEBPFCapture(args []string) error {
+	fs := flag.NewFlagSet("ebpf-capture", flag.ContinueOnError)
+	duration := fs.Duration("duration", 30*time.Second, "how long to capture; 0 runs until interrupted (Ctrl+C)")
+	out := fs.String("out", "", "write the captured egress log here (default: stdout)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx ebpf-capture [flags]\n\nflags:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nrequires Linux, root (or CAP_BPF+CAP_PERFMON), and a BTF-enabled kernel; see SECURITY.md.\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if *duration > 0 {
+		fmt.Fprintf(os.Stderr, "idryx: capturing outbound connections via eBPF for %s...\n", *duration)
+	} else {
+		fmt.Fprintln(os.Stderr, "idryx: capturing outbound connections via eBPF until interrupted (Ctrl+C)...")
+	}
+
+	flows, err := ebpfCaptureFunc(ctx, *duration)
+	if err != nil {
+		return err
+	}
+
+	w := os.Stdout
+	if *out != "" {
+		f, err := os.Create(*out)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", *out, err)
+		}
+		defer f.Close()
+		w = f
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(ebpfcapture.ToEgressLog(flows)); err != nil {
+		return fmt.Errorf("write egress log: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "idryx: captured %d flow(s)\n", len(flows))
 	return nil
 }

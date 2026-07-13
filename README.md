@@ -17,7 +17,7 @@ idryx is a security layer on top of an organization's existing IdPs, clouds, and
 gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
-identity / access graph. Twenty deterministic detectors then surface excessive
+identity / access graph. Twenty-one deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open-core, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
@@ -190,6 +190,7 @@ suppresses scoring during a learning period to avoid false positives.
 | `shared_credential` | NHI | high | an NHI whose credential is used across many distinct IPs, countries, or devices, the signature of a leaked or shared key |
 | `excessive_agency` | Agents / AI | high, critical at deeper delegation | an AI agent that reaches admin-equivalent permissions through its delegation chain (OWASP LLM06) |
 | `shadow_ai` | Agents / AI | medium, high for NHIs/agents | an identity whose egress reaches a known external LLM API (OpenAI, Anthropic, Gemini) |
+| `unmanaged_egress` | Agents / AI | medium, high if the destination is a known LLM API | a real outbound connection observed only via the eBPF sensor (`idryx ebpf-capture`), attributable to a process name and nothing else: no IAM, agent-event, or Passport record for it |
 | `shadow_mcp` | Agents / AI | high, critical if high-risk tools exposed | an MCP server in use but absent from the sanctioned registry (OWASP MCP Top 10: Shadow MCP Servers) |
 | `agent_shadow_tool` | Agents / AI | high, critical if the shared tool is high-risk | an AI agent whose declared tools are exposed by a shadow MCP server, the path a poisoned tool takes to reach a model |
 | `runaway_agent` | Agents / AI | medium base, high at 2 corroborating facts, critical at 3+ | a TokenFuse spend/runaway incident correlated with the agent's privilege, delegation depth, attestation, and blast radius |
@@ -220,7 +221,10 @@ internal/model               Identity, Event, Permission, Alert, Severity (share
 internal/ingest               source connectors -> []model.Event or []model.Identity
 internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
 internal/ingest/passport        Agent Passport JSON documents (identity enrichment)
-internal/graph               Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
+internal/ebpfcapture         Linux-only eBPF sensor: sys_enter_connect -> egress-shaped
+                              flows (root/CAP_BPF, see SECURITY.md); feeds internal/ingest's
+                              egress connector via idryx ebpf-capture -out + --load egress:
+internal/graph                Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
 internal/baseline            per-identity behavioral baseline (Build / NewProfile+Observe / Score)
 internal/detect               Detector interface
 internal/detect/detectors      the concrete detectors
@@ -320,6 +324,10 @@ make build
 ./bin/idryx load --db "$DSN" <log.json>             # ingest into Postgres
 ./bin/idryx detect --db "$DSN"                      # detect from the DB
 ./bin/idryx serve  --db "$DSN"                      # dashboard from the DB
+
+# ebpf-capture: Linux, root (or CAP_BPF+CAP_PERFMON), see SECURITY.md
+sudo ./bin/idryx ebpf-capture -duration 30s -out captured.json  # live-capture outbound connections
+./bin/idryx detect --load egress:captured.json                  # same pipeline every other source uses
 ```
 
 Run against the bundled fixtures:
@@ -346,7 +354,7 @@ runs deterministic detectors.
 | `okta` | events | Okta System Log |
 | `entra` | events | Microsoft Entra ID sign-in log |
 | `cloudtrail` | events | AWS CloudTrail (ConsoleLogin + API activity) |
-| `egress` | events | generic network-egress (identity -> destination host; VPC flow / proxy / CASB) |
+| `egress` | events | generic network-egress (identity -> destination host; VPC flow / proxy / CASB, or idryx's own `ebpf-capture` sensor, see below) |
 | `aws_iam` | NHI inventory | IAM users/roles as service accounts, with permissions, owner tags, last-used |
 | `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles and owner hints (optional Cloud Audit Log usage enrichment via `--gcp-audit`) |
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
@@ -355,7 +363,7 @@ runs deterministic detectors.
 | `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
-**Detectors** - see the [Detectors](#detectors) table above: 20 detectors across
+**Detectors** - see the [Detectors](#detectors) table above: 21 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
 
 **Baseline engine** (`internal/baseline`) - learns what is normal per identity
@@ -395,20 +403,40 @@ upgrades in place. Integration tests live behind the `integration` build tag
 and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 
+**eBPF network sensor** (`internal/ebpfcapture`, `idryx ebpf-capture`) -
+Linux-only, root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached to the
+`sys_enter_connect` tracepoint via `cilium/ebpf`, capturing real outbound
+connections (pid, process name, destination) with no dependency on IAM,
+agent-event, or Passport data. Writes an egress-shaped log consumed by the
+same `--load egress:` pipeline every other source uses. Known LLM API
+destinations are resolved to their hostname so the existing `shadow_ai`
+detector reasons over eBPF-captured traffic for free; its own
+`unmanaged_egress` detector flags any identity this sensor is the *only*
+evidence for. See
+[`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture) for what it
+does and deliberately does not do.
+
 ---
 
 ## Status
 
-**Phase 3 shipped** (the eBPF network-behavior layer is what remains):
+**Phases 0-3 plus a first eBPF network-behavior layer shipped** (beaconing,
+JA3/JA4, DNS-tunnel detection, and full identity correlation remain, see
+[`idryx-plan.md`](idryx-plan.md)'s Phase 4):
 
 - [x] Phase 0 - ITDR core, in-memory graph, CLI, CI
 - [x] Phase 1 - baseline engine, Entra/CloudTrail connectors, Slack/SIEM delivery, web dashboard, Postgres graph
 - [x] Phase 2 - NHI (AWS/GCP/Azure), agents + delegation graph, shadow AI/MCP, least-privilege
 - [x] Phase 3 - remediation: right-sizing + rotation Terraform, PR enforcement (read-only)
-- [x] 20 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
+- [x] 21 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
-- [ ] eBPF network-behavior layer
+- [x] eBPF network-behavior layer (descoped first version): Linux sensor on
+      `sys_enter_connect` (`idryx ebpf-capture`), its `unmanaged_egress`
+      detector, live-validated against real traffic on a disposable VM (see
+      [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
+      original larger spec's beaconing/JA3-JA4/DNS-tunneling/identity
+      correlation stays Phase 4
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
 

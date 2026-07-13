@@ -44,6 +44,28 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           gosec -quiet ./...
 
+  ebpf:
+    name: ebpf (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: system deps
+        run: sudo apt-get update && sudo apt-get install -y clang linux-tools-common linux-tools-generic
+      - name: regenerate vmlinux.h from this runner's BTF
+        run: |
+          BPFTOOL=$(command -v bpftool || echo /usr/lib/linux-tools-$(uname -r)/bpftool)
+          "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
+      - name: go generate (bpf2go) -- catches connect.c/committed-output drift
+        run: go generate ./internal/ebpfcapture/...
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+
   integration:
     runs-on: ubuntu-latest
     services:
