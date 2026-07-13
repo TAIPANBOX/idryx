@@ -9,13 +9,14 @@
 // counted and skipped, never fatal, mirroring the tokenfuse connector's
 // Report pattern (SPEC §7: unknown/absent fields are tolerated, not
 // errors — except the three fields SPEC §4.1 requires).
+//
+// The directory/glob walk itself (resolve, sort, dedupe by first-seen id)
+// is agent-stack-go/passport.LoadDir; this package supplies only the
+// Passport -> model.Identity parse step.
 package passport
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 
 	agentpassport "github.com/TAIPANBOX/agent-stack-go/passport"
 	"github.com/TAIPANBOX/idryx/internal/model"
@@ -26,10 +27,7 @@ import (
 // shape/intent for the same reason: a batch of external, operator-supplied
 // files must never abort on one bad entry, but the caller still deserves a
 // visible count of what was skipped.
-type Report struct {
-	Files     int
-	Malformed int
-}
+type Report = agentpassport.Report
 
 // Parse decodes one Passport JSON document into a model.Identity, using the
 // shared wire type from agent-stack-go/passport instead of a private,
@@ -87,53 +85,5 @@ func Parse(data []byte) (model.Identity, error) {
 // order, so Load's output is deterministic and idryx never carries two
 // Identity records for one id from this connector.
 func Load(dirOrGlob string) ([]model.Identity, Report, error) {
-	matches, err := resolve(dirOrGlob)
-	if err != nil {
-		return nil, Report{}, err
-	}
-	sort.Strings(matches)
-
-	rep := Report{}
-	seen := map[string]bool{}
-	var identities []model.Identity
-	for _, path := range matches {
-		data, err := os.ReadFile(path) // #nosec G304 -- path is an operator-supplied CLI argument/glob/directory listing, not untrusted input
-		if err != nil {
-			return nil, Report{}, fmt.Errorf("passport: read %s: %w", path, err)
-		}
-		rep.Files++
-		id, err := Parse(data)
-		if err != nil {
-			rep.Malformed++
-			continue
-		}
-		if seen[id.ID] {
-			continue
-		}
-		seen[id.ID] = true
-		identities = append(identities, id)
-	}
-	return identities, rep, nil
-}
-
-// resolve expands dirOrGlob into the list of passport files to read, per
-// Load's documented precedence.
-func resolve(dirOrGlob string) ([]string, error) {
-	if info, err := os.Stat(dirOrGlob); err == nil && info.IsDir() {
-		matches, err := filepath.Glob(filepath.Join(dirOrGlob, "*.json"))
-		if err != nil {
-			return nil, fmt.Errorf("passport: bad directory %q: %w", dirOrGlob, err)
-		}
-		return matches, nil
-	}
-	matches, err := filepath.Glob(dirOrGlob)
-	if err != nil {
-		return nil, fmt.Errorf("passport: bad glob %q: %w", dirOrGlob, err)
-	}
-	if len(matches) == 0 {
-		// Not a glob (or a glob that matched nothing): try it as a literal
-		// path so a missing file still produces a clear I/O error.
-		matches = []string{dirOrGlob}
-	}
-	return matches, nil
+	return agentpassport.LoadDir(dirOrGlob, Parse, func(id model.Identity) string { return id.ID })
 }
