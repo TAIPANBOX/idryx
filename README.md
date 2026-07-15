@@ -7,9 +7,9 @@
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/phase-3%20(remediation)-success.svg)
+![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
-<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx) and Agent Passports feed the idryx core (graph store, baseline engine, 17 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
+<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx) and Agent Passports feed the idryx core (graph store, baseline engine, 21 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
 
 </div>
 
