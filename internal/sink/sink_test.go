@@ -43,7 +43,7 @@ func TestWebhookSendsFilteredJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewWebhook(srv.URL, model.SeverityHigh).Send(sampleAlerts()); err != nil {
+	if err := NewWebhook(srv.URL, model.SeverityHigh, nil).Send(sampleAlerts()); err != nil {
 		t.Fatal(err)
 	}
 	if len(received) != 2 {
@@ -51,6 +51,29 @@ func TestWebhookSendsFilteredJSON(t *testing.T) {
 	}
 	if received[0].Severity != "high" || received[1].Severity != "critical" {
 		t.Errorf("unexpected severities: %+v", received)
+	}
+}
+
+func TestWebhookSendsOperatorHeaders(t *testing.T) {
+	// An endpoint that records an incident rather than raw evidence is
+	// authenticated, so a sink that cannot carry a credential cannot reach one.
+	var auth, contentType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		contentType = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	headers := map[string]string{"Authorization": "Bearer opsKey"}
+	if err := NewWebhook(srv.URL, model.SeverityHigh, headers).Send(sampleAlerts()); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer opsKey" {
+		t.Errorf("Authorization header = %q, want the operator's credential", auth)
+	}
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json to survive the header pass", contentType)
 	}
 }
 
@@ -91,7 +114,7 @@ func TestSinkErrorsOnBadStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewWebhook(srv.URL, model.SeverityNone).Send(sampleAlerts()); err == nil {
+	if err := NewWebhook(srv.URL, model.SeverityNone, nil).Send(sampleAlerts()); err == nil {
 		t.Error("expected error on 500 status, got nil")
 	}
 }

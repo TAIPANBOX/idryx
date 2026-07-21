@@ -384,6 +384,19 @@ its companion detector, flagging agents the BOM cannot yet fully prove.
 **Alert delivery** (`internal/sink`) - alerts at or above `--min-severity` are
 pushed to a Slack incoming webhook (`--slack`) and/or a generic JSON webhook
 for SIEM/SOAR (`--webhook`). Fully-filtered batches make no network call.
+`--webhook-header "Name: Value"` (repeatable) sets outbound headers, which is
+how the destination authenticates the sender:
+
+```sh
+idryx detect --load tokenfuse:events.ndjson \
+  --webhook 'https://cloud.example/v1/findings?source=idryx' \
+  --webhook-header "Authorization: Bearer $OPS_KEY"
+```
+
+TokenFuse Cloud's `/v1/findings` accepts this payload as-is, which puts an
+idryx finding in front of the operator holding the phone, labelled with the
+service that made it. Headers are outbound only: nothing about what idryx
+reads, or how it detects, changes.
 
 **Web dashboard** (`internal/server`, `idryx serve`) - a read-only HTTP server
 with a self-contained HTML dashboard and a JSON API (`/api/alerts`,

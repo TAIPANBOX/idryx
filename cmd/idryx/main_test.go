@@ -73,6 +73,29 @@ func TestLoadListSet(t *testing.T) {
 	}
 }
 
+func TestHeaderListSet(t *testing.T) {
+	h := headerList{}
+	if err := h.Set("Authorization: Bearer k"); err != nil {
+		t.Fatal(err)
+	}
+	// A value with its own colons (a URL, a timestamp) must survive intact:
+	// only the FIRST colon separates the name from the value.
+	if err := h.Set("X-Origin: https://idryx.internal:8443/detect"); err != nil {
+		t.Fatal(err)
+	}
+	if h["Authorization"] != "Bearer k" || h["X-Origin"] != "https://idryx.internal:8443/detect" {
+		t.Errorf("unexpected headers: %+v", h)
+	}
+	// A malformed header is refused rather than dropped: silently sending an
+	// unauthenticated request would look like a delivery failure at the far
+	// end, which is the hardest kind of misconfiguration to find.
+	for _, bad := range []string{"nocolon", ": novalue", "NoValue:", "  : "} {
+		if err := h.Set(bad); err == nil {
+			t.Errorf("expected an error for %q", bad)
+		}
+	}
+}
+
 // TestLoadTokenFuseStitchesIdentitiesAndEvents is the CLI-level wiring check
 // for the tokenfuse connector (agent-passport SPEC §6.3): --load tokenfuse:path
 // must populate the graph with both the agent/human identities and the

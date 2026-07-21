@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -116,6 +117,30 @@ func (l *loadList) Set(v string) error {
 		return fmt.Errorf("--load expects source:path, got %q", v)
 	}
 	*l = append(*l, loadSpec{Source: src, Path: path})
+	return nil
+}
+
+// headerList collects repeated --webhook-header "Name: Value" flags. Almost
+// every real destination for an alert wants a credential, and a flag is where
+// an operator supplies one: idryx never stores it and never reads it back.
+type headerList map[string]string
+
+func (h headerList) String() string {
+	parts := make([]string, 0, len(h))
+	for k := range h {
+		parts = append(parts, k)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+func (h headerList) Set(v string) error {
+	name, value, ok := strings.Cut(v, ":")
+	name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+	if !ok || name == "" || value == "" {
+		return fmt.Errorf("--webhook-header expects \"Name: Value\", got %q", v)
+	}
+	h[name] = value
 	return nil
 }
 
@@ -371,6 +396,7 @@ func runDetect(args []string) error {
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
+		webhookHdr = headerList{}
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
@@ -378,6 +404,7 @@ func runDetect(args []string) error {
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
+	fs.Var(webhookHdr, "webhook-header", "\"Name: Value\" header for --webhook; repeatable (e.g. --webhook-header \"Authorization: Bearer KEY\")")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
@@ -417,7 +444,7 @@ func runDetect(args []string) error {
 		sinks = append(sinks, sink.NewSlack(*slackURL, threshold))
 	}
 	if *webhookURL != "" {
-		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold))
+		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold, webhookHdr))
 	}
 	for _, s := range sinks {
 		if err := s.Send(alerts); err != nil {
