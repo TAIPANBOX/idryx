@@ -516,6 +516,7 @@ func runServe(args []string) error {
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
+		refresh    = fs.Duration("refresh", 15*time.Second, "re-read the source and rebuild the graph every interval so a long-lived server stays live (0 disables; ignored with --db)")
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
@@ -558,11 +559,39 @@ func runServe(args []string) error {
 		}
 	}
 
+	// Keep the served graph live. buildGraph ran once above; without this the
+	// server answers from that boot-time snapshot forever, so a dashboard fed
+	// by a growing event file goes stale the instant traffic arrives and stays
+	// wrong until the process restarts (an identity plane reporting "0 alerts"
+	// over a file that already holds detections). Re-read on a ticker and swap
+	// the rebuilt graph in atomically. File/--load mode only: --db takes a
+	// one-shot Postgres snapshot with its own lifecycle and persisted
+	// remediations. A rebuild that errors keeps the last good graph rather than
+	// blanking the dashboard.
+	if *db == "" && *refresh > 0 {
+		go func() {
+			t := time.NewTicker(*refresh)
+			defer t.Stop()
+			for range t.C {
+				g2, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, *passports, loads)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "idryx: refresh failed, keeping the last good graph: %v\n", err)
+					continue
+				}
+				srv.Replace(g2, runDetectors(g2))
+			}
+		}()
+	}
+
 	shown := *addr
 	if strings.HasPrefix(shown, ":") {
 		shown = "localhost" + shown
 	}
-	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts)\n", shown, len(alerts))
+	refreshNote := "static (refresh off)"
+	if *db == "" && *refresh > 0 {
+		refreshNote = "refreshing every " + refresh.String()
+	}
+	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts, %s)\n", shown, len(alerts), refreshNote)
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

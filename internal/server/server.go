@@ -7,15 +7,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"sync"
 
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/remediation"
 )
 
-// Server holds the data rendered by the API and dashboard. It is a snapshot:
-// the graph and alerts are computed once by the caller and served read-only.
+// Server holds the data rendered by the API and dashboard.
+//
+// The graph and alerts it serves can be replaced atomically while it is
+// running (see Replace), so a long-lived `idryx serve` can keep re-reading a
+// growing event source instead of freezing whatever it saw at boot. That
+// staleness was a real defect: a graph built once before ListenAndServe meant
+// a security dashboard that answered "0 alerts" while its own event file
+// already held detections, and stayed wrong until the process was restarted.
+// mu guards the three swappable fields; readers hold it for the length of a
+// request so a swap can never split a response across two graphs.
 type Server struct {
+	mu       sync.RWMutex
 	graph    graph.Reader
 	alerts   []model.Alert
 	remParam []graph.StoredRemediation // when non-nil, served instead of recomputing
@@ -26,10 +36,22 @@ func New(g graph.Reader, alerts []model.Alert) *Server {
 	return &Server{graph: g, alerts: alerts}
 }
 
+// Replace swaps in a freshly rebuilt graph and its alerts, atomically with
+// respect to in-flight requests. Called by the serve loop's refresh ticker;
+// a no-op-shaped safe operation when the rebuild produced the same data.
+func (s *Server) Replace(g graph.Reader, alerts []model.Alert) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.graph = g
+	s.alerts = alerts
+}
+
 // SetRemediations makes /api/remediations serve a fixed set (e.g. recommendations
 // loaded from Postgres, carrying their stored timestamps) instead of recomputing
 // them from the graph. Passing a nil slice restores the recompute default.
 func (s *Server) SetRemediations(recs []graph.StoredRemediation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.remParam = recs
 }
 
@@ -76,6 +98,8 @@ func (s *Server) alertsJSON() []apiAlert {
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, _ *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	writeJSON(w, s.alertsJSON())
 }
 
@@ -205,6 +229,8 @@ func (s *Server) identitiesJSON() []apiIdentity {
 }
 
 func (s *Server) handleIdentities(w http.ResponseWriter, _ *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	writeJSON(w, s.identitiesJSON())
 }
 
@@ -240,6 +266,8 @@ func (s *Server) remediationsJSON() []apiRecommendation {
 }
 
 func (s *Server) handleRemediations(w http.ResponseWriter, _ *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	writeJSON(w, s.remediationsJSON())
 }
 
