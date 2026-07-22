@@ -61,6 +61,8 @@ flowchart TB
 
 The full stack is TokenFuse (spend), Wardryx (policy), Engram (memory), Idryx (access), Qryx (crypto), Verdryx (quality), Mockryx (pre-prod), on the shared Agent Passport + agent-event contract (agent-stack-go / agent-passport), configured via terraform-provider-taipan.
 
+Run the whole open stack locally with one command via [**stack-up**](https://github.com/TAIPANBOX/stack-up); the stack's home on the web is [**it-rat.com**](https://it-rat.com).
+
 ## Live infrastructure validation
 
 Before any public launch, Idryx was run against a real Postgres 16 backend and real agent-fleet event
@@ -256,7 +258,7 @@ Design principles, held as hard rules:
 - **Analytics / baseline / detection:** Python
 - **API:** Go (gRPC / REST)
 - **UI:** TypeScript (React)
-- **License:** open-core (Apache-2.0 core + paid connectors / enforcement / SaaS)
+- **License:** Apache-2.0, fully open source. There are no paid Idryx tiers: like the rest of the open TAIPANBOX stack, everything in this repo is free to self-host.
 
 ---
 
@@ -401,7 +403,11 @@ reads, or how it detects, changes.
 **Web dashboard** (`internal/server`, `idryx serve`) - a read-only HTTP server
 with a self-contained HTML dashboard and a JSON API (`/api/alerts`,
 `/api/identities`, `/api/remediations`, `/healthz`). Read-only by design: idryx
-observes, it never mutates the IdP.
+observes, it never mutates the IdP. The served graph is **live**: a long-lived
+`idryx serve` re-reads its source instead of answering from a snapshot frozen
+at boot, so a growing event file surfaces new alerts without a restart (found
+and fixed on live infrastructure, where the pre-fix behavior reported "0
+alerts" while the file already held detections).
 
 **Postgres graph** (`internal/graph`, pgx) - `idryx load --db <dsn>` persists
 events into Postgres; `detect` / `serve --db` read a snapshot back. The
@@ -450,6 +456,11 @@ JA3/JA4, DNS-tunnel detection, and full identity correlation remain, see
       [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
       original larger spec's beaconing/JA3-JA4/DNS-tunneling/identity
       correlation stays Phase 4
+- [x] Post-campaign hardening from live infrastructure (2026-07-21): `idryx serve`
+      keeps the served graph live against a growing source instead of freezing it
+      at boot, and the generic webhook sink can carry credentials
+      (`--webhook-header`, repeatable) so alerts reach a SIEM ingest endpoint or
+      an admin-gated `/v1/findings`
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
 
