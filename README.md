@@ -234,7 +234,7 @@ internal/bom                  Agent-BOM builder + CycloneDX-shaped rendering
 internal/remediation          right-sizing + credential-rotation Terraform generation
 internal/enforce              opens a GitHub PR from remediation output (git+gh; never applies)
 internal/report               human + JSON alert rendering
-internal/sink                 Slack + generic webhook delivery
+internal/sink                 Slack + generic webhook + OTLP delivery
 internal/server               read-only HTTP dashboard + JSON API
 ```
 
@@ -294,6 +294,7 @@ make build
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
+IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTTP trace spans
 ./bin/idryx detect --min-severity critical ...      # delivery threshold (default high)
 
 # least-privilege: enrich inventory with observed usage to flag unused grants
@@ -384,8 +385,9 @@ CycloneDX-shaped document (`internal/bom/cyclonedx.go`). `bom_incomplete` is
 its companion detector, flagging agents the BOM cannot yet fully prove.
 
 **Alert delivery** (`internal/sink`) - alerts at or above `--min-severity` are
-pushed to a Slack incoming webhook (`--slack`) and/or a generic JSON webhook
-for SIEM/SOAR (`--webhook`). Fully-filtered batches make no network call.
+pushed to a Slack incoming webhook (`--slack`), a generic JSON webhook for
+SIEM/SOAR (`--webhook`), and/or an OTLP collector (`IDRYX_OTLP_ENDPOINT`).
+Fully-filtered batches make no network call to any of the three.
 `--webhook-header "Name: Value"` (repeatable) sets outbound headers, which is
 how the destination authenticates the sender:
 
@@ -399,6 +401,19 @@ TokenFuse Cloud's `/v1/findings` accepts this payload as-is, which puts an
 idryx finding in front of the operator holding the phone, labelled with the
 service that made it. Headers are outbound only: nothing about what idryx
 reads, or how it detects, changes.
+
+Setting `IDRYX_OTLP_ENDPOINT` turns on a hand-rolled OTLP/HTTP JSON exporter
+(no OpenTelemetry SDK dependency, same approach as Wardryx's own exporter):
+one trace span per alert, POSTed to `<endpoint>/v1/traces`. The resource
+carries `service.name=idryx`; each span is named after the detector and
+carries `idryx.detector`, `idryx.severity`, `idryx.identity`, and
+`idryx.summary` attributes, so the same alert content shows up whichever sink
+delivered it. Unset (the default), the sink is never constructed and idryx's
+behavior is unchanged:
+
+```sh
+IDRYX_OTLP_ENDPOINT=http://localhost:4318 idryx detect --load tokenfuse:events.ndjson
+```
 
 **Web dashboard** (`internal/server`, `idryx serve`) - a read-only HTTP server
 with a self-contained HTML dashboard and a JSON API (`/api/alerts`,
@@ -461,6 +476,10 @@ JA3/JA4, DNS-tunnel detection, and full identity correlation remain, see
       at boot, and the generic webhook sink can carry credentials
       (`--webhook-header`, repeatable) so alerts reach a SIEM ingest endpoint or
       an admin-gated `/v1/findings`
+- [x] OTLP alert delivery (`internal/sink/otlp.go`, `IDRYX_OTLP_ENDPOINT`): a
+      hand-rolled OTLP/HTTP JSON exporter, one trace span per alert, no
+      OpenTelemetry SDK dependency, so the alert destinations promised at the
+      top of this README (SIEM / Slack / OTLP) are now all real
 
 See [`idryx-plan.md`](idryx-plan.md) for the full design and roadmap.
 

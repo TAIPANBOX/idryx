@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -93,6 +95,43 @@ func TestHeaderListSet(t *testing.T) {
 		if err := h.Set(bad); err == nil {
 			t.Errorf("expected an error for %q", bad)
 		}
+	}
+}
+
+// TestRunDetectOTLPWiring is the CLI-level wiring check for the OTLP sink:
+// IDRYX_OTLP_ENDPOINT unset must construct no sink and make no network call
+// (zero behavior change for anyone not using it), and setting it must
+// deliver the run's alerts to the configured collector.
+func TestRunDetectOTLPWiring(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// --privileged bob/carol makes mfa_fatigue and new_device fire at high
+	// severity or above on events.json, so the default --min-severity high
+	// threshold delivers alerts without needing to lower it.
+	args := []string{"-privileged", "bob@example.com,carol@example.com", "../../testdata/events.json"}
+
+	captureStdout(t, func() {
+		if err := runDetect(args); err != nil {
+			t.Fatalf("runDetect: %v", err)
+		}
+	})
+	if calls != 0 {
+		t.Fatalf("IDRYX_OTLP_ENDPOINT unset: got %d OTLP call(s), want 0", calls)
+	}
+
+	t.Setenv("IDRYX_OTLP_ENDPOINT", srv.URL)
+	captureStdout(t, func() {
+		if err := runDetect(args); err != nil {
+			t.Fatalf("runDetect: %v", err)
+		}
+	})
+	if calls != 1 {
+		t.Fatalf("IDRYX_OTLP_ENDPOINT set: got %d OTLP call(s), want 1", calls)
 	}
 }
 
