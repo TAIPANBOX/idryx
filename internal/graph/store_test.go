@@ -224,3 +224,37 @@ func TestAddEventDedupesOnNaturalKey(t *testing.T) {
 		t.Fatalf("got %d events after replaying the distinct event again, want 2", got)
 	}
 }
+
+// TestAddIdentityMergesDeclaredModels pins AddIdentity's handling of the
+// passport-sourced DeclaredModels field: it must survive into the graph (the
+// undeclared_llm detector depends on this, the same way attestation_missing
+// depends on Attestation surviving), and a later merge carrying no
+// DeclaredModels at all must not clear a value set by an earlier one --
+// the same "only overwrite when the incoming value is non-empty" contract
+// every other passport-sourced field on Identity already follows.
+func TestAddIdentityMergesDeclaredModels(t *testing.T) {
+	g := New(nil)
+	g.AddIdentity(model.Identity{
+		ID:   "agent:etl",
+		Type: model.IdentityAgent,
+		DeclaredModels: []model.DeclaredModel{
+			{Provider: "anthropic", Model: "claude-sonnet-4-5", Endpoint: "api.anthropic.com"},
+		},
+	})
+	ids := g.Identities()
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+	want := model.DeclaredModel{Provider: "anthropic", Model: "claude-sonnet-4-5", Endpoint: "api.anthropic.com"}
+	if len(ids[0].DeclaredModels) != 1 || ids[0].DeclaredModels[0] != want {
+		t.Fatalf("DeclaredModels = %+v, want [%+v]", ids[0].DeclaredModels, want)
+	}
+
+	// A second AddIdentity for the same ID with no DeclaredModels (e.g. an
+	// egress connector touching the identity after the passport already
+	// enriched it) must not wipe the earlier declaration.
+	g.AddIdentity(model.Identity{ID: "agent:etl", Type: model.IdentityAgent})
+	if got := g.Identities()[0].DeclaredModels; len(got) != 1 || got[0] != want {
+		t.Fatalf("DeclaredModels after empty merge = %+v, want unchanged [%+v]", got, want)
+	}
+}

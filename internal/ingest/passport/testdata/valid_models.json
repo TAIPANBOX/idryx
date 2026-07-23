@@ -1,0 +1,11 @@
+{
+  "schema": "taipanbox.dev/agent-passport/v0.1",
+  "id": "agent://acme-bank.example/data/etl-declared",
+  "owner": "team-data@acme-bank.example",
+  "runtime": "airflow",
+  "models": [
+    { "provider": "anthropic", "model": "claude-sonnet-4-5", "endpoint": "api.anthropic.com" },
+    { "provider": "", "model": "should-be-skipped-no-provider" },
+    { "provider": "openai" }
+  ]
+}

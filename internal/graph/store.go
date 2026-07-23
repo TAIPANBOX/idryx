@@ -84,6 +84,9 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if in.Attestation != "" {
 		id.Attestation = in.Attestation
 	}
+	if len(in.DeclaredModels) > 0 {
+		id.DeclaredModels = append([]model.DeclaredModel(nil), in.DeclaredModels...)
+	}
 	if in.Shadow {
 		id.Shadow = true
 	}

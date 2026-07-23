@@ -3,6 +3,7 @@ package passport
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/TAIPANBOX/idryx/internal/model"
@@ -67,6 +68,46 @@ func TestParseValidAttestationAbsent(t *testing.T) {
 	}
 }
 
+// TestParseModelsPopulatesDeclaredModels covers the SPEC §4.5 declaration
+// array: a Passport's models entries map into model.Identity.DeclaredModels,
+// and an entry with an empty provider is skipped defensively rather than
+// producing a zero-value DeclaredModel.
+func TestParseModelsPopulatesDeclaredModels(t *testing.T) {
+	data, err := os.ReadFile("testdata/valid_models.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []model.DeclaredModel{
+		{Provider: "anthropic", Model: "claude-sonnet-4-5", Endpoint: "api.anthropic.com"},
+		{Provider: "openai"},
+	}
+	if !reflect.DeepEqual(id.DeclaredModels, want) {
+		t.Errorf("DeclaredModels = %+v, want %+v (empty-provider entry must be skipped)", id.DeclaredModels, want)
+	}
+}
+
+// TestParseNoModelsLeavesDeclaredModelsEmpty covers the common case: a
+// Passport with no models field at all must leave DeclaredModels nil, not a
+// zero-length-but-non-nil slice, so callers can use len()==0 as the "no
+// declaration" signal the undeclared_llm detector depends on.
+func TestParseNoModelsLeavesDeclaredModelsEmpty(t *testing.T) {
+	data, err := os.ReadFile("testdata/valid_spiffe.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(id.DeclaredModels) != 0 {
+		t.Errorf("DeclaredModels = %+v, want empty (fixture has no models field)", id.DeclaredModels)
+	}
+}
+
 func TestParseMalformed(t *testing.T) {
 	cases := []string{
 		"testdata/malformed_missing_owner.json",
@@ -109,17 +150,18 @@ func TestLoadDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 7 files on disk: 3 valid, 4 malformed (bad owner, bad schema, not
+	// 8 files on disk: 4 valid, 4 malformed (bad owner, bad schema, not
 	// json, and malformed_bad_uri.json added for the agent:// URI
-	// validation now enforced by agent-stack-go/passport).
-	if rep.Files != 7 {
-		t.Errorf("Files = %d, want 7", rep.Files)
+	// validation now enforced by agent-stack-go/passport). valid_models.json
+	// (SPEC §4.5 declared-models coverage) is the 4th valid fixture.
+	if rep.Files != 8 {
+		t.Errorf("Files = %d, want 8", rep.Files)
 	}
 	if rep.Malformed != 4 {
 		t.Errorf("Malformed = %d, want 4", rep.Malformed)
 	}
-	if len(identities) != 3 {
-		t.Fatalf("identities = %d, want 3: %+v", len(identities), identities)
+	if len(identities) != 4 {
+		t.Fatalf("identities = %d, want 4: %+v", len(identities), identities)
 	}
 	byID := map[string]model.Identity{}
 	for _, id := range identities {
@@ -134,6 +176,9 @@ func TestLoadDirectory(t *testing.T) {
 	if _, ok := byID["agent://acme-bank.example/eng/ci-fixer"]; !ok {
 		t.Error("missing ci-fixer")
 	}
+	if _, ok := byID["agent://acme-bank.example/data/etl-declared"]; !ok {
+		t.Error("missing etl-declared")
+	}
 }
 
 func TestLoadGlob(t *testing.T) {
@@ -141,11 +186,12 @@ func TestLoadGlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Files != 3 || rep.Malformed != 0 {
-		t.Errorf("Files/Malformed = %d/%d, want 3/0", rep.Files, rep.Malformed)
+	// valid_models.json also matches this glob, so 4 now, not 3.
+	if rep.Files != 4 || rep.Malformed != 0 {
+		t.Errorf("Files/Malformed = %d/%d, want 4/0", rep.Files, rep.Malformed)
 	}
-	if len(identities) != 3 {
-		t.Errorf("identities = %d, want 3", len(identities))
+	if len(identities) != 4 {
+		t.Errorf("identities = %d, want 4", len(identities))
 	}
 }
 

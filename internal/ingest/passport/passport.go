@@ -52,14 +52,26 @@ func Parse(data []byte) (model.Identity, error) {
 	if doc.Attestation != nil {
 		attestation = doc.Attestation.Method
 	}
+	var declaredModels []model.DeclaredModel
+	for _, m := range doc.Models {
+		if m.Provider == "" {
+			continue // defensive: a declaration with no provider carries no signal
+		}
+		declaredModels = append(declaredModels, model.DeclaredModel{
+			Provider: m.Provider,
+			Model:    m.Model,
+			Endpoint: m.Endpoint,
+		})
+	}
 	return model.Identity{
-		ID:          doc.ID,
-		Type:        model.IdentityAgent,
-		Source:      "passport",
-		Owner:       doc.Owner,
-		Runtime:     doc.Runtime,
-		Parent:      doc.Parent,
-		Attestation: attestation,
+		ID:             doc.ID,
+		Type:           model.IdentityAgent,
+		Source:         "passport",
+		Owner:          doc.Owner,
+		Runtime:        doc.Runtime,
+		Parent:         doc.Parent,
+		Attestation:    attestation,
+		DeclaredModels: declaredModels,
 	}, nil
 }
 
