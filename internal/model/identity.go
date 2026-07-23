@@ -93,6 +93,17 @@ type Permission struct {
 	ARN string
 }
 
+// DeclaredModel is one LLM provider/model an agent's Passport declares it is
+// meant to use (agent-passport SPEC §4.5). It mirrors agent-stack-go/passport's
+// wire Model type field-for-field, kept as a local, idryx-only type rather
+// than importing that package here: this model package has no other
+// dependency on agent-stack-go, and a local struct keeps it that way.
+type DeclaredModel struct {
+	Provider string // e.g. "anthropic", "openai"
+	Model    string // specific model name, when declared, e.g. "claude-sonnet-4-5"
+	Endpoint string // specific API host, when declared, e.g. "api.anthropic.com"
+}
+
 // Identity is an actor in the graph: a human, service account, key, or agent.
 type Identity struct {
 	ID         string
@@ -136,6 +147,12 @@ type Identity struct {
 	// as the honest default and expects idryx to surface it, not hide the
 	// distinction from "not evaluated yet".
 	Attestation string
+
+	// DeclaredModels are the LLM providers/models the agent's passport
+	// declares it uses (agent-passport SPEC §4.5); the declared side of the
+	// AI inventory, compared against observed egress by the undeclared_llm
+	// detector.
+	DeclaredModels []DeclaredModel
 
 	// MCP metadata (zero for non-MCP identities).
 	Shadow bool // MCP server in use but absent from the sanctioned registry

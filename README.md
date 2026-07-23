@@ -142,10 +142,11 @@ Agents and the humans in their delegation chain share one identifier scheme,
 speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
 
 - **Agent Passport documents** (`--passports <dir-or-glob>`) - one small, static
-  JSON file per agent: `owner`, `runtime`, `parent`, and `attestation.method`
-  (`none` / `oidc` / `spiffe-svid` / `enclave-key` / `mtls-cert`). Capture-only
-  metadata, layered onto whichever graph a `--source`, `--load`, or `--db`
-  already built.
+  JSON file per agent: `owner`, `runtime`, `parent`, `attestation.method`
+  (`none` / `oidc` / `spiffe-svid` / `enclave-key` / `mtls-cert`), and the LLM
+  providers/models it declares using (`models`, SPEC §4.5, mapped to
+  `Identity.DeclaredModels`). Capture-only metadata, layered onto whichever
+  graph a `--source`, `--load`, or `--db` already built.
 - **Agent-event bus behavioral events** (`--source tokenfuse|wardryx|mockryx|verdryx`
   / `--load tokenfuse:` / `wardryx:` / `mockryx:` / `verdryx:<path|glob>`): NDJSON
   `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2), the shared wire
@@ -159,11 +160,13 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   `dlp_block`, `taint_block`, `mcp_drift`) map to named constants; any other
   type, from TokenFuse or another producer, is tolerated generically.
 
-Two detectors read this agent-governance state directly: `attestation_missing`
+Three detectors read this agent-governance state directly: `attestation_missing`
 (fires on standing privilege alone, a privileged/admin agent with no
-attestation on record) and `runaway_agent` (correlates a TokenFuse
+attestation on record), `runaway_agent` (correlates a TokenFuse
 spend/runaway incident with everything else idryx knows about that agent:
-privilege, delegation depth, attestation, and blast radius).
+privilege, delegation depth, attestation, and blast radius), and
+`undeclared_llm` (correlates a Passport's declared `models` against observed
+LLM egress, flagging an agent that reaches a provider it never declared).
 
 ---
 
@@ -201,12 +204,26 @@ suppresses scoring during a learning period to avoid false positives.
 | `data_exfiltration` | Agents / AI | high, critical at 2x threshold or if privileged/admin | an AI agent accumulating DLP-blocked actions within a 24h window, a repeated attempt to move sensitive data out |
 | `tainted_agent` | Agents / AI | high, critical on repeat or if privileged/admin | an AI agent with a taint-tracked action blocked, a traced injection/exfiltration attempt stopped before it landed |
 | `mcp_drift` | Agents / AI | high, critical on repeat or if privileged/admin | an MCP server's config or exposed tooling changing under an agent, a supply-chain/config-integrity signal |
+| `undeclared_llm` | Agents / AI | high, critical if privileged/admin | an AI agent whose Passport declares which LLM providers/models it uses (agent-passport SPEC §4.5) but whose observed egress reaches a different, undeclared one, declared-vs-observed AI inventory drift |
 | `least_privilege` | Least-privilege | medium, high for an unused admin grant | granted permissions never exercised, with a revocation recommendation |
 
 `agent_shadow_tool` needs the `agents` and `mcp` sources stitched into one
 graph: `idryx detect --load agents:agents.json --load mcp:mcp.json`.
 `least_privilege` fires only for identities that have usage data, so sources
 without an observed-usage signal produce no false recommendations.
+
+`undeclared_llm` is the declared-vs-observed leg of a three-source AI
+inventory idryx is building toward: what an agent's Passport **declares**
+it uses (`--passports`, `models`, SPEC §4.5), what network egress **observes**
+it actually reaching (an `egress`-shaped source, or `ebpf-capture`), and
+eventually what its own source **code** references (not built yet). It needs
+both a `--passports` directory/glob *and* an egress-bearing source in the
+same graph to have anything to compare; an agent with no declared models at
+all is out of scope for it by design (a fresh, un-declared agent's LLM
+egress is `shadow_ai`'s finding, not inventory drift). This is an audit tool
+for an operator checking their *own* agents' actual AI usage against what
+those agents' own passports say, never an enforcement point: idryx only
+ever reports the discrepancy.
 
 ---
 
@@ -366,7 +383,7 @@ runs deterministic detectors.
 | `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
-**Detectors** - see the [Detectors](#detectors) table above: 21 detectors across
+**Detectors** - see the [Detectors](#detectors) table above: 22 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
 
 **Baseline engine** (`internal/baseline`) - learns what is normal per identity

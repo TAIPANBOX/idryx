@@ -358,6 +358,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewTaintedAgent(),
 		detectors.NewMCPDrift(),
 		detectors.NewUnmanagedEgress(),
+		detectors.NewUndeclaredLLM(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
