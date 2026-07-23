@@ -40,7 +40,7 @@ internal/bom             CycloneDX Agent-BOM builder
 internal/remediation     right-sizing + credential-rotation Terraform generation
 internal/enforce         opens a GitHub PR from remediation output (git + gh)
 internal/report          human + JSON alert rendering
-internal/sink            Slack + generic webhook delivery
+internal/sink            Slack + generic webhook + OTLP delivery
 internal/server          read-only HTTP dashboard + JSON API
 ```
 

@@ -409,6 +409,7 @@ func runDetect(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nenv:\n  IDRYX_OTLP_ENDPOINT  OTLP/HTTP collector endpoint to deliver alerts to as trace spans (e.g. http://localhost:4318); unset disables the sink\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -445,6 +446,14 @@ func runDetect(args []string) error {
 	}
 	if *webhookURL != "" {
 		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold, webhookHdr))
+	}
+	// OTLP has no --otlp flag: IDRYX_OTLP_ENDPOINT is the only switch. A
+	// collector endpoint is typically already environment-configured for
+	// every other service in a deployment, so it does not need its own
+	// per-invocation flag. Unset means disabled, exactly like --slack/
+	// --webhook being empty: zero behavior change for anyone not using it.
+	if endpoint := os.Getenv("IDRYX_OTLP_ENDPOINT"); endpoint != "" {
+		sinks = append(sinks, sink.NewOTLP(endpoint, threshold))
 	}
 	for _, s := range sinks {
 		if err := s.Send(alerts); err != nil {
