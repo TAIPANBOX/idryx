@@ -9,7 +9,7 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
-<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx) and Agent Passports feed the idryx core (graph store, baseline engine, 21 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
+<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx) and Agent Passports feed the idryx core (graph store, baseline engine, 22 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
 
 </div>
 
@@ -17,7 +17,7 @@ idryx is a security layer on top of an organization's existing IdPs, clouds, and
 gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
-identity / access graph. Twenty-one deterministic detectors then surface excessive
+identity / access graph. Twenty-two deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open source, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
@@ -173,7 +173,7 @@ LLM egress, flagging an agent that reaches a provider it never declared).
 ## Detectors
 
 <div align="center">
-<img src="docs/detectors.png" alt="idryx's 17 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
+<img src="docs/detectors.png" alt="idryx's 22 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
 </div>
 
 Detection is **deterministic** (statistics + rules over the graph); the LLM is
@@ -479,7 +479,7 @@ JA3/JA4, DNS-tunnel detection, and full identity correlation remain, see
 - [x] Phase 1 - baseline engine, Entra/CloudTrail connectors, Slack/SIEM delivery, web dashboard, Postgres graph
 - [x] Phase 2 - NHI (AWS/GCP/Azure), agents + delegation graph, shadow AI/MCP, least-privilege
 - [x] Phase 3 - remediation: right-sizing + rotation Terraform, PR enforcement (read-only)
-- [x] 21 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
+- [x] 22 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [x] eBPF network-behavior layer (descoped first version): Linux sensor on
