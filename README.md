@@ -73,6 +73,28 @@ and the full detector suite fires correctly off Postgres-backed state.
 
 Full write-up and all numbers: [`VALIDATION.md`](VALIDATION.md).
 
+
+
+### Running it on a Kubernetes cluster
+
+The whole stack was deployed as a five-node k3s cluster on Hetzner, AWS and GCP
+between 25 and 27 July 2026 (six clusters, all destroyed afterwards). The
+manifests, the traps and the evidence are public in
+[stack-k8s](https://github.com/TAIPANBOX/stack-k8s). Idryx is one of the few components that **is** an ordinary
+Deployment plus Service (port 8081), and it is also the reason the cluster
+needs shared storage at all. It builds its graph by READING the event log the
+other planes append to (`--load tokenfuse:<file>`, mounted read-only), so on
+one machine that coupling is invisible and on Kubernetes it becomes a
+ReadWriteMany claim. That claim turned out to be the single largest price
+difference between the clouds: a 5 GiB shared event log costs USD 1.80/month
+on EFS and USD 194.56/month on Filestore, which bills a whole TiB. It also
+runs a nightly `identity-sweep` CronJob (04:42).
+
+To be clear about scope: those runs verified the deployment shape and the
+service coming up correctly on three clouds. They did not drive the detectors at scale: the graph was populated
+from a seeded fleet, not from a production estate. The detector evidence in
+this file is still the one to read.
+
 ---
 
 ## What it does
