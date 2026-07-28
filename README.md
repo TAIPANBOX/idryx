@@ -22,6 +22,14 @@ privilege and anomalous behavior across that graph. Open source, dev-first, buil
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
 
+<div align="center">
+
+<img src="assets/diagram.svg" alt="Idryx architecture: Okta, Entra, AWS, GCP, Azure and the agent-event bus feed one graph core, which emits alerts, an Agent-BOM, a proposed Terraform diff and a read-only dashboard" width="960">
+
+<sub>The same service as its room on <a href="https://it-rat.com/services/idryx.html">it-rat.com</a> draws it, where the diagram sits next to a simulation you can scrub back and forth.</sub>
+
+</div>
+
 ---
 
 ## Where this fits in the stack
@@ -437,8 +445,8 @@ idryx detect --load tokenfuse:events.ndjson \
 ```
 
 TokenFuse Cloud's `/v1/findings` accepts this payload as-is, which puts an
-idryx finding in front of the operator holding the phone, labelled with the
-service that made it. Headers are outbound only: nothing about what idryx
+idryx finding in front of whoever is watching the fleet dashboard, labelled
+with the service that made it. Headers are outbound only: nothing about what idryx
 reads, or how it detects, changes.
 
 Setting `IDRYX_OTLP_ENDPOINT` turns on a hand-rolled OTLP/HTTP JSON exporter

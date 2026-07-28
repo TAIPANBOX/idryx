@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-18 -18 996 376" width="996" height="376" role="img" aria-label="Idryx: identity sources feed one graph that emits alerts, an Agent-BOM and proposed diffs">
+  <title>Idryx: identity sources feed one graph that emits alerts, an Agent-BOM and proposed diffs</title>
+  <rect x="-18" y="-18" width="996" height="376" rx="16" fill="#0A0E13"/>
+  <rect x="-17.5" y="-17.5" width="995" height="375" rx="15.5" fill="none" stroke="rgba(255,255,255,.09)"/>
+
+        <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5A6675"/></marker></defs>
+        <g font-family="ui-monospace,Menlo" text-anchor="middle">
+          <g font-size="12" font-weight="700">
+            <rect x="16" y="24" width="132" height="34" rx="10" fill="#141C27" stroke="#2a3547"/><text x="82" y="45" fill="#E9EFF6">Okta</text>
+            <rect x="16" y="68" width="132" height="34" rx="10" fill="#141C27" stroke="#2a3547"/><text x="82" y="89" fill="#E9EFF6">Entra</text>
+            <rect x="16" y="112" width="132" height="34" rx="10" fill="#141C27" stroke="#2a3547"/><text x="82" y="133" fill="#E9EFF6">AWS</text>
+            <rect x="16" y="156" width="132" height="34" rx="10" fill="#141C27" stroke="#2a3547"/><text x="82" y="177" fill="#E9EFF6">GCP</text>
+            <rect x="16" y="200" width="132" height="34" rx="10" fill="#141C27" stroke="#2a3547"/><text x="82" y="221" fill="#E9EFF6">Azure</text>
+            <rect x="16" y="244" width="132" height="52" rx="10" fill="#141C27" stroke="#93A8C4"/><text x="82" y="262" fill="#93A8C4" font-size="11.5">agent-event bus</text>
+          </g>
+          <text x="82" y="276" fill="#8A97A6" font-size="10.5">tokenfuse &#183; wardryx</text>
+          <text x="82" y="288" fill="#8A97A6" font-size="10.5">mockryx &#183; verdryx</text>
+
+          <rect x="196" y="36" width="300" height="252" rx="16" fill="#10161F" stroke="#34D399" stroke-width="1.4"><animate attributeName="stroke-opacity" values="1;.45;1" dur="3.4s" repeatCount="indefinite"/></rect>
+          <text x="346" y="66" fill="#34D399" font-size="14" font-weight="700">idryx core</text>
+          <g font-size="10.5">
+            <rect x="216" y="84" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="278" y="103" fill="#E9EFF6">identity graph</text>
+            <rect x="352" y="84" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="414" y="103" fill="#E9EFF6">delegation chains</text>
+            <rect x="216" y="122" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="278" y="141" fill="#E9EFF6">22 detectors</text>
+            <rect x="352" y="122" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="414" y="141" fill="#E9EFF6">blast radius</text>
+            <rect x="216" y="160" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="278" y="179" fill="#E9EFF6">baseline engine</text>
+            <rect x="352" y="160" width="125" height="30" rx="8" fill="#141C27" stroke="#2a3547"/><text x="414" y="179" fill="#E9EFF6">postgres 16 graph</text>
+          </g>
+          <text x="346" y="222" fill="#5A6675" font-size="10.5">chains resolve root-first</text>
+          <text x="346" y="250" fill="#34D399" font-size="11" font-weight="700">reads everything, applies nothing</text>
+
+          <g>
+            <rect x="640" y="36" width="300" height="52" rx="12" fill="#141C27" stroke="#2a3547"/>
+            <text x="790" y="57" fill="#E9EFF6" font-size="12" font-weight="700">alerts</text>
+            <text x="790" y="74" fill="#8A97A6" font-size="10.5">Slack &#183; SIEM webhook, filtered by severity</text>
+            <rect x="640" y="102" width="300" height="52" rx="12" fill="#141C27" stroke="#2a3547"/>
+            <text x="790" y="123" fill="#E9EFF6" font-size="12" font-weight="700">Agent-BOM</text>
+            <text x="790" y="140" fill="#8A97A6" font-size="10.5">CycloneDX 1.6 &#183; idryx bom</text>
+            <rect x="640" y="168" width="300" height="52" rx="12" fill="#141C27" stroke="#2a3547"/>
+            <text x="790" y="189" fill="#E9EFF6" font-size="12" font-weight="700">right_size</text>
+            <text x="790" y="206" fill="#8A97A6" font-size="10.5">proposed Terraform diff &#183; PR, never applied</text>
+            <rect x="640" y="234" width="300" height="52" rx="12" fill="#141C27" stroke="#2a3547"/>
+            <text x="790" y="255" fill="#E9EFF6" font-size="12" font-weight="700">serve 127.0.0.1:8080</text>
+            <text x="790" y="272" fill="#8A97A6" font-size="10.5">read-only dashboard + JSON API</text>
+          </g>
+        </g>
+        <g stroke="#5A6675" stroke-width="1.5" class="flow">
+          <line x1="148" y1="41" x2="188" y2="41" marker-end="url(#ar)"/>
+          <line x1="148" y1="85" x2="188" y2="85" marker-end="url(#ar)"/>
+          <line x1="148" y1="129" x2="188" y2="129" marker-end="url(#ar)"/>
+          <line x1="148" y1="173" x2="188" y2="173" marker-end="url(#ar)"/>
+          <line x1="148" y1="217" x2="188" y2="217" marker-end="url(#ar)"/>
+          <line x1="148" y1="270" x2="188" y2="270" marker-end="url(#ar)"/>
+          <line x1="496" y1="62" x2="632" y2="62" marker-end="url(#ar)"/>
+          <line x1="496" y1="128" x2="632" y2="128" marker-end="url(#ar)"/>
+          <line x1="496" y1="194" x2="632" y2="194" marker-end="url(#ar)"/>
+          <line x1="496" y1="260" x2="632" y2="260" marker-end="url(#ar)"/>
+        </g>
+      
+  <g fill="none">
+  <line x1="148" y1="41" x2="188" y2="41" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-0.00s" repeatCount="indefinite"/></line>
+  <line x1="148" y1="85" x2="188" y2="85" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-0.37s" repeatCount="indefinite"/></line>
+  <line x1="148" y1="129" x2="188" y2="129" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-0.74s" repeatCount="indefinite"/></line>
+  <line x1="148" y1="173" x2="188" y2="173" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-1.11s" repeatCount="indefinite"/></line>
+  <line x1="148" y1="217" x2="188" y2="217" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-1.48s" repeatCount="indefinite"/></line>
+  <line x1="148" y1="270" x2="188" y2="270" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-1.85s" repeatCount="indefinite"/></line>
+  <line x1="496" y1="62" x2="632" y2="62" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-2.22s" repeatCount="indefinite"/></line>
+  <line x1="496" y1="128" x2="632" y2="128" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-2.59s" repeatCount="indefinite"/></line>
+  <line x1="496" y1="194" x2="632" y2="194" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-2.96s" repeatCount="indefinite"/></line>
+  <line x1="496" y1="260" x2="632" y2="260" pathLength="100" stroke="#34D399" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-3.33s" repeatCount="indefinite"/></line>
+  </g>
+</svg>
