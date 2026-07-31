@@ -103,6 +103,13 @@ Steps:
 
 ## Known false signals
 
+- **`core.fileMode` is `false` in this repository, so git does not record an
+  executable bit.** `chmod +x` succeeds on disk, git stores `100644`, and CI
+  fails with `Permission denied` on a script that runs fine locally. Add
+  executables with `git update-index --chmod=+x <path>`. This bit
+  `scripts/detectors-complete.sh` on the commit that introduced it, and it had
+  already bitten two other repositories in this estate before that.
+
 - The editor's LSP sometimes reports stale `InvalidIfaceAssign` errors on
   `cmd/idryx/main.go` (detectors "don't implement detect.Detector"). If
   `go build ./...` succeeds, these are **stale cache**, ignore them.
