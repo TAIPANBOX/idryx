@@ -108,7 +108,72 @@ Steps:
 - `Edit` can fail with "String to replace not found" right after a linter touches a
   file. Re-`Read` the file and retry against the current text.
 
+## Hard invariants
+
+Each one carries how it is held today. Use `(gate: ...)`, `(test: ...)`,
+`(partly gated: ...)` or `(not enforced)`, and use the weakest one that is
+true. An invariant with no check, written as though it had one, is worse than
+an absent invariant.
+
+1. **Detection is deterministic.** A detector answers from the graph it was
+   given. Same graph in, same findings out, in the same order. An identity
+   finding that cannot be reproduced from the same input is not evidence and
+   cannot survive being questioned. *(not enforced)*
+2. **Idryx observes, it does not act on the identities it finds.** Remediation
+   produces a proposal a human applies, never an automatic revoke, disable, or
+   permission change against a live directory. This boundary is the difference
+   between an identity-security tool and an attack tool. *(not enforced)*
+3. **`agent-stack-go` is the only source of the wire types.** Passport, event
+   and chain types come from the shared module, pinned by tag. The old
+   `internal/` equivalents are exactly the drift this module was created to
+   end; do not reintroduce one. *(not enforced)*
+4. **The eBPF layer is optional and Linux-only, and its absence is a reported
+   fact, not a silent skip.** Idryx must run and produce a graph on a machine
+   with no eBPF, and must say what it could not observe rather than presenting
+   a partial graph as complete. *(not enforced)*
+5. **A detector that finds nothing must be distinguishable from a detector that
+   did not run.** Zero findings is only meaningful next to a case where the
+   same detector fires. Every new detector needs a fixture that makes it
+   report. *(not enforced)*
+6. **`sandbox.mod` exists to prove the core builds without the eBPF
+   dependency.** It is not a scratch file. Keep it in step with `go.mod` for
+   the dependencies it does declare. *(not enforced)*
+
+## Decisions that have no gate yet
+
+This list is debt, and it is here to stay visible rather than to be tidy.
+**Every invariant above is held by this file alone.** That is the honest state.
+
+Two of them are mechanically checkable and are the place to start:
+
+- **Invariant 4** is the cheapest: build with `sandbox.mod` and assert the
+  binary runs and reports the missing capability, rather than assuming it.
+- **Invariant 5** is the highest value, and it is the same class as "zero
+  violations is worth exactly as much as the ability to see one". A test that
+  runs every registered detector against a fixture designed to trip it, and
+  fails if any detector reports clean, turns a whole class of silent
+  regressions into a red build.
+
+Invariant 3 is checkable by asserting no local type duplicates a shared one,
+but is only worth writing if a duplicate ever appears. Invariants 1 and 2 are
+judgement and probably stay judgement.
+
+## Standing rule
+
+An approved architecture decision is **not finished** until it is two things: a
+numbered invariant in this file, and a gate in a script or a test if it can be
+checked structurally. Until then it is a document, and documents do not stop
+code.
+
+When the user approves a decision, add it here in the same session. Do not
+defer it, because later is where the drift lives.
+
 ## Scope
 
 This repo is **idryx** only. Do not touch the sibling `Qryx` project or its GitHub
 repo unless explicitly asked.
+
+**One instruction file.** This is it. `CLAUDE.md` in this repo is a pointer to
+this file and holds no content of its own, deliberately: two instruction files
+in one repo are two copies of one thing, and two copies of one thing always
+diverge. If you add guidance, add it here.
