@@ -26,6 +26,8 @@ jobs:
         run: go test -race ./...
       - name: build
         run: go build ./...
+      - name: every detector is registered and has a test
+        run: ./scripts/detectors-complete.sh
 
   security:
     runs-on: ubuntu-latest
