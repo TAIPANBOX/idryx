@@ -9,9 +9,10 @@ CI fails on unformatted code. Run this **before every commit** and fix anything
 it reports:
 
 ```sh
-gofmt -l .            # MUST print nothing
-go vet ./...          # MUST exit 0
-go test ./...         # all packages MUST be ok
+gofmt -l .                        # MUST print nothing
+go vet ./...                      # MUST exit 0
+go test ./...                     # all packages MUST be ok
+./scripts/detectors-complete.sh   # every detector registered and tested
 ```
 
 `make lint` runs the first two; `make test` the third. CI additionally runs
@@ -102,6 +103,13 @@ Steps:
 
 ## Known false signals
 
+- **`core.fileMode` is `false` in this repository, so git does not record an
+  executable bit.** `chmod +x` succeeds on disk, git stores `100644`, and CI
+  fails with `Permission denied` on a script that runs fine locally. Add
+  executables with `git update-index --chmod=+x <path>`. This bit
+  `scripts/detectors-complete.sh` on the commit that introduced it, and it had
+  already bitten two other repositories in this estate before that.
+
 - The editor's LSP sometimes reports stale `InvalidIfaceAssign` errors on
   `cmd/idryx/main.go` (detectors "don't implement detect.Detector"). If
   `go build ./...` succeeds, these are **stale cache**, ignore them.
@@ -133,30 +141,48 @@ an absent invariant.
    a partial graph as complete. *(not enforced)*
 5. **A detector that finds nothing must be distinguishable from a detector that
    did not run.** Zero findings is only meaningful next to a case where the
-   same detector fires. Every new detector needs a fixture that makes it
-   report. *(not enforced)*
+   same detector fires.
+   *(test: every detector has its own test file, and the ones sampled assert
+   "expected a finding, got none" rather than merely running without panicking;
+   several also carry an explicit no-finding case. partly gated:
+   `scripts/detectors-complete.sh` holds the structural half, that every
+   detector is registered and has a test file at all)*
 6. **`sandbox.mod` exists to prove the core builds without the eBPF
    dependency.** It is not a scratch file. Keep it in step with `go.mod` for
    the dependencies it does declare. *(not enforced)*
 
 ## Decisions that have no gate yet
 
-This list is debt, and it is here to stay visible rather than to be tidy.
-**Every invariant above is held by this file alone.** That is the honest state.
+**A correction first, because this section was wrong about its own repository.**
+It said every invariant was held by prose alone and singled out invariant 5 as
+the highest-value untested one. Invariant 5 was already largely held: all 22
+detectors have their own test file, and the ones read assert "expected a
+finding, got none" through a helper rather than by counting.
 
-Two of them are mechanically checkable and are the place to start:
+The wrong conclusion came from pattern-matching test sources for
+`len(alerts) == 0` and believing the count. It missed every helper-based
+assertion, which is most of them. **Set a marker from evidence: read the test,
+do not match it.**
 
-- **Invariant 4** is the cheapest: build with `sandbox.mod` and assert the
-  binary runs and reports the missing capability, rather than assuming it.
-- **Invariant 5** is the highest value, and it is the same class as "zero
-  violations is worth exactly as much as the ability to see one". A test that
-  runs every registered detector against a fixture designed to trip it, and
-  fails if any detector reports clean, turns a whole class of silent
-  regressions into a red build.
+**Held by this file alone: invariants 1, 2, 3 and 4.**
 
-Invariant 3 is checkable by asserting no local type duplicates a shared one,
-but is only worth writing if a duplicate ever appears. Invariants 1 and 2 are
-judgement and probably stay judgement.
+What is genuinely missing is structural, not behavioural, and it is now
+`scripts/detectors-complete.sh`. The registry in `cmd/idryx/main.go` is a
+hand-maintained list of 22 constructions. A detector that exists and is never
+registered never runs, and it reads as coverage in every review: the file is
+there, its tests pass, and no identity graph is ever shown to it. The check
+also refuses a registry naming a constructor that does not exist, and a
+detector arriving with no test file at all. All three verified by breaking.
+
+Both properties are true today. That is the point: a ratchet against a
+regression, not a repair.
+
+- **Invariant 4** remains the cheapest thing left: build with `sandbox.mod` and
+  assert the binary runs and reports the missing capability rather than
+  assuming it.
+- **Invariant 3** is checkable by asserting no local type duplicates a shared
+  one, but is only worth writing if a duplicate ever appears.
+- Invariants 1 and 2 are judgement and probably stay judgement.
 
 ## Standing rule
 
