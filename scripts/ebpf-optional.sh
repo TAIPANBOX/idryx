@@ -2,13 +2,22 @@
 # Enforces invariant 4 of AGENTS.md: the eBPF layer is optional and Linux-only,
 # and its absence is a reported fact rather than a silent skip.
 #
-# Two halves, and they fail in different ways.
+# Three halves, and they fail in different ways.
 #
 #   1. idryx BUILDS where eBPF does not exist. Checked by cross-compiling the
 #      whole tree for darwin and windows. If someone puts a Linux-only import
 #      into a file without an OS build tag, this is what catches it.
 #
-#   2. The absence is REPORTED. cmd/idryx/ebpf_other.go carries `//go:build
+#   2. The eBPF dependency is genuinely ABSENT off Linux, not merely harmless.
+#      `go list -deps` for darwin and windows must contain zero cilium/ebpf
+#      packages, and for linux must contain them. Building is a weaker claim
+#      than not depending: until 2026-08-01 the tree cross-compiled fine while
+#      dragging all 19 cilium/ebpf packages into a windows build that can never
+#      use them, because bpf2go tags its output by ARCHITECTURE with no OS
+#      constraint. This is the half that keeps the `linux &&` in front of those
+#      tags, which a regeneration will silently remove.
+#
+#   3. The absence is REPORTED. cmd/idryx/ebpf_other.go carries `//go:build
 #      !linux` and every path through its capture entry point must return an
 #      error naming the platform. A stub that returns an empty result and no
 #      error is the exact failure invariant 4 exists to prevent: a partial
@@ -21,15 +30,16 @@
 # than on others, without saying which it did, is the same class of thing as
 # the silent skip this invariant forbids.
 #
-# ON sandbox.mod, AND WHY IT IS NOT USED HERE. Invariant 6 says sandbox.mod
+# WHAT REPLACED sandbox.mod, AND WHY. Invariant 6 used to say sandbox.mod
 # "exists to prove the core builds without the eBPF dependency" and "is not a
-# scratch file". Measured on 2026-08-01: it is not in the repository at all. It
-# is excluded through .git/info/exclude, which is per-clone and never travels,
-# so nobody who clones idryx has ever had it. It also does not build:
-# `go build -modfile=sandbox.mod ./...` fails on cilium/ebpf and on two
-# agent-stack-go packages. Cross-compilation proves the same property, from
-# files that are actually in the repository, and needs no second module file
-# kept in step by hand. See the debt section of AGENTS.md.
+# scratch file". Measured 2026-08-01, all three claims were false: it was never
+# in the repository (excluded through .git/info/exclude, which is per-clone and
+# never travels), it did not build, and it excluded agent-stack-go, which
+# invariant 3 says is the ONLY source of the wire types and therefore never
+# optional. It was measuring the wrong boundary.
+#
+# Part 2 measures the right one, per GOOS, from files that are committed, with
+# no second module file for anyone to keep in step by hand.
 #
 # This file is the ONE copy of this check.
 
@@ -52,7 +62,30 @@ $(printf '%s' "$out" | sed 's/^/      /' | head -12)"
   fi
 done
 
-# --------------------------------------------------- 2. the absence is reported
+# ------------------------------------------- 2. the dependency is really absent
+#
+# Building is a weaker claim than not depending. Ask the dependency graph
+# directly, per GOOS. The linux side is checked too: an allow-list with nothing
+# on the other side of it would pass while the capture no longer worked at all.
+for os in darwin windows; do
+  n=$(GOOS="$os" go list -deps ./... 2>/dev/null | grep -c 'cilium/ebpf')
+  if [ "$n" -ne 0 ]; then
+    note "a GOOS=$os build pulls in $n cilium/ebpf packages, which it can never use.
+      Almost always this is bpf2go output that lost its \`linux &&\` prefix:
+      bpf2go tags by architecture only and has no flag for an OS constraint, so
+      a regeneration removes it silently. See the note beside //go:generate in
+      internal/ebpfcapture/capture_linux.go."
+  fi
+done
+
+n_linux=$(GOOS=linux go list -deps ./... 2>/dev/null | grep -c 'cilium/ebpf')
+if [ "$n_linux" -eq 0 ]; then
+  note "a GOOS=linux build pulls in NO cilium/ebpf packages, so the capture that
+      this whole invariant is about is not being compiled anywhere. The other
+      half of this check would pass happily on a tree with no eBPF at all."
+fi
+
+# --------------------------------------------------- 3. the absence is reported
 STUB=cmd/idryx/ebpf_other.go
 if [ ! -f "$STUB" ]; then
   note "$STUB is gone. It is the whole of 'the absence is a reported fact': without
@@ -101,6 +134,7 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "OK: the tree cross-compiles for darwin and windows;"
+echo "OK: the tree cross-compiles for darwin and windows and pulls in zero"
+echo "    cilium/ebpf packages there ($n_linux on linux, where it is used);"
 echo "    the non-Linux path reports the missing capability and fails rather than"
 echo "    returning a partial graph as a complete one."

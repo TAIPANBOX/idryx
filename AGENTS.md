@@ -138,9 +138,12 @@ an absent invariant.
 4. **The eBPF layer is optional and Linux-only, and its absence is a reported
    fact, not a silent skip.** Idryx must run and produce a graph on a machine
    with no eBPF, and must say what it could not observe rather than presenting
-   a partial graph as complete. *(gate: `scripts/ebpf-optional.sh`, which
-   cross-compiles the tree for darwin and windows and requires every path
-   through the `!linux` stub to return an error naming the platform)*
+   a partial graph as complete. Optional means the dependency is genuinely
+   absent off Linux, not merely harmless there.
+   *(gate: `scripts/ebpf-optional.sh`, which cross-compiles for darwin and
+   windows, requires `go list -deps` to contain zero `cilium/ebpf` packages
+   there and some on linux, and requires every path through the `!linux` stub
+   to return an error naming the platform)*
 5. **A detector that finds nothing must be distinguishable from a detector that
    did not run.** Zero findings is only meaningful next to a case where the
    same detector fires.
@@ -149,16 +152,6 @@ an absent invariant.
    several also carry an explicit no-finding case. partly gated:
    `scripts/detectors-complete.sh` holds the structural half, that every
    detector is registered and has a test file at all)*
-6. **`sandbox.mod` was meant to prove the core builds without the eBPF
-   dependency. It does not, and it is not in this repository.** Measured
-   2026-08-01: it is excluded through `.git/info/exclude`, which is per-clone
-   and never travels, so no clone has ever had it; and
-   `go build -modfile=sandbox.mod ./...` fails on `cilium/ebpf` and on two
-   `agent-stack-go` packages. Cross-compilation now proves the same property
-   from files that are actually committed. *(not enforced, and its subject does
-   not exist. This invariant is a candidate for deletion, see the debt
-   section.)*
-
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**
@@ -199,12 +192,28 @@ hand. The gate does that, and separately requires the `!linux` stub in
 path: a stub returning an empty result and no error is the exact failure
 invariant 4 exists to prevent, a partial graph presented as complete.
 
-**A decision for the user, not taken here.** Invariant 6 is now describing a
-file that does not exist for anyone. My recommendation is to delete it: the
-property it wanted is held by cross-compilation, and a second module file
-maintained by hand is the same class of drift invariant 3 was written against.
-Deleting a numbered invariant is not something a gate-writing pass should do on
-its own, so it stays, marked as unheld with its subject missing.
+**Invariant 6 is gone, and `sandbox.mod` with it** (@yurii 2026-08-01, "go").
+It said sandbox.mod "exists to prove the core builds without the eBPF
+dependency" and "is not a scratch file". All three claims were false: it was
+never in the repository, it did not build, and it also excluded
+`agent-stack-go`, which invariant 3 says is the ONLY source of the wire types
+and therefore never optional. It was measuring the wrong boundary, from a file
+nobody had.
+
+**The property it wanted was real, and it now holds for the first time.** Until
+2026-08-01 the tree cross-compiled for windows while dragging all 19
+`cilium/ebpf` packages into a build that can never use them, because bpf2go
+tags its output by ARCHITECTURE with no OS constraint and has no flag to add
+one. Putting `linux &&` in front of those two tags takes darwin and windows
+from 19 packages to zero, with linux unchanged. That is the supply-chain claim
+"the eBPF layer is optional" actually being true rather than merely sounding
+true, and part 2 of the gate now holds it.
+
+**One visible debt, chosen over an invisible one.** Those two files are
+bpf2go output marked `DO NOT EDIT`, so a regeneration removes the `linux &&`
+silently. The gate fails on the next push when it does, and a note beside the
+`//go:generate` line in `capture_linux.go` says to put it back. A wart that
+trips a check beats a correctness property nobody is watching.
 
 **One thing worth keeping about how this was verified.** Two of the four break
 tests were wrong before the check was. The first mutation of the stub failed

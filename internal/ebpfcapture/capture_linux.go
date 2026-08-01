@@ -25,6 +25,14 @@ import (
 // conn_event: not found" -- the object still compiles, it just carries no
 // type information to reflect.
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -cc clang bpf bpf/connect.c -- -g -O2 -I bpf
+//
+// AFTER REGENERATING, PUT THE `linux &&` BACK. bpf2go tags bpf_bpfel.go and
+// bpf_bpfeb.go by ARCHITECTURE only, with no OS constraint, and it has no flag
+// to add one. Without `linux &&` those files compile on darwin and windows too,
+// which drags all 19 cilium/ebpf packages into the dependency graph of a build
+// that can never use them. Invariant 4 says the eBPF layer is optional; that is
+// the line that makes it true. `scripts/ebpf-optional.sh` fails the moment it
+// is gone, so this is a visible debt rather than a silent one.
 
 // connEventSize is sizeof(struct conn_event) in connect.c: 4 (pid) + 2
 // (dport) + 4 (daddr) + 16 (comm) + 2 (explicit trailing pad) = 28 bytes.
