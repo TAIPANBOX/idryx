@@ -29,6 +29,9 @@ jobs:
       - name: every detector is registered and has a test
         run: ./scripts/detectors-complete.sh
 
+      - name: eBPF is optional and its absence is reported
+        run: ./scripts/ebpf-optional.sh
+
   security:
     runs-on: ubuntu-latest
     steps:
