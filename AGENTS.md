@@ -138,7 +138,9 @@ an absent invariant.
 4. **The eBPF layer is optional and Linux-only, and its absence is a reported
    fact, not a silent skip.** Idryx must run and produce a graph on a machine
    with no eBPF, and must say what it could not observe rather than presenting
-   a partial graph as complete. *(not enforced)*
+   a partial graph as complete. *(gate: `scripts/ebpf-optional.sh`, which
+   cross-compiles the tree for darwin and windows and requires every path
+   through the `!linux` stub to return an error naming the platform)*
 5. **A detector that finds nothing must be distinguishable from a detector that
    did not run.** Zero findings is only meaningful next to a case where the
    same detector fires.
@@ -147,9 +149,15 @@ an absent invariant.
    several also carry an explicit no-finding case. partly gated:
    `scripts/detectors-complete.sh` holds the structural half, that every
    detector is registered and has a test file at all)*
-6. **`sandbox.mod` exists to prove the core builds without the eBPF
-   dependency.** It is not a scratch file. Keep it in step with `go.mod` for
-   the dependencies it does declare. *(not enforced)*
+6. **`sandbox.mod` was meant to prove the core builds without the eBPF
+   dependency. It does not, and it is not in this repository.** Measured
+   2026-08-01: it is excluded through `.git/info/exclude`, which is per-clone
+   and never travels, so no clone has ever had it; and
+   `go build -modfile=sandbox.mod ./...` fails on `cilium/ebpf` and on two
+   `agent-stack-go` packages. Cross-compilation now proves the same property
+   from files that are actually committed. *(not enforced, and its subject does
+   not exist. This invariant is a candidate for deletion, see the debt
+   section.)*
 
 ## Decisions that have no gate yet
 
@@ -164,8 +172,6 @@ The wrong conclusion came from pattern-matching test sources for
 assertion, which is most of them. **Set a marker from evidence: read the test,
 do not match it.**
 
-**Held by this file alone: invariants 1, 2, 3 and 4.**
-
 What is genuinely missing is structural, not behavioural, and it is now
 `scripts/detectors-complete.sh`. The registry in `cmd/idryx/main.go` is a
 hand-maintained list of 22 constructions. A detector that exists and is never
@@ -177,9 +183,37 @@ detector arriving with no test file at all. All three verified by breaking.
 Both properties are true today. That is the point: a ratchet against a
 regression, not a repair.
 
-- **Invariant 4** remains the cheapest thing left: build with `sandbox.mod` and
-  assert the binary runs and reports the missing capability rather than
-  assuming it.
+**Invariant 4 is now `scripts/ebpf-optional.sh`, and writing it disproved the
+plan this section carried.** The plan was to build with `sandbox.mod`. That
+turned out to rest on a file that is not in the repository: `sandbox.mod` is
+excluded through `.git/info/exclude`, which is a per-clone file that is never
+committed and never travels, so nobody who has ever cloned idryx has had it.
+It also does not build. `go build -modfile=sandbox.mod ./...` fails on
+`cilium/ebpf` and on two `agent-stack-go` packages, so even on the one machine
+that has it, it has not been proving anything.
+
+Cross-compiling the whole tree for darwin and windows proves the same property,
+from files that are committed, and needs no second module file kept in step by
+hand. The gate does that, and separately requires the `!linux` stub in
+`cmd/idryx/ebpf_other.go` to name the platform and to return an error on every
+path: a stub returning an empty result and no error is the exact failure
+invariant 4 exists to prevent, a partial graph presented as complete.
+
+**A decision for the user, not taken here.** Invariant 6 is now describing a
+file that does not exist for anyone. My recommendation is to delete it: the
+property it wanted is held by cross-compilation, and a second module file
+maintained by hand is the same class of drift invariant 3 was written against.
+Deleting a numbered invariant is not something a gate-writing pass should do on
+its own, so it stays, marked as unheld with its subject missing.
+
+**One thing worth keeping about how this was verified.** Two of the four break
+tests were wrong before the check was. The first mutation of the stub failed
+the build on unused imports rather than tripping the silent-skip detector, so
+it went red for the wrong reason; the second used `golang.org/x/sys/unix` as a
+Linux-only import, and it compiles for darwin and windows both. A break test
+that goes red proves nothing until you know which line made it red.
+**Held by this file alone: invariants 1, 2 and 3.**
+
 - **Invariant 3** is checkable by asserting no local type duplicates a shared
   one, but is only worth writing if a duplicate ever appears.
 - Invariants 1 and 2 are judgement and probably stay judgement.
