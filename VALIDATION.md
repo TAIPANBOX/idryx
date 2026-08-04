@@ -30,6 +30,40 @@ CycloneDX 1.6 Agent-BOM generated end to end - all backed by the same real Postg
 - The delegation-chain backfill migration is production-safe to re-run.
 - Agent-BOM generation (CycloneDX 1.6) works end to end against a real Postgres-backed event history.
 
+## A thousand agents, and the ranking that did not survive them
+
+2026-08-04, on a three-node k3s cluster in AWS. `idryx serve` read the TokenFuse event stream live
+(`--load tokenfuse:/var/lib/stack/events/tokenfuse.ndjson`) while fleets of real agents ran real
+calls against the real Anthropic API. **999 unique agent identities, 3000 alerts, unattended.**
+
+The computation held. The ranking did not, and that is the finding.
+
+| Detector | Alerts |
+|---|---|
+| `runaway_agent` | 1000 |
+| `bom_incomplete` | 1000 |
+| `orphaned_nhi` | 1000 |
+
+Exactly one thousand of each: **every agent tripped all three**. Inside `runaway_agent` the breaker
+counts behind those alerts ran from **1 (minimum) to 2 (median) to 73 (worst)**, a
+twenty-nine-fold spread. **All 1000 alerts carried the identical severity, `medium`.** The number
+an operator needed was printed in the summary string and absent from the field they sort by.
+
+The cause was in the design and not in a bug: severity escalated only on corroborating context
+(privilege, delegation depth, attestation, blast radius), and in a real fleet most agents have
+none of it. At the six identities in the README demo this is invisible. At a thousand it is a list
+nobody can work in.
+
+Fixed by letting the size of the incident raise the verdict on its own beside the context rules:
+ten incidents inside the window is at least `high`, fifty is `critical`. Against the measured
+distribution that turns 1000 identical `medium` rows into **1 critical, 4 high and 995 medium**.
+Thresholds are fixed rather than fleet-relative on purpose: a relative threshold reads well until
+every agent is misbehaving, and then it calls the worst offenders normal. Determinism is
+invariant 1.
+
+**What this run did not establish.** Three detectors of twenty-two. The other nineteen had no
+occasion to fire in this data, so nothing here is said about their behaviour at scale.
+
 ## Method
 
 Disposable Hetzner VPS boxes (deleted after each run) with a real Postgres 16 instance; code delivered
