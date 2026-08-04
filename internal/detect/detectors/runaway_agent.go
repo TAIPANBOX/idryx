@@ -26,6 +26,30 @@ const spendWindow = 30 * 24 * time.Hour
 // judge the permissions themselves; this detector only judges reach.
 const blastRadiusThreshold = 5
 
+// repeatedIncidentThreshold is how many spend incidents inside spendWindow
+// stop being a bad day and start being a pattern.
+//
+// It exists because severity used to depend only on the CONTEXT around an
+// agent and not at all on the SIZE of what it did. Measured against a live
+// fleet of 999 agents on 2026-08-04, every finding came back `medium` while
+// the incident counts behind them ranged from 1 to 73: the number an operator
+// needed was printed in the summary and absent from the field they sort by.
+// One alert per agent is still the right shape; ranking them all identically
+// is not.
+//
+// Ten rather than a fleet-relative outlier test, deliberately. A relative
+// threshold reads well until every agent in the fleet is misbehaving, and
+// then it calls the worst offenders normal. This keeps the detector's
+// documented promise of being fixed and deterministic.
+const repeatedIncidentThreshold = 10
+
+// sustainedIncidentThreshold is where repetition stops being a pattern and
+// becomes the whole finding. An agent that hit the same wall fifty times
+// inside the window is not misconfigured, it is looping, and nothing else we
+// know about it changes what to do next. The live fleet's worst offender sat
+// at 73.
+const sustainedIncidentThreshold = 50
+
 // spendEventTypes is the tokenfuse spend/runaway incident taxonomy this
 // detector correlates (agent-passport SPEC §6.2, source "tokenfuse").
 // dlp_block/taint_block/mcp_drift are also tokenfuse types but are not spend
@@ -46,10 +70,22 @@ var spendEventTypes = map[model.EventType]bool{
 // surrounds the spend signal — not a flood of one alert per incident.
 //
 // Severity mapping (fixed, deterministic — documented here, not tunable at
-// runtime):
+// runtime). Two things raise it, and either works without the other:
+//
+// By corroborating context:
 //   - base: at least one spend event in spendWindow -> medium
 //   - >=2 corroborating facts -> high
 //   - >=3 corroborating facts -> critical
+//
+// By the size of the incident, independently:
+//   - >=repeatedIncidentThreshold incidents -> at least high
+//   - >=sustainedIncidentThreshold incidents -> critical
+//
+// The second half exists because the first half alone ranked a live fleet of
+// 999 agents identically: every finding `medium`, while the incident counts
+// behind them ran from 1 to 73. Most agents in a real fleet carry no
+// corroborating context at all, so context-only scoring collapses exactly
+// where it is needed.
 //
 // Corroborating facts (each contributes at most one to the count, order
 // fixed for a deterministic summary):
@@ -116,12 +152,33 @@ func (d *RunawayAgent) Detect(g graph.Reader) []model.Alert {
 			facts++
 			reasons = append(reasons, fmt.Sprintf("blast radius %d", len(blast)))
 		}
+		total := totalEvents(counts)
+		if total >= repeatedIncidentThreshold {
+			reasons = append(reasons, fmt.Sprintf("%d incidents", total))
+		}
 
 		sev := model.SeverityMedium
 		switch {
 		case facts >= 3:
 			sev = model.SeverityCritical
 		case facts >= 2:
+			sev = model.SeverityHigh
+		}
+
+		// The size of the incident raises the verdict on its own, rather than
+		// counting as one more corroborating fact.
+		//
+		// It has to work alone, because in a real fleet most agents have no
+		// corroborating context at all: nothing privileged, nobody delegated
+		// to them, no blast radius. Measured on 999 live agents, that is the
+		// common case, and it is exactly the case where an agent doing the
+		// same bad thing seventy-three times has to outrank one that did it
+		// once. Context can still push the verdict higher; it can no longer
+		// be the only thing that does.
+		switch {
+		case total >= sustainedIncidentThreshold && sev < model.SeverityCritical:
+			sev = model.SeverityCritical
+		case total >= repeatedIncidentThreshold && sev < model.SeverityHigh:
 			sev = model.SeverityHigh
 		}
 		if len(reasons) == 0 {
@@ -169,4 +226,15 @@ func attestationLabel(a string) string {
 		return "unset"
 	}
 	return a
+}
+
+// totalEvents sums a spend-event breakdown. Separate from formatEventCounts
+// because the count decides severity and the string only describes it, and
+// those two should not share a code path.
+func totalEvents(counts map[model.EventType]int) int {
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	return total
 }

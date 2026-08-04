@@ -10,6 +10,10 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
+// manyIncidents is comfortably above whatever threshold the detector uses, so
+// the fixture keeps meaning "a lot" if that threshold is ever retuned.
+const manyIncidents = 20
+
 // spendEvent builds a tokenfuse spend-taxonomy event for id at an offset
 // from fixedNow(), so callers can express "within the window" / "outside the
 // window" declaratively.
@@ -37,6 +41,17 @@ func runawayAgentGraph() *graph.Store {
 	// (no OnBehalfOf), attested, small blast radius -> medium.
 	g.AddIdentity(model.Identity{ID: "agent:zero-facts", Type: model.IdentityAgent, Attestation: "spiffe-svid"})
 	g.AddEvent(spendEvent("agent:zero-facts", model.EventBudgetExhausted, time.Hour))
+
+	// Same zero corroborating context as agent:zero-facts above, and many
+	// more incidents. The pair exists so a test can vary the size of the
+	// incident with everything else held constant.
+	g.AddIdentity(model.Identity{ID: "agent:many-incidents", Type: model.IdentityAgent, Attestation: "spiffe-svid"})
+	// Distinct instants: identical events collapse in the store, which is
+	// correct of it and would quietly turn this fixture into a single
+	// incident wearing a loop.
+	for i := 0; i < manyIncidents; i++ {
+		g.AddEvent(spendEvent("agent:many-incidents", model.EventBudgetExhausted, time.Hour+time.Duration(i)*time.Minute))
+	}
 
 	// 1 corroborating fact (privileged only) -> still medium.
 	g.AddIdentity(model.Identity{ID: "agent:one-fact-privileged", Type: model.IdentityAgent, Privileged: true, Attestation: "oidc"})
@@ -116,6 +131,37 @@ func TestRunawayAgentSeverityEscalation(t *testing.T) {
 		if a.Severity != c.want {
 			t.Errorf("%s: severity = %v, want %v (summary: %s)", c.id, a.Severity, c.want, a.Summary)
 		}
+	}
+}
+
+// The size of the incident has to reach the severity, or a thousand agents
+// with the same context produce a thousand identical alerts and the operator
+// has nothing to sort by.
+//
+// Measured on a live fleet of 999 agents (2026-08-04): every one of them came
+// back `medium`, while the number of breaker trips behind those alerts ranged
+// from 1 to 73. The signal was in the summary text and absent from the field
+// anybody triages on.
+func TestRunawayAgentSeverityRisesWithTheSizeOfTheIncident(t *testing.T) {
+	withFixedNow(t)
+	got := detect(NewRunawayAgent(), runawayAgentGraph())
+
+	quiet, ok := got["agent:zero-facts"]
+	if !ok {
+		t.Fatal("agent:zero-facts: expected a finding")
+	}
+	loud, ok := got["agent:many-incidents"]
+	if !ok {
+		t.Fatal("agent:many-incidents: expected a finding")
+	}
+
+	// Identical in every corroborating respect: not privileged, autonomous,
+	// attested, small blast radius. The only difference is how many times it
+	// happened.
+	if loud.Severity <= quiet.Severity {
+		t.Errorf(
+			"an agent with %d incidents ranks %v, no higher than one with a single incident (%v).\nloud:  %s\nquiet: %s",
+			manyIncidents, loud.Severity, quiet.Severity, loud.Summary, quiet.Summary)
 	}
 }
 
