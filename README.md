@@ -121,8 +121,11 @@ this file is still the one to read.
    (cloud secrets and agent tokens), delivered as PRs and alerts (SIEM / Slack / OTLP).
 
 idryx is a complete MVP for detection and remediation and has passed a security
-self-review (see [`SECURITY.md`](SECURITY.md)). Still ahead, per
-[`idryx-plan.md`](idryx-plan.md): the eBPF network-behavior layer. Blocking,
+self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
+layer has shipped since (the `sys_enter_connect` sensor and its
+`unmanaged_egress` detector); what is still ahead in
+[`idryx-plan.md`](idryx-plan.md)'s Phase 4 is the rest of that layer, beaconing,
+JA3/JA4, DNS-tunnel detection and full identity correlation. Blocking,
 `apply`-style enforcement is intentionally out of scope: idryx proposes, it
 never mutates.
 
@@ -269,7 +272,7 @@ same core, not a separate product. Data flows **source -> graph -> detectors ->
 output**:
 
 ```
-cmd/idryx/main.go          CLI: detect | serve | load | bom | remediate | version
+cmd/idryx/main.go          CLI: detect | serve | load | bom | remediate | ebpf-capture | version
 internal/model               Identity, Event, Permission, Alert, Severity (shared types)
 internal/ingest               source connectors -> []model.Event or []model.Identity
 internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
@@ -304,11 +307,13 @@ Design principles, held as hard rules:
 
 ## Stack
 
-- **Core / ingest:** Go (Rust for hot paths)
-- **Graph:** Postgres (with recursive CTEs) -> graph DB if needed
-- **Analytics / baseline / detection:** Python
-- **API:** Go (gRPC / REST)
-- **UI:** TypeScript (React)
+One language and three direct dependencies. `make build` produces a single binary that carries the dashboard, the detectors and the eBPF program inside it.
+
+- **Core, ingest, baseline, detection, remediation:** Go 1.26. Detection is Go rather than a separate analytics runtime on purpose: it is statistics and rules over the graph, it has to stay deterministic, and somebody eventually has to defend a finding by reading the code that made it.
+- **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`) on the `sys_enter_connect` tracepoint, compiled with `bpf2go` and embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, and the only non-Go source in the repository.
+- **Graph:** in-memory by default, Postgres (`pgx/v5`, embedded `schema.sql`, additive `IF NOT EXISTS` migrations) as the alternative. Both satisfy the same `graph.Reader`, so detectors run unchanged against either. Delegation chains are walked in Go (`graph.WalkDelegationChain`, cycle-safe), not in SQL.
+- **API and dashboard:** Go `net/http`, a JSON API and one self-contained `html/template` page. No frontend build step, no CDN, no framework.
+- **Dependencies:** `cilium/ebpf`, `pgx/v5`, and `agent-stack-go` for the shared wire types. That is the entire list.
 - **License:** Apache-2.0, fully open source. There are no paid Idryx tiers: like the rest of the open TAIPANBOX stack, everything in this repo is free to self-host.
 
 ---
