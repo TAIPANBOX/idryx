@@ -38,6 +38,13 @@ jobs:
       # breaks it in silence.
       - name: a release can be rebuilt byte for byte
         run: ./scripts/reproducible-build.sh
+
+      # A number in a README is a claim with no owner: it is right the day it
+      # is written and the suite grows in a commit that never opens the file.
+      # On 2026-08-05 four of seven such figures on it-rat.com were found
+      # stale against these repositories. This is the same check at the source.
+      - name: the README's numbers are true
+        run: ./scripts/readme-numbers.sh
       - name: every detector is registered and has a test
         run: ./scripts/detectors-complete.sh
 
