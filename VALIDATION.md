@@ -144,3 +144,58 @@ default *value* is loopback and that the warning fires on the right set of addre
 test ./cmd/idryx/... -run 'TestIsLoopbackHost|TestWarnIfNonLoopback'`, 2026-08-05, all pass), not
 that `net/http.ListenAndServe` refuses external connections on `127.0.0.1` -- that is `net/http` and
 the kernel's own well-established behavior, not something this change touches.
+
+## Four connectors dropped malformed records with no counter and no report
+
+2026-08-05, from the same read-only audit. `internal/ingest/okta.go`, `entra.go`, `cloudtrail.go`
+and `egress.go` each `continue`d past any record whose timestamp did not parse as RFC3339, and
+nothing anywhere surfaced how many were skipped. For an identity plane, a silently truncated Okta
+log is a detection gap nobody can see.
+
+The pattern to fix it already existed in this repo: `internal/ingest/tokenfuse/tokenfuse.go`
+carries a `Report{Lines, Malformed, UnknownTypes}` and `cmd/idryx/main.go` prints a stderr summary
+from it. The same shape now applies here, as a new `ingest.Report{Records, Malformed}` (no
+`UnknownTypes`: these four have no notion of an unrecognized *type*, only an unparseable
+timestamp), and a new `reportIngest` in `cmd/idryx/main.go` prints the same stderr summary shape
+`reportTokenFuse`/`reportPassports` already established, rather than a second mechanism.
+
+Before the fix this had no way to compile: every new test asserting `rep.Malformed` against
+`Okta`/`Entra`/`CloudTrail`/`Egress`/`Agents` failed to build, because none of the five returned
+anything but two values (@measured `go test ./internal/ingest/... ./internal/detect/...`,
+2026-08-05, against the unfixed tree):
+
+```
+internal/ingest/agents_test.go:19:17: assignment mismatch: 3 variables but Agents returns 2 values
+internal/ingest/egress_test.go:18:22: assignment mismatch: 3 variables but Egress returns 2 values
+internal/ingest/ingest_test.go:20:22: assignment mismatch: 3 variables but Entra returns 2 values
+internal/ingest/ingest_test.go:179:22: assignment mismatch: 3 variables but CloudTrail returns 2 values
+internal/ingest/okta_test.go:21:22: assignment mismatch: 3 variables but Okta returns 2 values
+FAIL	github.com/TAIPANBOX/idryx/internal/ingest [build failed]
+internal/detect/detect_test.go:19:20: assignment mismatch: 3 variables but ingest.Okta returns 2 values
+FAIL	github.com/TAIPANBOX/idryx/internal/detect [build failed]
+```
+
+`cmd/idryx/main.go`'s own wiring (the new `reportIngest`, and its two call sites inside `populate`)
+was verified the same way rather than assumed: temporarily stubbing `reportIngest` to a no-op, and
+separately dropping its two call sites, reproduced the identical failure mode against
+otherwise-fixed connectors (@measured `go test ./cmd/idryx/... -run
+'TestReportIngestStderrSummary|TestPopulateSurfacesMalformedRecordsOnStderr'`, 2026-08-05: both
+`FAIL`, `expected ... got ""`), then passed once restored.
+
+**Folded in, on inspection: `internal/ingest/agents.go`'s "created" field.** A non-empty `created`
+that fails to parse as RFC3339 was silently absorbed into a zero `Created` -- the same outcome as
+never supplying it -- which makes `GenerateRotation` treat the agent as nothing-to-rotate and
+`stale_nhi` skip it entirely: a typo in an agent inventory silently removes that agent from two
+checks. Unlike the four event connectors this does not drop the record (the agent is still
+ingested; only the one field defaults), so it gets its own test shape rather than reusing the
+four connectors' "one malformed row is missing from the output" assertion, but it reuses the
+identical `Report` type and reaches `reportIngest` through the same `parseInventory` dispatch every
+other inventory source already goes through: `aws_iam`/`gcp_iam`/`azure`/`mcp` now return that same
+signature shape too, always with the zero `Report`, so nothing about their own behavior changes.
+
+**What this did not establish.** No malformed record from a real IdP or CloudTrail export, only
+hand-built fixtures with one bad row each. `runLoad`'s own two `reportIngest` call sites (the `idryx
+load --db` path) are exercised by compilation and by being structurally identical to `populate`'s --
+same `parseSource`/`parseInventory` dispatch, same `reportIngest` call -- but not by a dedicated
+test, because `runLoad` requires a real Postgres DSN and standing one up was out of scope for this
+fix.

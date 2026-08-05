@@ -35,16 +35,22 @@ type oktaEvent struct {
 	} `json:"client"`
 }
 
-// Okta parses an Okta System Log JSON array into normalized events.
-func Okta(data []byte) ([]model.Event, error) {
+// Okta parses an Okta System Log JSON array into normalized events. The
+// returned Report counts how many entries were read and how many were
+// skipped for an unparseable "published" timestamp -- see reportIngest in
+// cmd/idryx/main.go, which surfaces a nonzero count on stderr.
+func Okta(data []byte) ([]model.Event, Report, error) {
 	var raw []oktaEvent
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
+		return nil, Report{}, err
 	}
+	var rep Report
 	out := make([]model.Event, 0, len(raw))
 	for _, r := range raw {
+		rep.Records++
 		t, err := time.Parse(time.RFC3339, r.Published)
 		if err != nil {
+			rep.Malformed++
 			continue // skip entries without a usable timestamp
 		}
 		out = append(out, model.Event{
@@ -60,7 +66,7 @@ func Okta(data []byte) ([]model.Event, error) {
 			Device:     r.Client.UserAgent.RawUserAgent,
 		})
 	}
-	return out, nil
+	return out, rep, nil
 }
 
 // mapType normalizes an Okta eventType into a model.EventType. MFA is checked

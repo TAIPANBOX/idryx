@@ -17,7 +17,7 @@ func TestEntra(t *testing.T) {
 		 "deviceDetail":{"browser":"Chrome","operatingSystem":"macOS"},
 		 "location":{"city":"NY","countryOrRegion":"United States","geoCoordinates":{"latitude":40.7,"longitude":-74.0}}}
 	]}`)
-	events, err := Entra(data)
+	events, rep, err := Entra(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,37 @@ func TestEntra(t *testing.T) {
 	}
 	if events[1].Outcome != "FAILURE" {
 		t.Errorf("event1 outcome = %q, want FAILURE", events[1].Outcome)
+	}
+	if rep.Records != 2 || rep.Malformed != 0 {
+		t.Errorf("rep = %+v, want {Records:2 Malformed:0} (no malformed rows in this fixture)", rep)
+	}
+}
+
+// TestEntraMalformedTimestampSkippedAndCounted is the regression test for a
+// silently truncated Entra sign-in log: an entry whose "createdDateTime"
+// does not parse as RFC3339 was dropped with a bare `continue` and nothing
+// surfaced how many were skipped.
+func TestEntraMalformedTimestampSkippedAndCounted(t *testing.T) {
+	data := []byte(`{"value":[
+		{"createdDateTime":"2026-05-29T10:00:00Z","userPrincipalName":"alice@example.com","status":{"errorCode":0}},
+		{"createdDateTime":"not-a-timestamp","userPrincipalName":"mallory@example.com","status":{"errorCode":0}},
+		{"createdDateTime":"2026-05-29T11:00:00Z","userPrincipalName":"bob@example.com","status":{"errorCode":0}}
+	]}`)
+
+	events, rep, err := Entra(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (the malformed-timestamp entry skipped)", len(events))
+	}
+	if rep.Records != 3 || rep.Malformed != 1 {
+		t.Errorf("rep = %+v, want {Records:3 Malformed:1}", rep)
+	}
+	for _, e := range events {
+		if e.IdentityID == "mallory@example.com" {
+			t.Error("the malformed entry must not appear in the parsed events")
+		}
 	}
 }
 
@@ -145,7 +176,7 @@ func TestCloudTrail(t *testing.T) {
 		{"eventTime":"2026-05-29T10:05:00Z","eventName":"AssumeRole","sourceIPAddress":"5.6.7.8",
 		 "errorCode":"AccessDenied","userIdentity":{"arn":"arn:aws:iam::1:role/deploy","type":"AssumedRole"}}
 	]}`)
-	events, err := CloudTrail(data)
+	events, rep, err := CloudTrail(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,5 +188,36 @@ func TestCloudTrail(t *testing.T) {
 	}
 	if events[1].Type != model.EventOther || events[1].Outcome != "FAILURE" {
 		t.Errorf("event1 = %+v", events[1])
+	}
+	if rep.Records != 2 || rep.Malformed != 0 {
+		t.Errorf("rep = %+v, want {Records:2 Malformed:0} (no malformed rows in this fixture)", rep)
+	}
+}
+
+// TestCloudTrailMalformedTimestampSkippedAndCounted is the regression test
+// for a silently truncated CloudTrail log: a record whose "eventTime" does
+// not parse as RFC3339 was dropped with a bare `continue` and nothing
+// surfaced how many were skipped.
+func TestCloudTrailMalformedTimestampSkippedAndCounted(t *testing.T) {
+	data := []byte(`{"Records":[
+		{"eventTime":"2026-05-29T10:00:00Z","eventName":"ConsoleLogin","userIdentity":{"arn":"arn:aws:iam::1:user/alice","type":"IAMUser"}},
+		{"eventTime":"not-a-timestamp","eventName":"ConsoleLogin","userIdentity":{"arn":"arn:aws:iam::1:user/mallory","type":"IAMUser"}},
+		{"eventTime":"2026-05-29T10:05:00Z","eventName":"AssumeRole","userIdentity":{"arn":"arn:aws:iam::1:role/deploy","type":"AssumedRole"}}
+	]}`)
+
+	events, rep, err := CloudTrail(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (the malformed-timestamp record skipped)", len(events))
+	}
+	if rep.Records != 3 || rep.Malformed != 1 {
+		t.Errorf("rep = %+v, want {Records:3 Malformed:1}", rep)
+	}
+	for _, e := range events {
+		if e.IdentityID == "arn:aws:iam::1:user/mallory" {
+			t.Error("the malformed record must not appear in the parsed events")
+		}
 	}
 }

@@ -15,7 +15,7 @@ func TestEgress(t *testing.T) {
 	  ]
 	}`)
 
-	events, err := Egress(data)
+	events, rep, err := Egress(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,5 +30,14 @@ func TestEgress(t *testing.T) {
 	}
 	if events[0].IdentityID != "arn:role/etl" || events[0].Outcome != "SUCCESS" {
 		t.Errorf("event0 = %+v", events[0])
+	}
+	// The malformed "bad-timestamp" flow above must be counted, not just
+	// silently skipped: a silently truncated egress log is a detection gap
+	// nobody can see.
+	if rep.Records != 3 {
+		t.Errorf("rep.Records = %d, want 3", rep.Records)
+	}
+	if rep.Malformed != 1 {
+		t.Errorf("rep.Malformed = %d, want 1", rep.Malformed)
 	}
 }

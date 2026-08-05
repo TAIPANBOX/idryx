@@ -29,14 +29,27 @@ type agentRecord struct {
 // Agents parses the agent inventory into agent identities. Each tool becomes a
 // permission; a tool whose name implies broad action (admin/delete/write-all)
 // is flagged admin-equivalent so the over-privileged detector catches it too.
-func Agents(data []byte) ([]model.Identity, error) {
+//
+// The returned Report counts how many agent records were read and how many
+// carried a non-empty "created" that failed to parse as RFC3339. That field
+// is optional, so a missing "created" is not malformed -- but a present,
+// unparseable one used to be silently absorbed into a zero Created (same
+// outcome as never having supplied it), which makes GenerateRotation treat
+// the agent as nothing-to-rotate and stale_nhi skip it: a typo silently
+// removing an agent from two checks. Unlike the four event connectors, a
+// malformed "created" does not drop the agent record itself, only leaves
+// Created zero as before; see reportIngest in cmd/idryx/main.go, which
+// surfaces a nonzero Malformed count on stderr.
+func Agents(data []byte) ([]model.Identity, Report, error) {
 	var in agentInventory
 	if err := json.Unmarshal(data, &in); err != nil {
-		return nil, err
+		return nil, Report{}, err
 	}
 
+	var rep Report
 	out := make([]model.Identity, 0, len(in.Agents))
 	for _, a := range in.Agents {
+		rep.Records++
 		id := model.Identity{
 			ID:      a.ID,
 			Type:    model.IdentityAgent,
@@ -50,6 +63,8 @@ func Agents(data []byte) ([]model.Identity, error) {
 		if a.Created != "" {
 			if t, err := time.Parse(time.RFC3339, a.Created); err == nil {
 				id.Created = t
+			} else {
+				rep.Malformed++
 			}
 		}
 		used := make(map[string]bool, len(a.UsedTools))
@@ -66,7 +81,7 @@ func Agents(data []byte) ([]model.Identity, error) {
 		id.Privileged = id.HasAdmin()
 		out = append(out, id)
 	}
-	return out, nil
+	return out, rep, nil
 }
 
 // isHighRiskTool flags tool/scope names that grant broad or destructive action.

@@ -301,23 +301,25 @@ func populate(g *graph.Store, spec loadSpec) error {
 	}
 
 	// Inventory sources (identities + permissions).
-	if ids, ok, err := parseInventory(spec.Source, data); err != nil {
+	if ids, ok, rep, err := parseInventory(spec.Source, data); err != nil {
 		return err
 	} else if ok {
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
+		reportIngest(spec.Source, spec.Path, rep)
 		return nil
 	}
 
 	// Event sources.
-	events, err := parseSource(spec.Source, data)
+	events, rep, err := parseSource(spec.Source, data)
 	if err != nil {
 		return fmt.Errorf("parse %s log: %w", spec.Source, err)
 	}
 	for _, e := range events {
 		g.AddEvent(e)
 	}
+	reportIngest(spec.Source, spec.Path, rep)
 	return nil
 }
 
@@ -334,6 +336,22 @@ func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
 	}
 	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
 		source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+}
+
+// reportIngest prints a one-line stderr summary when an okta/entra/
+// cloudtrail/egress/agents batch (see parseSource/parseInventory) had any
+// malformed record -- a timestamp that does not parse as RFC3339 for the
+// four event sources, or, for agents, a non-empty "created" that doesn't --
+// mirroring reportTokenFuse/reportPassports. Before this, all five `continue`d
+// past a bad record with nothing anywhere saying how many were skipped: for
+// an identity plane, a silently truncated log is a detection gap nobody can
+// see.
+func reportIngest(source, path string, rep ingest.Report) {
+	if rep.Malformed == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d record(s) read, %d malformed\n",
+		source, path, rep.Records, rep.Malformed)
 }
 
 // runDetectors runs all detectors over the graph and returns their alerts.
@@ -726,7 +744,7 @@ func runLoad(args []string) error {
 		return err
 	}
 
-	if ids, isInventory, err := parseInventory(*source, data); isInventory {
+	if ids, isInventory, rep, err := parseInventory(*source, data); isInventory {
 		if err != nil {
 			return err
 		}
@@ -741,10 +759,11 @@ func runLoad(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities into postgres\n", len(ids))
+		reportIngest(*source, fs.Arg(0), rep)
 		return ingestPassportsPg(store, *passports)
 	}
 
-	events, err := parseSource(*source, data)
+	events, rep, err := parseSource(*source, data)
 	if err != nil {
 		return fmt.Errorf("parse %s log: %w", *source, err)
 	}
@@ -753,6 +772,7 @@ func runLoad(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "idryx: ingested %d events into postgres\n", len(events))
+	reportIngest(*source, fs.Arg(0), rep)
 	return ingestPassportsPg(store, *passports)
 }
 
@@ -791,26 +811,30 @@ func parseSeverity(s string) (model.Severity, bool) {
 }
 
 // parseInventory handles inventory sources (NHI identities, not events). The
-// bool reports whether source was an inventory source at all.
-func parseInventory(source string, data []byte) ([]model.Identity, bool, error) {
+// bool reports whether source was an inventory source at all. Only "agents"
+// produces a nonzero ingest.Report today (aws_iam/gcp_iam/azure/mcp have no
+// malformed-record concept of their own); the other four always return the
+// zero Report, which reportIngest treats as a no-op, so this is a uniform
+// return shape with no behavior change for them.
+func parseInventory(source string, data []byte) ([]model.Identity, bool, ingest.Report, error) {
 	switch source {
 	case "aws_iam":
 		ids, err := ingest.AWSIAM(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "gcp_iam":
 		ids, err := ingest.GCPIAM(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "azure":
 		ids, err := ingest.Azure(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "agents":
-		ids, err := ingest.Agents(data)
-		return ids, true, wrapParse(source, err)
+		ids, rep, err := ingest.Agents(data)
+		return ids, true, rep, wrapParse(source, err)
 	case "mcp":
 		ids, err := ingest.MCP(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	default:
-		return nil, false, nil
+		return nil, false, ingest.Report{}, nil
 	}
 }
 
@@ -821,7 +845,7 @@ func wrapParse(source string, err error) error {
 	return nil
 }
 
-func parseSource(source string, data []byte) ([]model.Event, error) {
+func parseSource(source string, data []byte) ([]model.Event, ingest.Report, error) {
 	switch source {
 	case "okta":
 		return ingest.Okta(data)
@@ -832,7 +856,7 @@ func parseSource(source string, data []byte) ([]model.Event, error) {
 	case "egress":
 		return ingest.Egress(data)
 	default:
-		return nil, fmt.Errorf("unknown source %q", source)
+		return nil, ingest.Report{}, fmt.Errorf("unknown source %q", source)
 	}
 }
 

@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/TAIPANBOX/idryx/internal/bom"
+	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -514,5 +516,92 @@ func TestWarnIfNonLoopback(t *testing.T) {
 		if got && !strings.Contains(buf.String(), c.addr) {
 			t.Errorf("warnIfNonLoopback(%q): warning does not name the address it warned about: %q", c.addr, buf.String())
 		}
+	}
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it, mirroring captureStdout.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	fn()
+	_ = w.Close()
+	os.Stderr = old
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stderr: %v", err)
+	}
+	return string(data)
+}
+
+// TestReportIngestStderrSummary is the regression test for the stderr half
+// of the malformed-record fix: reportIngest must print a summary naming the
+// source, path and count when anything was dropped, and print nothing when
+// nothing was, mirroring reportTokenFuse/reportPassports' existing contract.
+func TestReportIngestStderrSummary(t *testing.T) {
+	out := captureStderr(t, func() {
+		reportIngest("okta", "events.json", ingest.Report{Records: 3, Malformed: 1})
+	})
+	if !strings.Contains(out, "okta") || !strings.Contains(out, "events.json") || !strings.Contains(out, "1 malformed") {
+		t.Errorf("expected a summary naming the source, path and malformed count, got %q", out)
+	}
+
+	clean := captureStderr(t, func() {
+		reportIngest("okta", "events.json", ingest.Report{Records: 3, Malformed: 0})
+	})
+	if clean != "" {
+		t.Errorf("expected no output for a clean report, got %q", clean)
+	}
+}
+
+// TestPopulateSurfacesMalformedRecordsOnStderr is the CLI-level wiring check
+// for the malformed-record fix: a real --load okta:<path> batch with one
+// unparseable timestamp must print reportIngest's summary on stderr, and a
+// clean batch must print nothing. This exercises the real path (populate ->
+// parseSource -> ingest.Okta -> reportIngest), not the helper in isolation,
+// so a wiring mistake (e.g. the wrong spec.Path passed through) would still
+// be caught even if reportIngest itself is correct.
+func TestPopulateSurfacesMalformedRecordsOnStderr(t *testing.T) {
+	dirty := filepath.Join(t.TempDir(), "okta.json")
+	dirtyData := []byte(`[
+		{"published":"2026-05-29T10:00:00Z","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"alice@example.com"}},
+		{"published":"not-a-timestamp","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"mallory@example.com"}}
+	]`)
+	if err := os.WriteFile(dirty, dirtyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loads := loadList{{Source: "okta", Path: dirty}}
+	out := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loads); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "okta") || !strings.Contains(out, dirty) || !strings.Contains(out, "1 malformed") {
+		t.Errorf("expected the malformed-record summary (source, path, count) on stderr, got %q", out)
+	}
+
+	clean := filepath.Join(t.TempDir(), "okta_clean.json")
+	cleanData := []byte(`[
+		{"published":"2026-05-29T10:00:00Z","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"alice@example.com"}}
+	]`)
+	if err := os.WriteFile(clean, cleanData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loads2 := loadList{{Source: "okta", Path: clean}}
+	out2 := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loads2); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if out2 != "" {
+		t.Errorf("expected no stderr output for a clean batch, got %q", out2)
 	}
 }

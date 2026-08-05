@@ -16,7 +16,7 @@ func TestDetectorsOnFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := ingest.Okta(data)
+	events, _, err := ingest.Okta(data)
 	if err != nil {
 		t.Fatal(err)
 	}

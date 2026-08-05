@@ -37,24 +37,29 @@ type entraEnvelope struct {
 
 // Entra parses a Microsoft Entra ID sign-in log (Graph API JSON) into
 // normalized events. It accepts either the {"value": [...]} envelope or a bare
-// array.
-func Entra(data []byte) ([]model.Event, error) {
+// array. The returned Report counts how many entries were read and how many
+// were skipped for an unparseable "createdDateTime" -- see reportIngest in
+// cmd/idryx/main.go, which surfaces a nonzero count on stderr.
+func Entra(data []byte) ([]model.Event, Report, error) {
 	var env entraEnvelope
 	if err := json.Unmarshal(data, &env); err != nil || env.Value == nil {
 		var bare []entraSignIn
 		if err2 := json.Unmarshal(data, &bare); err2 != nil {
 			if err != nil {
-				return nil, err
+				return nil, Report{}, err
 			}
-			return nil, err2
+			return nil, Report{}, err2
 		}
 		env.Value = bare
 	}
 
+	var rep Report
 	out := make([]model.Event, 0, len(env.Value))
 	for _, r := range env.Value {
+		rep.Records++
 		t, err := time.Parse(time.RFC3339, r.CreatedDateTime)
 		if err != nil {
+			rep.Malformed++
 			continue
 		}
 		outcome := "SUCCESS"
@@ -75,5 +80,5 @@ func Entra(data []byte) ([]model.Event, error) {
 			Device:     device,
 		})
 	}
-	return out, nil
+	return out, rep, nil
 }

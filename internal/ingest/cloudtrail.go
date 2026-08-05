@@ -29,17 +29,23 @@ type ctEnvelope struct {
 
 // CloudTrail parses an AWS CloudTrail log into normalized events. ConsoleLogin
 // maps to a login event; other API calls are recorded as generic events so the
-// graph captures NHI/role activity for later phases.
-func CloudTrail(data []byte) ([]model.Event, error) {
+// graph captures NHI/role activity for later phases. The returned Report
+// counts how many records were read and how many were skipped for an
+// unparseable "eventTime" -- see reportIngest in cmd/idryx/main.go, which
+// surfaces a nonzero count on stderr.
+func CloudTrail(data []byte) ([]model.Event, Report, error) {
 	var env ctEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		return nil, err
+		return nil, Report{}, err
 	}
 
+	var rep Report
 	out := make([]model.Event, 0, len(env.Records))
 	for _, r := range env.Records {
+		rep.Records++
 		t, err := time.Parse(time.RFC3339, r.EventTime)
 		if err != nil {
+			rep.Malformed++
 			continue
 		}
 		id := r.UserIdentity.ARN
@@ -63,7 +69,7 @@ func CloudTrail(data []byte) ([]model.Event, error) {
 			Device:     r.UserAgent,
 		})
 	}
-	return out, nil
+	return out, rep, nil
 }
 
 // CloudTrailUsage returns a map of normalized principal ARN to the set of AWS
