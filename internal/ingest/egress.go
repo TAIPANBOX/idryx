@@ -23,15 +23,21 @@ type egressFlow struct {
 
 // Egress parses a network-egress log into egress events. These carry the
 // destination host in Resource; the shadow_ai detector reasons over them.
-func Egress(data []byte) ([]model.Event, error) {
+// The returned Report counts how many flows were read and how many were
+// skipped for an unparseable "time" -- see reportIngest in
+// cmd/idryx/main.go, which surfaces a nonzero count on stderr.
+func Egress(data []byte) ([]model.Event, Report, error) {
 	var l egressLog
 	if err := json.Unmarshal(data, &l); err != nil {
-		return nil, err
+		return nil, Report{}, err
 	}
+	var rep Report
 	out := make([]model.Event, 0, len(l.Flows))
 	for _, f := range l.Flows {
+		rep.Records++
 		t, err := time.Parse(time.RFC3339, f.Time)
 		if err != nil {
+			rep.Malformed++
 			continue
 		}
 		out = append(out, model.Event{
@@ -42,5 +48,5 @@ func Egress(data []byte) ([]model.Event, error) {
 			Resource:   f.Destination,
 		})
 	}
-	return out, nil
+	return out, rep, nil
 }

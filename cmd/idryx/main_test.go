@@ -1,15 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/TAIPANBOX/idryx/internal/bom"
+	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -433,5 +441,346 @@ func TestRunBomUnknownFormat(t *testing.T) {
 	err := runBom([]string{"-source", "agents", "-format", "bogus", "../../testdata/demo_agents.json"})
 	if err == nil {
 		t.Fatal("expected an error for an unknown -format")
+	}
+}
+
+// TestServeDefaultAddrIsLoopback is the regression test for `idryx serve`
+// binding every interface by default. SECURITY.md documents /api/alerts,
+// /api/identities and /api/remediations as having no authentication,
+// authorization, CORS policy or rate limiting, on the assumption that the
+// operator reaches the dashboard over a WireGuard/SSH tunnel -- a deliberate,
+// documented constraint. Defaulting the *bind* to every interface made that
+// constraint easy to violate by accident: a naive `idryx serve <log.json>`
+// with no flags exposed the whole identity graph to the network. Kept
+// simple and direct per instruction: this is a property of a constant, so it
+// is asserted directly, with no listener or network call involved.
+func TestServeDefaultAddrIsLoopback(t *testing.T) {
+	host, _, err := net.SplitHostPort(defaultServeAddr)
+	if err != nil {
+		t.Fatalf("net.SplitHostPort(%q): %v", defaultServeAddr, err)
+	}
+	if !isLoopbackHost(host) {
+		t.Errorf("defaultServeAddr = %q: host %q is not loopback-only, so a bare "+
+			"`idryx serve <log.json>` binds every interface on a dashboard "+
+			"SECURITY.md documents as having no authentication", defaultServeAddr, host)
+	}
+}
+
+// TestIsLoopbackHost pins the loopback classification isLoopbackHost makes,
+// including the ":8080"-style empty host (net.SplitHostPort's shape for an
+// address with no host part), which means "every interface" in net/http and
+// must NOT be treated as loopback.
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.5.5.5", true}, // the whole 127.0.0.0/8 block is loopback, not just .1
+		{"localhost", true},
+		{"LOCALHOST", true},
+		{"::1", true},
+		{"", false}, // ":8080" -> SplitHostPort gives an empty host -> all interfaces
+		{"0.0.0.0", false},
+		{"10.0.0.5", false},
+		{"idryx.internal", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackHost(c.host); got != c.want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+}
+
+// TestWarnIfNonLoopback is the regression test for the loud-warning half of
+// the fix (mirroring tokenfuse's TOKENFUSE_CLOUD_HOST precedent,
+// crates/cloud/src/main.rs): an operator who deliberately widens -addr must
+// still see, unmissably, that the dashboard SECURITY.md documents as
+// unauthenticated is now reachable from the network. A loopback bind must
+// print nothing.
+func TestWarnIfNonLoopback(t *testing.T) {
+	cases := []struct {
+		addr     string
+		wantWarn bool
+	}{
+		{"127.0.0.1:8080", false},
+		{"localhost:8080", false},
+		{"[::1]:8080", false},
+		{":8080", true},
+		{"0.0.0.0:8080", true},
+		{"10.0.0.5:8080", true},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		warnIfNonLoopback(&buf, c.addr)
+		got := buf.Len() > 0
+		if got != c.wantWarn {
+			t.Errorf("warnIfNonLoopback(%q): wrote output = %v, want %v (output: %q)", c.addr, got, c.wantWarn, buf.String())
+		}
+		if got && !strings.Contains(buf.String(), c.addr) {
+			t.Errorf("warnIfNonLoopback(%q): warning does not name the address it warned about: %q", c.addr, buf.String())
+		}
+	}
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it, mirroring captureStdout.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	fn()
+	_ = w.Close()
+	os.Stderr = old
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stderr: %v", err)
+	}
+	return string(data)
+}
+
+// TestReportIngestStderrSummary is the regression test for the stderr half
+// of the malformed-record fix: reportIngest must print a summary naming the
+// source, path and count when anything was dropped, and print nothing when
+// nothing was, mirroring reportTokenFuse/reportPassports' existing contract.
+func TestReportIngestStderrSummary(t *testing.T) {
+	out := captureStderr(t, func() {
+		reportIngest("okta", "events.json", ingest.Report{Records: 3, Malformed: 1})
+	})
+	if !strings.Contains(out, "okta") || !strings.Contains(out, "events.json") || !strings.Contains(out, "1 malformed") {
+		t.Errorf("expected a summary naming the source, path and malformed count, got %q", out)
+	}
+
+	clean := captureStderr(t, func() {
+		reportIngest("okta", "events.json", ingest.Report{Records: 3, Malformed: 0})
+	})
+	if clean != "" {
+		t.Errorf("expected no output for a clean report, got %q", clean)
+	}
+}
+
+// TestPopulateSurfacesMalformedRecordsOnStderr is the CLI-level wiring check
+// for the malformed-record fix: a real --load okta:<path> batch with one
+// unparseable timestamp must print reportIngest's summary on stderr, and a
+// clean batch must print nothing. This exercises the real path (populate ->
+// parseSource -> ingest.Okta -> reportIngest), not the helper in isolation,
+// so a wiring mistake (e.g. the wrong spec.Path passed through) would still
+// be caught even if reportIngest itself is correct.
+func TestPopulateSurfacesMalformedRecordsOnStderr(t *testing.T) {
+	dirty := filepath.Join(t.TempDir(), "okta.json")
+	dirtyData := []byte(`[
+		{"published":"2026-05-29T10:00:00Z","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"alice@example.com"}},
+		{"published":"not-a-timestamp","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"mallory@example.com"}}
+	]`)
+	if err := os.WriteFile(dirty, dirtyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loads := loadList{{Source: "okta", Path: dirty}}
+	out := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loads); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "okta") || !strings.Contains(out, dirty) || !strings.Contains(out, "1 malformed") {
+		t.Errorf("expected the malformed-record summary (source, path, count) on stderr, got %q", out)
+	}
+
+	clean := filepath.Join(t.TempDir(), "okta_clean.json")
+	cleanData := []byte(`[
+		{"published":"2026-05-29T10:00:00Z","eventType":"user.session.start","outcome":{"result":"SUCCESS"},"actor":{"alternateId":"alice@example.com"}}
+	]`)
+	if err := os.WriteFile(clean, cleanData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loads2 := loadList{{Source: "okta", Path: clean}}
+	out2 := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loads2); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if out2 != "" {
+		t.Errorf("expected no stderr output for a clean batch, got %q", out2)
+	}
+}
+
+// detectArgsFor builds the standard runDetect args this file's sink tests
+// share: --privileged bob/carol makes mfa_fatigue and new_device fire at
+// high severity or above on testdata/events.json (see
+// TestRunDetectOTLPWiring above), so the default --min-severity high
+// threshold delivers alerts without needing to lower it. extra is appended
+// (e.g. -slack/-webhook flags).
+func detectArgsFor(extra ...string) []string {
+	args := []string{"-privileged", "bob@example.com,carol@example.com"}
+	args = append(args, extra...)
+	return append(args, "../../testdata/events.json")
+}
+
+// TestRunDetectSinkFailureIsNonZero is the regression test for defect 3: a
+// failing alert sink (here, a webhook returning 401) must not let
+// `idryx detect` report success. Before the fix, runDetect printed one
+// stderr line per failing sink and unconditionally returned nil -- a cron or
+// CI invocation whose webhook is 401ing reports success indefinitely.
+func TestRunDetectSinkFailureIsNonZero(t *testing.T) {
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer deadSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-webhook", deadSrv.URL))
+	})
+	if err == nil {
+		t.Fatal("expected a non-nil error when the only configured sink fails to deliver")
+	}
+	if !errors.Is(err, errSinkDelivery) {
+		t.Errorf("error = %v, want it to wrap errSinkDelivery so main() can map it to a distinct exit code", err)
+	}
+}
+
+// TestRunDetectWorkingSinkNoError is the counterpart: a sink that delivers
+// successfully must not turn a clean run into an error.
+func TestRunDetectWorkingSinkNoError(t *testing.T) {
+	var calls int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-webhook", okSrv.URL))
+	})
+	if err != nil {
+		t.Fatalf("runDetect: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("expected the webhook to have been called at least once")
+	}
+}
+
+// TestRunDetectPartialSinkFailureStillDeliversWorkingSink is the regression
+// test for the "two sinks configured, one fails" case the task calls out
+// explicitly: the failure must still be visible (non-zero, wrapping
+// errSinkDelivery), and the loop must not abort early -- the working sink
+// must still receive the alerts.
+func TestRunDetectPartialSinkFailureStillDeliversWorkingSink(t *testing.T) {
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer deadSrv.Close()
+
+	var received []map[string]any
+	var calls int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-slack", deadSrv.URL, "-webhook", okSrv.URL))
+	})
+	if err == nil {
+		t.Fatal("expected a non-nil error: one of the two configured sinks failed")
+	}
+	if !errors.Is(err, errSinkDelivery) {
+		t.Errorf("error = %v, want it to wrap errSinkDelivery", err)
+	}
+	if calls == 0 {
+		t.Fatal("the working webhook sink must still have been called despite the slack sink failing")
+	}
+	if len(received) == 0 {
+		t.Error("the working webhook sink must still have received the alerts")
+	}
+}
+
+// idryxTestBinary builds the idryx binary once (cached across the whole test
+// binary run via sync.Once) so process-exit-code tests can exec it directly.
+// This is the one thing that cannot be exercised by calling run()/runDetect()
+// in-process: main()'s own os.Exit mapping. An in-process test of runDetect's
+// return value would not catch a bug where main() forgot to check
+// errors.Is(err, errSinkDelivery) at all.
+var (
+	testBinOnce sync.Once
+	testBinPath string
+	testBinErr  error
+)
+
+func idryxTestBinary(t *testing.T) string {
+	t.Helper()
+	testBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "idryx-bin-*")
+		if err != nil {
+			testBinErr = err
+			return
+		}
+		testBinPath = filepath.Join(dir, "idryx")
+		cmd := exec.Command("go", "build", "-o", testBinPath, ".")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			testBinErr = fmt.Errorf("go build idryx: %w\n%s", err, out)
+		}
+	})
+	if testBinErr != nil {
+		t.Fatalf("%v", testBinErr)
+	}
+	return testBinPath
+}
+
+// TestMainExitCodeSinkDeliveryFailure is the process-level proof that a
+// failing alert sink turns into a non-zero OS exit code: a cron/CI
+// invocation checks $?, not idryx's internal error type, so this is the
+// contract that actually matters to a caller.
+func TestMainExitCodeSinkDeliveryFailure(t *testing.T) {
+	bin := idryxTestBinary(t)
+
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer deadSrv.Close()
+
+	cmd := exec.Command(bin, "detect",
+		"-privileged", "bob@example.com,carol@example.com",
+		"-webhook", deadSrv.URL,
+		"../../testdata/events.json")
+	out, runErr := cmd.CombinedOutput()
+	exitErr, ok := runErr.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected the process to exit non-zero via *exec.ExitError, got err=%v (type %T)\noutput:\n%s", runErr, runErr, out)
+	}
+	if code := exitErr.ExitCode(); code != exitSinkDelivery {
+		t.Errorf("exit code = %d, want %d (exitSinkDelivery)\noutput:\n%s", code, exitSinkDelivery, out)
+	}
+}
+
+// TestMainExitCodeCleanRunIsZero is the counterpart at the process level: a
+// working sink must exit 0, not just "not exitSinkDelivery".
+func TestMainExitCodeCleanRunIsZero(t *testing.T) {
+	bin := idryxTestBinary(t)
+
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	cmd := exec.Command(bin, "detect",
+		"-privileged", "bob@example.com,carol@example.com",
+		"-webhook", okSrv.URL,
+		"../../testdata/events.json")
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("expected exit 0, got err=%v\noutput:\n%s", runErr, out)
 	}
 }

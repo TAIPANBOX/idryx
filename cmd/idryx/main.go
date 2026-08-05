@@ -5,8 +5,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,10 +37,42 @@ import (
 // version is overridden at build time via -ldflags.
 var version = "dev"
 
+// errSinkDelivery marks a runDetect error caused by one or more configured
+// alert sinks (--slack/--webhook/OTLP) failing to deliver, as opposed to a
+// setup/input error (bad flags, an unreadable file, a graph that failed to
+// build). Detection and rendering (report.Human/report.JSON) already ran and
+// are unaffected; this only marks delivery as having failed. main() maps it
+// to its own exit code (exitSinkDelivery) so a cron/CI caller can tell "the
+// scan ran and alerts existed but did not reach their destination" apart
+// from "the invocation itself was broken" by checking $?, without scraping
+// stderr text.
+var errSinkDelivery = errors.New("one or more alert sinks failed to deliver")
+
+// exitSinkDelivery is the process exit code for errSinkDelivery.
+//
+// idryx has exactly one other meaningful exit code today: 1, for any other
+// error (see main() below) -- there is no --fail-on flag and no
+// findings-threshold exit code in this repo to collide with (that is a
+// tokenfuse/mcp-scan feature; idryx has never had one), and no existing use
+// of 2 either.
+//
+// This picks 3, not 2, on purpose: idryx's sibling tokenfuse uses 1 for
+// "findings met --fail-on's threshold" and 2 for "a bad --fail-on value" in
+// its own mcp-scan command (crates/gateway/src/main.rs). idryx has no such
+// flag today, but if it ever grows one that mirrors that convention, this
+// choice leaves both of tokenfuse's codes free for it to reuse verbatim,
+// rather than a sink-delivery failure quietly squatting on either meaning
+// first.
+const exitSinkDelivery = 3
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "idryx:", err)
-		os.Exit(1)
+		code := 1
+		if errors.Is(err, errSinkDelivery) {
+			code = exitSinkDelivery
+		}
+		os.Exit(code)
 	}
 }
 
@@ -299,23 +334,25 @@ func populate(g *graph.Store, spec loadSpec) error {
 	}
 
 	// Inventory sources (identities + permissions).
-	if ids, ok, err := parseInventory(spec.Source, data); err != nil {
+	if ids, ok, rep, err := parseInventory(spec.Source, data); err != nil {
 		return err
 	} else if ok {
 		for _, id := range ids {
 			g.AddIdentity(id)
 		}
+		reportIngest(spec.Source, spec.Path, rep)
 		return nil
 	}
 
 	// Event sources.
-	events, err := parseSource(spec.Source, data)
+	events, rep, err := parseSource(spec.Source, data)
 	if err != nil {
 		return fmt.Errorf("parse %s log: %w", spec.Source, err)
 	}
 	for _, e := range events {
 		g.AddEvent(e)
 	}
+	reportIngest(spec.Source, spec.Path, rep)
 	return nil
 }
 
@@ -332,6 +369,22 @@ func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
 	}
 	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
 		source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+}
+
+// reportIngest prints a one-line stderr summary when an okta/entra/
+// cloudtrail/egress/agents batch (see parseSource/parseInventory) had any
+// malformed record -- a timestamp that does not parse as RFC3339 for the
+// four event sources, or, for agents, a non-empty "created" that doesn't --
+// mirroring reportTokenFuse/reportPassports. Before this, all five `continue`d
+// past a bad record with nothing anywhere saying how many were skipped: for
+// an identity plane, a silently truncated log is a detection gap nobody can
+// see.
+func reportIngest(source, path string, rep ingest.Report) {
+	if rep.Malformed == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d record(s) read, %d malformed\n",
+		source, path, rep.Records, rep.Malformed)
 }
 
 // runDetectors runs all detectors over the graph and returns their alerts.
@@ -456,10 +509,18 @@ func runDetect(args []string) error {
 	if endpoint := os.Getenv("IDRYX_OTLP_ENDPOINT"); endpoint != "" {
 		sinks = append(sinks, sink.NewOTLP(endpoint, threshold))
 	}
+	var failedSinks int
 	for _, s := range sinks {
 		if err := s.Send(alerts); err != nil {
 			fmt.Fprintf(os.Stderr, "idryx: sink %s: %v\n", s.Name(), err)
+			failedSinks++
 		}
+	}
+	if failedSinks > 0 {
+		// The loop above already tried every sink (no early return on the
+		// first failure), so a partial failure still delivered to whichever
+		// sinks worked; only the exit status reflects the failure here.
+		return fmt.Errorf("%d of %d alert sink(s) failed to deliver: %w", failedSinks, len(sinks), errSinkDelivery)
 	}
 	return nil
 }
@@ -517,10 +578,61 @@ func runBom(args []string) error {
 	}
 }
 
+// defaultServeAddr is the default bind address for `idryx serve`: loopback
+// only. internal/server has no authentication, authorization, CORS policy or
+// rate limiting on /api/alerts, /api/identities or /api/remediations --
+// together the whole identity graph, every alert summary, and every
+// generated remediation -- and SECURITY.md documents that gap deliberately,
+// on the assumption the operator reaches it over a WireGuard/SSH tunnel.
+// That is a documented constraint, not a defect; defaulting the *bind* to
+// every interface made it easy to violate by accident. An operator who
+// genuinely wants a wider bind passes -addr explicitly and gets
+// warnIfNonLoopback's warning below.
+const defaultServeAddr = "127.0.0.1:8080"
+
+// isLoopbackHost reports whether host -- the host part of an -addr value,
+// e.g. from net.SplitHostPort -- is loopback-only. An empty host (as in
+// ":8080", -addr's previous default) means "every interface" to net/http, so
+// it is NOT loopback. Beyond the literal 127.0.0.1, this accepts the whole
+// 127.0.0.0/8 range and ::1 (net.IP.IsLoopback), plus the "localhost" name,
+// mirroring the precedent in tokenfuse's control plane
+// (TOKENFUSE_CLOUD_HOST, crates/cloud/src/main.rs), which checks
+// "127.0.0.1" | "localhost" | "::1".
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// warnIfNonLoopback prints a loud, unmissable warning to w when addr's host
+// is not loopback-only, mirroring the precedent in tokenfuse's control plane
+// (TOKENFUSE_CLOUD_HOST: binds to loopback by default, warns loudly on a
+// wider bind; see crates/cloud/src/main.rs). The dashboard's lack of auth is
+// a deliberate, documented constraint (SECURITY.md), so a wider bind is
+// meant to be a visible, deliberate operator choice, not a silent default.
+// A malformed addr (fails SplitHostPort, e.g. a bare hostname with no port)
+// is still checked against its own literal value, so a typo does not dodge
+// the warning by accident.
+func warnIfNonLoopback(w io.Writer, addr string) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if isLoopbackHost(host) {
+		return
+	}
+	fmt.Fprintf(w, "idryx: warning: serving on %s, which is not loopback-only: the dashboard is now reachable from the network. SECURITY.md documents /api/alerts, /api/identities and /api/remediations as having no authentication, authorization, CORS policy or rate limiting; restrict this with a firewall or a WireGuard/SSH tunnel (the assumed deployment model), or bind to 127.0.0.1, unless this exposure is deliberate and already secured another way.\n", addr)
+}
+
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var (
-		addr       = fs.String("addr", ":8080", "address to listen on")
+		addr       = fs.String("addr", defaultServeAddr, "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
@@ -602,6 +714,7 @@ func runServe(args []string) error {
 		refreshNote = "refreshing every " + refresh.String()
 	}
 	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts, %s)\n", shown, len(alerts), refreshNote)
+	warnIfNonLoopback(os.Stderr, *addr)
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),
@@ -672,7 +785,7 @@ func runLoad(args []string) error {
 		return err
 	}
 
-	if ids, isInventory, err := parseInventory(*source, data); isInventory {
+	if ids, isInventory, rep, err := parseInventory(*source, data); isInventory {
 		if err != nil {
 			return err
 		}
@@ -687,10 +800,11 @@ func runLoad(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "idryx: ingested %d identities into postgres\n", len(ids))
+		reportIngest(*source, fs.Arg(0), rep)
 		return ingestPassportsPg(store, *passports)
 	}
 
-	events, err := parseSource(*source, data)
+	events, rep, err := parseSource(*source, data)
 	if err != nil {
 		return fmt.Errorf("parse %s log: %w", *source, err)
 	}
@@ -699,6 +813,7 @@ func runLoad(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "idryx: ingested %d events into postgres\n", len(events))
+	reportIngest(*source, fs.Arg(0), rep)
 	return ingestPassportsPg(store, *passports)
 }
 
@@ -737,26 +852,30 @@ func parseSeverity(s string) (model.Severity, bool) {
 }
 
 // parseInventory handles inventory sources (NHI identities, not events). The
-// bool reports whether source was an inventory source at all.
-func parseInventory(source string, data []byte) ([]model.Identity, bool, error) {
+// bool reports whether source was an inventory source at all. Only "agents"
+// produces a nonzero ingest.Report today (aws_iam/gcp_iam/azure/mcp have no
+// malformed-record concept of their own); the other four always return the
+// zero Report, which reportIngest treats as a no-op, so this is a uniform
+// return shape with no behavior change for them.
+func parseInventory(source string, data []byte) ([]model.Identity, bool, ingest.Report, error) {
 	switch source {
 	case "aws_iam":
 		ids, err := ingest.AWSIAM(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "gcp_iam":
 		ids, err := ingest.GCPIAM(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "azure":
 		ids, err := ingest.Azure(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	case "agents":
-		ids, err := ingest.Agents(data)
-		return ids, true, wrapParse(source, err)
+		ids, rep, err := ingest.Agents(data)
+		return ids, true, rep, wrapParse(source, err)
 	case "mcp":
 		ids, err := ingest.MCP(data)
-		return ids, true, wrapParse(source, err)
+		return ids, true, ingest.Report{}, wrapParse(source, err)
 	default:
-		return nil, false, nil
+		return nil, false, ingest.Report{}, nil
 	}
 }
 
@@ -767,7 +886,7 @@ func wrapParse(source string, err error) error {
 	return nil
 }
 
-func parseSource(source string, data []byte) ([]model.Event, error) {
+func parseSource(source string, data []byte) ([]model.Event, ingest.Report, error) {
 	switch source {
 	case "okta":
 		return ingest.Okta(data)
@@ -778,7 +897,7 @@ func parseSource(source string, data []byte) ([]model.Event, error) {
 	case "egress":
 		return ingest.Egress(data)
 	default:
-		return nil, fmt.Errorf("unknown source %q", source)
+		return nil, ingest.Report{}, fmt.Errorf("unknown source %q", source)
 	}
 }
 

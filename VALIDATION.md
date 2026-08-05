@@ -107,3 +107,141 @@ interpolated handler at all fails rather than passes. Red on the unfixed line, g
 **What this did not establish.** The payload was not fired in a real browser; the evidence above is at
 the escaping layer, one decode short of a click. And the check reads the shipped page's own syntax, so
 it holds this shape of handler, not a future one built by `addEventListener` or a template literal.
+
+## `idryx serve` defaulted to every interface, not just loopback
+
+2026-08-05, from the same read-only audit. `idryx serve`'s `-addr` flag defaulted to `:8080`
+(`cmd/idryx/main.go`, `runServe`), which `net/http` binds to every interface, not just loopback.
+`internal/server/server.go` serves `/api/alerts`, `/api/identities` and `/api/remediations` with no
+authentication, authorization, CORS policy or rate limiting -- together the whole identity graph,
+every alert summary and every generated remediation. SECURITY.md documents that gap deliberately, on
+the assumption the operator reaches the dashboard over a WireGuard/SSH tunnel: a documented
+constraint, not a defect. The defect was the *default bind*, which made that constraint easy to
+violate by accident -- `idryx serve <log.json>` with no other flags put an identity plane on the
+open network.
+
+The regression test asserts the default address is loopback directly, with no listener and no
+network call, because the property under test is a compile-time constant: `defaultServeAddr =
+"127.0.0.1:8080"`, checked with the same `isLoopbackHost` helper the runtime warning below uses.
+Before the fix, this did not compile, because the code had no way to express "the default is
+loopback" at all (@measured `go test ./cmd/idryx/... -run TestServeDefaultAddrIsLoopback`,
+2026-08-05, against the unfixed tree):
+
+```
+cmd/idryx/main_test.go:452:36: undefined: defaultServeAddr
+cmd/idryx/main_test.go:456:6: undefined: isLoopbackHost
+FAIL	github.com/TAIPANBOX/idryx/cmd/idryx [build failed]
+```
+
+Fixed by defaulting `-addr` to `127.0.0.1:8080`. An operator who wants a wider bind still gets one by
+passing `-addr` explicitly, and now sees why it matters: mirroring the precedent already in this
+estate (tokenfuse's control plane, `TOKENFUSE_CLOUD_HOST`, `crates/cloud/src/main.rs`, binds to
+loopback by default and warns loudly on a wider bind), a non-loopback `-addr` now prints an
+unmissable stderr warning naming the exact SECURITY.md gap it is exposing.
+
+**What this did not establish.** No live network scan of a bound socket. The evidence is that the
+default *value* is loopback and that the warning fires on the right set of addresses (@measured `go
+test ./cmd/idryx/... -run 'TestIsLoopbackHost|TestWarnIfNonLoopback'`, 2026-08-05, all pass), not
+that `net/http.ListenAndServe` refuses external connections on `127.0.0.1` -- that is `net/http` and
+the kernel's own well-established behavior, not something this change touches.
+
+## Four connectors dropped malformed records with no counter and no report
+
+2026-08-05, from the same read-only audit. `internal/ingest/okta.go`, `entra.go`, `cloudtrail.go`
+and `egress.go` each `continue`d past any record whose timestamp did not parse as RFC3339, and
+nothing anywhere surfaced how many were skipped. For an identity plane, a silently truncated Okta
+log is a detection gap nobody can see.
+
+The pattern to fix it already existed in this repo: `internal/ingest/tokenfuse/tokenfuse.go`
+carries a `Report{Lines, Malformed, UnknownTypes}` and `cmd/idryx/main.go` prints a stderr summary
+from it. The same shape now applies here, as a new `ingest.Report{Records, Malformed}` (no
+`UnknownTypes`: these four have no notion of an unrecognized *type*, only an unparseable
+timestamp), and a new `reportIngest` in `cmd/idryx/main.go` prints the same stderr summary shape
+`reportTokenFuse`/`reportPassports` already established, rather than a second mechanism.
+
+Before the fix this had no way to compile: every new test asserting `rep.Malformed` against
+`Okta`/`Entra`/`CloudTrail`/`Egress`/`Agents` failed to build, because none of the five returned
+anything but two values (@measured `go test ./internal/ingest/... ./internal/detect/...`,
+2026-08-05, against the unfixed tree):
+
+```
+internal/ingest/agents_test.go:19:17: assignment mismatch: 3 variables but Agents returns 2 values
+internal/ingest/egress_test.go:18:22: assignment mismatch: 3 variables but Egress returns 2 values
+internal/ingest/ingest_test.go:20:22: assignment mismatch: 3 variables but Entra returns 2 values
+internal/ingest/ingest_test.go:179:22: assignment mismatch: 3 variables but CloudTrail returns 2 values
+internal/ingest/okta_test.go:21:22: assignment mismatch: 3 variables but Okta returns 2 values
+FAIL	github.com/TAIPANBOX/idryx/internal/ingest [build failed]
+internal/detect/detect_test.go:19:20: assignment mismatch: 3 variables but ingest.Okta returns 2 values
+FAIL	github.com/TAIPANBOX/idryx/internal/detect [build failed]
+```
+
+`cmd/idryx/main.go`'s own wiring (the new `reportIngest`, and its two call sites inside `populate`)
+was verified the same way rather than assumed: temporarily stubbing `reportIngest` to a no-op, and
+separately dropping its two call sites, reproduced the identical failure mode against
+otherwise-fixed connectors (@measured `go test ./cmd/idryx/... -run
+'TestReportIngestStderrSummary|TestPopulateSurfacesMalformedRecordsOnStderr'`, 2026-08-05: both
+`FAIL`, `expected ... got ""`), then passed once restored.
+
+**Folded in, on inspection: `internal/ingest/agents.go`'s "created" field.** A non-empty `created`
+that fails to parse as RFC3339 was silently absorbed into a zero `Created` -- the same outcome as
+never supplying it -- which makes `GenerateRotation` treat the agent as nothing-to-rotate and
+`stale_nhi` skip it entirely: a typo in an agent inventory silently removes that agent from two
+checks. Unlike the four event connectors this does not drop the record (the agent is still
+ingested; only the one field defaults), so it gets its own test shape rather than reusing the
+four connectors' "one malformed row is missing from the output" assertion, but it reuses the
+identical `Report` type and reaches `reportIngest` through the same `parseInventory` dispatch every
+other inventory source already goes through: `aws_iam`/`gcp_iam`/`azure`/`mcp` now return that same
+signature shape too, always with the zero `Report`, so nothing about their own behavior changes.
+
+**What this did not establish.** No malformed record from a real IdP or CloudTrail export, only
+hand-built fixtures with one bad row each. `runLoad`'s own two `reportIngest` call sites (the `idryx
+load --db` path) are exercised by compilation and by being structurally identical to `populate`'s --
+same `parseSource`/`parseInventory` dispatch, same `reportIngest` call -- but not by a dedicated
+test, because `runLoad` requires a real Postgres DSN and standing one up was out of scope for this
+fix.
+
+## Alert delivery failure did not fail the command
+
+2026-08-05, from the same read-only audit. `runDetect` in `cmd/idryx/main.go` looped over the
+constructed sinks and, on a `Send` error, printed one stderr line and continued -- but the function
+then unconditionally `return nil`. A cron or CI invocation whose SIEM webhook is 401ing, or whose
+Slack URL is dead, reported success indefinitely: exit 0 either way.
+
+Fixed by counting delivery failures across the loop (which already tried every sink; nothing here
+changes that) and returning a wrapped `errSinkDelivery` when any sink failed, which `main()` maps to
+exit code 3 -- distinct from exit 1 (idryx's existing generic error path: bad flags, an unreadable
+file, a graph that failed to build) and from exit 0 (a clean run). 3, not 2: tokenfuse's own
+`mcp-scan` command (`crates/gateway/src/main.rs`) uses 1 for "findings met `--fail-on`'s threshold"
+and 2 for "a bad `--fail-on` value". idryx has no `--fail-on` flag today -- that premise, checked
+against this repository rather than assumed from tokenfuse's, does not hold here -- but if idryx ever
+grows one shaped like tokenfuse's, this choice leaves both of tokenfuse's codes free for it to reuse
+verbatim, rather than a sink-delivery failure quietly squatting on either meaning first.
+
+The regression tests cover the failing case, the working case, and the partial case named
+explicitly: two sinks, one fails. The failure must still be visible AND the working sink must still
+receive the alerts, proving the loop was never short-circuited. Before the fix none of this
+compiled, because neither `errSinkDelivery` nor `exitSinkDelivery` existed (@measured `go vet
+./cmd/idryx/...`, 2026-08-05, against the unfixed tree):
+
+```
+cmd/idryx/main_test.go:643:21: undefined: errSinkDelivery
+cmd/idryx/main_test.go:698:21: undefined: errSinkDelivery
+cmd/idryx/main_test.go:763:41: undefined: exitSinkDelivery
+cmd/idryx/main_test.go:764:77: undefined: exitSinkDelivery
+FAIL	github.com/TAIPANBOX/idryx/cmd/idryx [build failed]
+```
+
+Two of the five new tests exec the built binary rather than calling `run()`/`runDetect()`
+in-process (@measured `go test ./cmd/idryx/... -run
+'TestMainExitCodeSinkDeliveryFailure|TestMainExitCodeCleanRunIsZero'`, 2026-08-05, both pass),
+because `main()`'s own `os.Exit` mapping is the one piece of this fix an in-process test cannot
+reach: `os.Exit` inside the test binary would kill the test run itself, so a bug where `main()`
+forgot to check `errors.Is(err, errSinkDelivery)` at all would pass every in-process assertion and
+still exit 0 for a real caller.
+
+**What this did not establish.** No real SIEM/Slack endpoint; the failing sinks in every test are
+local `httptest` servers returning 401/500. And OTLP (`internal/sink/otlp.go`) was exercised only
+through the same shared loop in `runDetect`, via Slack/webhook mocks -- its own `Send` was not
+separately driven into a failure to confirm this specific loop counts an OTLP failure identically,
+though the loop's logic is sink-agnostic (it only calls the `sink.Sink` interface, the same one
+Slack and webhook implement).
