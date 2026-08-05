@@ -107,3 +107,40 @@ interpolated handler at all fails rather than passes. Red on the unfixed line, g
 **What this did not establish.** The payload was not fired in a real browser; the evidence above is at
 the escaping layer, one decode short of a click. And the check reads the shipped page's own syntax, so
 it holds this shape of handler, not a future one built by `addEventListener` or a template literal.
+
+## `idryx serve` defaulted to every interface, not just loopback
+
+2026-08-05, from the same read-only audit. `idryx serve`'s `-addr` flag defaulted to `:8080`
+(`cmd/idryx/main.go`, `runServe`), which `net/http` binds to every interface, not just loopback.
+`internal/server/server.go` serves `/api/alerts`, `/api/identities` and `/api/remediations` with no
+authentication, authorization, CORS policy or rate limiting -- together the whole identity graph,
+every alert summary and every generated remediation. SECURITY.md documents that gap deliberately, on
+the assumption the operator reaches the dashboard over a WireGuard/SSH tunnel: a documented
+constraint, not a defect. The defect was the *default bind*, which made that constraint easy to
+violate by accident -- `idryx serve <log.json>` with no other flags put an identity plane on the
+open network.
+
+The regression test asserts the default address is loopback directly, with no listener and no
+network call, because the property under test is a compile-time constant: `defaultServeAddr =
+"127.0.0.1:8080"`, checked with the same `isLoopbackHost` helper the runtime warning below uses.
+Before the fix, this did not compile, because the code had no way to express "the default is
+loopback" at all (@measured `go test ./cmd/idryx/... -run TestServeDefaultAddrIsLoopback`,
+2026-08-05, against the unfixed tree):
+
+```
+cmd/idryx/main_test.go:452:36: undefined: defaultServeAddr
+cmd/idryx/main_test.go:456:6: undefined: isLoopbackHost
+FAIL	github.com/TAIPANBOX/idryx/cmd/idryx [build failed]
+```
+
+Fixed by defaulting `-addr` to `127.0.0.1:8080`. An operator who wants a wider bind still gets one by
+passing `-addr` explicitly, and now sees why it matters: mirroring the precedent already in this
+estate (tokenfuse's control plane, `TOKENFUSE_CLOUD_HOST`, `crates/cloud/src/main.rs`, binds to
+loopback by default and warns loudly on a wider bind), a non-loopback `-addr` now prints an
+unmissable stderr warning naming the exact SECURITY.md gap it is exposing.
+
+**What this did not establish.** No live network scan of a bound socket. The evidence is that the
+default *value* is loopback and that the warning fires on the right set of addresses (@measured `go
+test ./cmd/idryx/... -run 'TestIsLoopbackHost|TestWarnIfNonLoopback'`, 2026-08-05, all pass), not
+that `net/http.ListenAndServe` refuses external connections on `127.0.0.1` -- that is `net/http` and
+the kernel's own well-established behavior, not something this change touches.

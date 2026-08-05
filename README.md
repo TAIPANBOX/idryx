@@ -474,8 +474,8 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 ./bin/idryx remediate --open-pr --repo ../iac iam.json  # open a GitHub PR with the .tf (git+gh; never applies)
 
 # serve: read-only web dashboard + JSON API
-./bin/idryx serve <log.json>                        # dashboard on :8080
-./bin/idryx serve --addr :9000 <log.json>           # custom address
+./bin/idryx serve <log.json>                        # dashboard on 127.0.0.1:8080 (loopback only by default)
+./bin/idryx serve --addr :9000 <log.json>           # wider bind, explicit opt-in (warns loudly: see SECURITY.md)
 
 # load: persist a log into a Postgres graph, then read from it
 ./bin/idryx load --db "$DSN" <log.json>             # ingest into Postgres

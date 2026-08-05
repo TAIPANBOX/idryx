@@ -11,7 +11,7 @@ make test     # run tests
 make lint     # gofmt + go vet
 make detect   # ITDR detectors over the event fixtures
 make nhi      # NHI + agent + shadow-ai detectors over the inventory fixtures
-make serve    # read-only dashboard on :8080
+make serve    # read-only dashboard on 127.0.0.1:8080 (loopback only by default)
 ```
 
 Before every commit, this must be clean:

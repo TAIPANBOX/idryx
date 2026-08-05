@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -517,10 +519,61 @@ func runBom(args []string) error {
 	}
 }
 
+// defaultServeAddr is the default bind address for `idryx serve`: loopback
+// only. internal/server has no authentication, authorization, CORS policy or
+// rate limiting on /api/alerts, /api/identities or /api/remediations --
+// together the whole identity graph, every alert summary, and every
+// generated remediation -- and SECURITY.md documents that gap deliberately,
+// on the assumption the operator reaches it over a WireGuard/SSH tunnel.
+// That is a documented constraint, not a defect; defaulting the *bind* to
+// every interface made it easy to violate by accident. An operator who
+// genuinely wants a wider bind passes -addr explicitly and gets
+// warnIfNonLoopback's warning below.
+const defaultServeAddr = "127.0.0.1:8080"
+
+// isLoopbackHost reports whether host -- the host part of an -addr value,
+// e.g. from net.SplitHostPort -- is loopback-only. An empty host (as in
+// ":8080", -addr's previous default) means "every interface" to net/http, so
+// it is NOT loopback. Beyond the literal 127.0.0.1, this accepts the whole
+// 127.0.0.0/8 range and ::1 (net.IP.IsLoopback), plus the "localhost" name,
+// mirroring the precedent in tokenfuse's control plane
+// (TOKENFUSE_CLOUD_HOST, crates/cloud/src/main.rs), which checks
+// "127.0.0.1" | "localhost" | "::1".
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// warnIfNonLoopback prints a loud, unmissable warning to w when addr's host
+// is not loopback-only, mirroring the precedent in tokenfuse's control plane
+// (TOKENFUSE_CLOUD_HOST: binds to loopback by default, warns loudly on a
+// wider bind; see crates/cloud/src/main.rs). The dashboard's lack of auth is
+// a deliberate, documented constraint (SECURITY.md), so a wider bind is
+// meant to be a visible, deliberate operator choice, not a silent default.
+// A malformed addr (fails SplitHostPort, e.g. a bare hostname with no port)
+// is still checked against its own literal value, so a typo does not dodge
+// the warning by accident.
+func warnIfNonLoopback(w io.Writer, addr string) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if isLoopbackHost(host) {
+		return
+	}
+	fmt.Fprintf(w, "idryx: warning: serving on %s, which is not loopback-only: the dashboard is now reachable from the network. SECURITY.md documents /api/alerts, /api/identities and /api/remediations as having no authentication, authorization, CORS policy or rate limiting; restrict this with a firewall or a WireGuard/SSH tunnel (the assumed deployment model), or bind to 127.0.0.1, unless this exposure is deliberate and already secured another way.\n", addr)
+}
+
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var (
-		addr       = fs.String("addr", ":8080", "address to listen on")
+		addr       = fs.String("addr", defaultServeAddr, "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
@@ -602,6 +655,7 @@ func runServe(args []string) error {
 		refreshNote = "refreshing every " + refresh.String()
 	}
 	fmt.Fprintf(os.Stderr, "idryx: serving dashboard on http://%s (%d alerts, %s)\n", shown, len(alerts), refreshNote)
+	warnIfNonLoopback(os.Stderr, *addr)
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

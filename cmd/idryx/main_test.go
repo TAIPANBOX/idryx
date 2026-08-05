@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -433,5 +435,84 @@ func TestRunBomUnknownFormat(t *testing.T) {
 	err := runBom([]string{"-source", "agents", "-format", "bogus", "../../testdata/demo_agents.json"})
 	if err == nil {
 		t.Fatal("expected an error for an unknown -format")
+	}
+}
+
+// TestServeDefaultAddrIsLoopback is the regression test for `idryx serve`
+// binding every interface by default. SECURITY.md documents /api/alerts,
+// /api/identities and /api/remediations as having no authentication,
+// authorization, CORS policy or rate limiting, on the assumption that the
+// operator reaches the dashboard over a WireGuard/SSH tunnel -- a deliberate,
+// documented constraint. Defaulting the *bind* to every interface made that
+// constraint easy to violate by accident: a naive `idryx serve <log.json>`
+// with no flags exposed the whole identity graph to the network. Kept
+// simple and direct per instruction: this is a property of a constant, so it
+// is asserted directly, with no listener or network call involved.
+func TestServeDefaultAddrIsLoopback(t *testing.T) {
+	host, _, err := net.SplitHostPort(defaultServeAddr)
+	if err != nil {
+		t.Fatalf("net.SplitHostPort(%q): %v", defaultServeAddr, err)
+	}
+	if !isLoopbackHost(host) {
+		t.Errorf("defaultServeAddr = %q: host %q is not loopback-only, so a bare "+
+			"`idryx serve <log.json>` binds every interface on a dashboard "+
+			"SECURITY.md documents as having no authentication", defaultServeAddr, host)
+	}
+}
+
+// TestIsLoopbackHost pins the loopback classification isLoopbackHost makes,
+// including the ":8080"-style empty host (net.SplitHostPort's shape for an
+// address with no host part), which means "every interface" in net/http and
+// must NOT be treated as loopback.
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.5.5.5", true}, // the whole 127.0.0.0/8 block is loopback, not just .1
+		{"localhost", true},
+		{"LOCALHOST", true},
+		{"::1", true},
+		{"", false}, // ":8080" -> SplitHostPort gives an empty host -> all interfaces
+		{"0.0.0.0", false},
+		{"10.0.0.5", false},
+		{"idryx.internal", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackHost(c.host); got != c.want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+}
+
+// TestWarnIfNonLoopback is the regression test for the loud-warning half of
+// the fix (mirroring tokenfuse's TOKENFUSE_CLOUD_HOST precedent,
+// crates/cloud/src/main.rs): an operator who deliberately widens -addr must
+// still see, unmissably, that the dashboard SECURITY.md documents as
+// unauthenticated is now reachable from the network. A loopback bind must
+// print nothing.
+func TestWarnIfNonLoopback(t *testing.T) {
+	cases := []struct {
+		addr     string
+		wantWarn bool
+	}{
+		{"127.0.0.1:8080", false},
+		{"localhost:8080", false},
+		{"[::1]:8080", false},
+		{":8080", true},
+		{"0.0.0.0:8080", true},
+		{"10.0.0.5:8080", true},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		warnIfNonLoopback(&buf, c.addr)
+		got := buf.Len() > 0
+		if got != c.wantWarn {
+			t.Errorf("warnIfNonLoopback(%q): wrote output = %v, want %v (output: %q)", c.addr, got, c.wantWarn, buf.String())
+		}
+		if got && !strings.Contains(buf.String(), c.addr) {
+			t.Errorf("warnIfNonLoopback(%q): warning does not name the address it warned about: %q", c.addr, buf.String())
+		}
 	}
 }
