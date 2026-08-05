@@ -325,11 +325,25 @@ Prebuilt binaries (Linux, macOS, Windows) are published on the
 [Releases page](https://github.com/TAIPANBOX/idryx/releases) for every `v*` tag,
 with a `SHA256SUMS` file for verification:
 
+**The asset names carry no version**, so `releases/latest/download/<name>` is a
+permanent address for the current build. You never look up a version number,
+and a link to one of these does not rot.
+
 ```sh
-tar -xzf idryx_v*_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz
+P=$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+U=https://github.com/TAIPANBOX/idryx/releases/latest/download
+
+curl -fsSLO $U/idryx_$P.tar.gz
+curl -fsSLO $U/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-./idryx version
+
+tar -xzf idryx_$P.tar.gz
+./idryx_$P/idryx version
 ```
+
+The version is still there, in the binary rather than in the filename:
+`idryx version` prints the tag it was built from. That is the harder of the two
+places to fake, since anything between us and you can rename a file.
 
 Or build from source (Go 1.26+):
 
@@ -344,11 +358,49 @@ and effort. **They produce an identical file**, so you can take the fast path an
 still have somebody verify it afterwards.
 
 ```sh
-git checkout v0.3.0
+# ours: the latest release, at an address that never changes
+mkdir -p /tmp/verify && cd /tmp/verify
+curl -fsSLO https://github.com/TAIPANBOX/idryx/releases/latest/download/idryx_darwin_arm64.tar.gz
+tar -xzf idryx_darwin_arm64.tar.gz
+TAG=$(./idryx_darwin_arm64/idryx version | awk '{print $2}')     # what those bytes claim to be
+
+# yours, from a clean tree at exactly that tag
+cd /path/to/your/idryx
+git checkout "$TAG"
+git status --porcelain      # must print nothing at all
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
-  -ldflags "-s -w -X main.version=v0.3.0" -o mine ./cmd/idryx
-sha256sum mine        # compare with SHA256SUMS from the release page
+  -ldflags "-s -w -X main.version=$TAG" -o /tmp/verify/mine ./cmd/idryx
+
+sha256sum /tmp/verify/mine /tmp/verify/idryx_darwin_arm64/idryx
+# macOS ships shasum -a 256 rather than sha256sum, and this example builds for
+# darwin, so that is probably the one you want
 ```
+
+Two identical digests, and note what the recipe does NOT contain: a version
+number. It reads the tag out of the binary it is checking, so the instruction
+cannot go stale and the check is stronger for it, since a build that lies about
+its own version now fails the comparison it invited.
+
+**Build from a clean tree, and do not unpack our archive inside it.** Go stamps
+`vcs.modified` into the binary, and **one untracked file anywhere in the
+checkout flips it to true**, which changes the bytes. The release is built from
+a clean CI checkout, so it carries `vcs.modified=false`. Unpacking the download
+into the repository before building is enough to break the comparison on its
+own. `git status --porcelain` is in the recipe for that reason and is not
+decoration.
+
+**The same trap has a second door.** Building from a `git archive` extraction or
+a detached `git worktree` leaves Go unable to read the VCS at all, so it records
+the module as `(devel)` rather than the tag. Both doors lead to a binary that
+legitimately differs from the release, and the difference looks enormous because
+a version string one byte shorter shifts everything after it. It is one field,
+not a different program.
+
+**Compare the binaries, not the archives.** `SHA256SUMS` on the release page
+lists the `.tar.gz` and `.zip` files, and it answers a different question: did
+your download arrive intact. It cannot answer this one, because `tar` and
+`gzip` stamp times into the archive, so the archive is not reproducible even
+when every byte of the binary inside it is.
 
 Measured on 5 August 2026 against the real published artifact:
 `idryx_v0.3.0_darwin_arm64` from the Releases page, built on a Linux runner
