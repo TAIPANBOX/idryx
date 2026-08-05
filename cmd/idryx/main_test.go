@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/TAIPANBOX/idryx/internal/bom"
@@ -603,5 +607,180 @@ func TestPopulateSurfacesMalformedRecordsOnStderr(t *testing.T) {
 	})
 	if out2 != "" {
 		t.Errorf("expected no stderr output for a clean batch, got %q", out2)
+	}
+}
+
+// detectArgsFor builds the standard runDetect args this file's sink tests
+// share: --privileged bob/carol makes mfa_fatigue and new_device fire at
+// high severity or above on testdata/events.json (see
+// TestRunDetectOTLPWiring above), so the default --min-severity high
+// threshold delivers alerts without needing to lower it. extra is appended
+// (e.g. -slack/-webhook flags).
+func detectArgsFor(extra ...string) []string {
+	args := []string{"-privileged", "bob@example.com,carol@example.com"}
+	args = append(args, extra...)
+	return append(args, "../../testdata/events.json")
+}
+
+// TestRunDetectSinkFailureIsNonZero is the regression test for defect 3: a
+// failing alert sink (here, a webhook returning 401) must not let
+// `idryx detect` report success. Before the fix, runDetect printed one
+// stderr line per failing sink and unconditionally returned nil -- a cron or
+// CI invocation whose webhook is 401ing reports success indefinitely.
+func TestRunDetectSinkFailureIsNonZero(t *testing.T) {
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer deadSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-webhook", deadSrv.URL))
+	})
+	if err == nil {
+		t.Fatal("expected a non-nil error when the only configured sink fails to deliver")
+	}
+	if !errors.Is(err, errSinkDelivery) {
+		t.Errorf("error = %v, want it to wrap errSinkDelivery so main() can map it to a distinct exit code", err)
+	}
+}
+
+// TestRunDetectWorkingSinkNoError is the counterpart: a sink that delivers
+// successfully must not turn a clean run into an error.
+func TestRunDetectWorkingSinkNoError(t *testing.T) {
+	var calls int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-webhook", okSrv.URL))
+	})
+	if err != nil {
+		t.Fatalf("runDetect: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("expected the webhook to have been called at least once")
+	}
+}
+
+// TestRunDetectPartialSinkFailureStillDeliversWorkingSink is the regression
+// test for the "two sinks configured, one fails" case the task calls out
+// explicitly: the failure must still be visible (non-zero, wrapping
+// errSinkDelivery), and the loop must not abort early -- the working sink
+// must still receive the alerts.
+func TestRunDetectPartialSinkFailureStillDeliversWorkingSink(t *testing.T) {
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer deadSrv.Close()
+
+	var received []map[string]any
+	var calls int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	var err error
+	captureStdout(t, func() {
+		err = runDetect(detectArgsFor("-slack", deadSrv.URL, "-webhook", okSrv.URL))
+	})
+	if err == nil {
+		t.Fatal("expected a non-nil error: one of the two configured sinks failed")
+	}
+	if !errors.Is(err, errSinkDelivery) {
+		t.Errorf("error = %v, want it to wrap errSinkDelivery", err)
+	}
+	if calls == 0 {
+		t.Fatal("the working webhook sink must still have been called despite the slack sink failing")
+	}
+	if len(received) == 0 {
+		t.Error("the working webhook sink must still have received the alerts")
+	}
+}
+
+// idryxTestBinary builds the idryx binary once (cached across the whole test
+// binary run via sync.Once) so process-exit-code tests can exec it directly.
+// This is the one thing that cannot be exercised by calling run()/runDetect()
+// in-process: main()'s own os.Exit mapping. An in-process test of runDetect's
+// return value would not catch a bug where main() forgot to check
+// errors.Is(err, errSinkDelivery) at all.
+var (
+	testBinOnce sync.Once
+	testBinPath string
+	testBinErr  error
+)
+
+func idryxTestBinary(t *testing.T) string {
+	t.Helper()
+	testBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "idryx-bin-*")
+		if err != nil {
+			testBinErr = err
+			return
+		}
+		testBinPath = filepath.Join(dir, "idryx")
+		cmd := exec.Command("go", "build", "-o", testBinPath, ".")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			testBinErr = fmt.Errorf("go build idryx: %w\n%s", err, out)
+		}
+	})
+	if testBinErr != nil {
+		t.Fatalf("%v", testBinErr)
+	}
+	return testBinPath
+}
+
+// TestMainExitCodeSinkDeliveryFailure is the process-level proof that a
+// failing alert sink turns into a non-zero OS exit code: a cron/CI
+// invocation checks $?, not idryx's internal error type, so this is the
+// contract that actually matters to a caller.
+func TestMainExitCodeSinkDeliveryFailure(t *testing.T) {
+	bin := idryxTestBinary(t)
+
+	deadSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer deadSrv.Close()
+
+	cmd := exec.Command(bin, "detect",
+		"-privileged", "bob@example.com,carol@example.com",
+		"-webhook", deadSrv.URL,
+		"../../testdata/events.json")
+	out, runErr := cmd.CombinedOutput()
+	exitErr, ok := runErr.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected the process to exit non-zero via *exec.ExitError, got err=%v (type %T)\noutput:\n%s", runErr, runErr, out)
+	}
+	if code := exitErr.ExitCode(); code != exitSinkDelivery {
+		t.Errorf("exit code = %d, want %d (exitSinkDelivery)\noutput:\n%s", code, exitSinkDelivery, out)
+	}
+}
+
+// TestMainExitCodeCleanRunIsZero is the counterpart at the process level: a
+// working sink must exit 0, not just "not exitSinkDelivery".
+func TestMainExitCodeCleanRunIsZero(t *testing.T) {
+	bin := idryxTestBinary(t)
+
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	cmd := exec.Command(bin, "detect",
+		"-privileged", "bob@example.com,carol@example.com",
+		"-webhook", okSrv.URL,
+		"../../testdata/events.json")
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("expected exit 0, got err=%v\noutput:\n%s", runErr, out)
 	}
 }

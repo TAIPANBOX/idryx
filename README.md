@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-175-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-190-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -543,7 +543,14 @@ pushed to a Slack incoming webhook (`--slack`), a generic JSON webhook for
 SIEM/SOAR (`--webhook`), and/or an OTLP collector (`IDRYX_OTLP_ENDPOINT`).
 Fully-filtered batches make no network call to any of the three.
 `--webhook-header "Name: Value"` (repeatable) sets outbound headers, which is
-how the destination authenticates the sender:
+how the destination authenticates the sender.
+
+A sink that fails to deliver (a dead webhook, a Slack URL returning 401 after
+a rotation) is never silent: `idryx detect` prints one stderr line per
+failing sink and exits 3, distinct from exit 1 (a setup/input error) and
+exit 0 (a clean run delivered in full). The other configured sinks still
+receive the alerts; only the exit code marks that one of them did not, which
+is what a cron or CI invocation checking `$?` actually needs.
 
 ```sh
 idryx detect --load tokenfuse:events.ndjson \

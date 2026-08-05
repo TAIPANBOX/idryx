@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -36,10 +37,42 @@ import (
 // version is overridden at build time via -ldflags.
 var version = "dev"
 
+// errSinkDelivery marks a runDetect error caused by one or more configured
+// alert sinks (--slack/--webhook/OTLP) failing to deliver, as opposed to a
+// setup/input error (bad flags, an unreadable file, a graph that failed to
+// build). Detection and rendering (report.Human/report.JSON) already ran and
+// are unaffected; this only marks delivery as having failed. main() maps it
+// to its own exit code (exitSinkDelivery) so a cron/CI caller can tell "the
+// scan ran and alerts existed but did not reach their destination" apart
+// from "the invocation itself was broken" by checking $?, without scraping
+// stderr text.
+var errSinkDelivery = errors.New("one or more alert sinks failed to deliver")
+
+// exitSinkDelivery is the process exit code for errSinkDelivery.
+//
+// idryx has exactly one other meaningful exit code today: 1, for any other
+// error (see main() below) -- there is no --fail-on flag and no
+// findings-threshold exit code in this repo to collide with (that is a
+// tokenfuse/mcp-scan feature; idryx has never had one), and no existing use
+// of 2 either.
+//
+// This picks 3, not 2, on purpose: idryx's sibling tokenfuse uses 1 for
+// "findings met --fail-on's threshold" and 2 for "a bad --fail-on value" in
+// its own mcp-scan command (crates/gateway/src/main.rs). idryx has no such
+// flag today, but if it ever grows one that mirrors that convention, this
+// choice leaves both of tokenfuse's codes free for it to reuse verbatim,
+// rather than a sink-delivery failure quietly squatting on either meaning
+// first.
+const exitSinkDelivery = 3
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "idryx:", err)
-		os.Exit(1)
+		code := 1
+		if errors.Is(err, errSinkDelivery) {
+			code = exitSinkDelivery
+		}
+		os.Exit(code)
 	}
 }
 
@@ -476,10 +509,18 @@ func runDetect(args []string) error {
 	if endpoint := os.Getenv("IDRYX_OTLP_ENDPOINT"); endpoint != "" {
 		sinks = append(sinks, sink.NewOTLP(endpoint, threshold))
 	}
+	var failedSinks int
 	for _, s := range sinks {
 		if err := s.Send(alerts); err != nil {
 			fmt.Fprintf(os.Stderr, "idryx: sink %s: %v\n", s.Name(), err)
+			failedSinks++
 		}
+	}
+	if failedSinks > 0 {
+		// The loop above already tried every sink (no early return on the
+		// first failure), so a partial failure still delivered to whichever
+		// sinks worked; only the exit status reflects the failure here.
+		return fmt.Errorf("%d of %d alert sink(s) failed to deliver: %w", failedSinks, len(sinks), errSinkDelivery)
 	}
 	return nil
 }

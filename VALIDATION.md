@@ -199,3 +199,49 @@ load --db` path) are exercised by compilation and by being structurally identica
 same `parseSource`/`parseInventory` dispatch, same `reportIngest` call -- but not by a dedicated
 test, because `runLoad` requires a real Postgres DSN and standing one up was out of scope for this
 fix.
+
+## Alert delivery failure did not fail the command
+
+2026-08-05, from the same read-only audit. `runDetect` in `cmd/idryx/main.go` looped over the
+constructed sinks and, on a `Send` error, printed one stderr line and continued -- but the function
+then unconditionally `return nil`. A cron or CI invocation whose SIEM webhook is 401ing, or whose
+Slack URL is dead, reported success indefinitely: exit 0 either way.
+
+Fixed by counting delivery failures across the loop (which already tried every sink; nothing here
+changes that) and returning a wrapped `errSinkDelivery` when any sink failed, which `main()` maps to
+exit code 3 -- distinct from exit 1 (idryx's existing generic error path: bad flags, an unreadable
+file, a graph that failed to build) and from exit 0 (a clean run). 3, not 2: tokenfuse's own
+`mcp-scan` command (`crates/gateway/src/main.rs`) uses 1 for "findings met `--fail-on`'s threshold"
+and 2 for "a bad `--fail-on` value". idryx has no `--fail-on` flag today -- that premise, checked
+against this repository rather than assumed from tokenfuse's, does not hold here -- but if idryx ever
+grows one shaped like tokenfuse's, this choice leaves both of tokenfuse's codes free for it to reuse
+verbatim, rather than a sink-delivery failure quietly squatting on either meaning first.
+
+The regression tests cover the failing case, the working case, and the partial case named
+explicitly: two sinks, one fails. The failure must still be visible AND the working sink must still
+receive the alerts, proving the loop was never short-circuited. Before the fix none of this
+compiled, because neither `errSinkDelivery` nor `exitSinkDelivery` existed (@measured `go vet
+./cmd/idryx/...`, 2026-08-05, against the unfixed tree):
+
+```
+cmd/idryx/main_test.go:643:21: undefined: errSinkDelivery
+cmd/idryx/main_test.go:698:21: undefined: errSinkDelivery
+cmd/idryx/main_test.go:763:41: undefined: exitSinkDelivery
+cmd/idryx/main_test.go:764:77: undefined: exitSinkDelivery
+FAIL	github.com/TAIPANBOX/idryx/cmd/idryx [build failed]
+```
+
+Two of the five new tests exec the built binary rather than calling `run()`/`runDetect()`
+in-process (@measured `go test ./cmd/idryx/... -run
+'TestMainExitCodeSinkDeliveryFailure|TestMainExitCodeCleanRunIsZero'`, 2026-08-05, both pass),
+because `main()`'s own `os.Exit` mapping is the one piece of this fix an in-process test cannot
+reach: `os.Exit` inside the test binary would kill the test run itself, so a bug where `main()`
+forgot to check `errors.Is(err, errSinkDelivery)` at all would pass every in-process assertion and
+still exit 0 for a real caller.
+
+**What this did not establish.** No real SIEM/Slack endpoint; the failing sinks in every test are
+local `httptest` servers returning 401/500. And OTLP (`internal/sink/otlp.go`) was exercised only
+through the same shared loop in `runDetect`, via Slack/webhook mocks -- its own `Send` was not
+separately driven into a failure to confirm this specific loop counts an OTLP failure identically,
+though the loop's logic is sink-agnostic (it only calls the `sink.Sink` interface, the same one
+Slack and webhook implement).
