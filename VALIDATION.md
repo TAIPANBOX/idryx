@@ -70,3 +70,40 @@ Disposable Hetzner VPS boxes (deleted after each run) with a real Postgres 16 in
 as a `git archive` tarball (no secrets, no `.git`, no token); every service bound to `127.0.0.1` only,
 reached exclusively via SSH tunnel. Nothing from these runs was ever exposed publicly, and no
 infrastructure or secret from the campaign persists today.
+
+## The dashboard escaped an identity ID for the wrong parser
+
+2026-08-05, from a read-only audit of the source rather than a run. Every row of the identity list
+carried its own click handler, `onclick="selectIdentity('<id>')"`, and the ID went in through `esc()`,
+the HTML entity escaper, at `internal/server/dashboard.go:834`. The other two handlers in the same
+file, the Copy Terraform button and the identity link in the alert table, already used `escJS()`, the
+helper written for exactly this context. One site of three was missed.
+
+`esc()` turns `'` into `&#39;`, and an HTML parser decodes that back into an apostrophe **before** the
+JS parser ever reads the handler. Running the page's own two escapers over an ingested ID of
+`agent:x');document.title='pwned';//` shows what each parser gets (@measured `node`, both functions
+read out of `dashboard.go` rather than retyped, 2026-08-05):
+
+```
+esc    attribute source   : selectIdentity('agent:x&#39;);document.title=&#39;pwned&#39;;//')
+esc    JS the parser sees : selectIdentity('agent:x');document.title='pwned';//')
+escJS  JS the parser sees : selectIdentity('agent\x3ax\x27\x29\x3bdocument\x2etitle\x3d\x27pwned...')
+```
+
+The literal closes after `agent:x` and the rest is statements. Identity IDs arrive verbatim from
+ingested inventory and IAM data, which SECURITY.md invariant 3 classes as attacker-influenced, so this
+is stored XSS in a dashboard whose whole job is to be pointed at a hostile fleet. The same line was
+also a quiet functional bug: an ID containing `&`, `<`, `"` or `'` reached `selectIdentity()`
+entity-encoded, matched nothing in `globalIdentities`, and opened no detail panel.
+
+**The regression test was there and could not fail.** It asserted that the served HTML embeds no
+identity data (true, and unrelated: the escaping happens in the browser) and that the string
+`function escJS` appears somewhere on the page (true while nothing called it). Both passed against the
+broken line for as long as it existed. It now asserts the property instead: in the page as served,
+every value spliced into an event-handler attribute goes through `escJS`, and a page with no
+interpolated handler at all fails rather than passes. Red on the unfixed line, green after
+(@measured `go test ./internal/server -run TestEventHandlerAttributesEscapeForJSContext`, 2026-08-05).
+
+**What this did not establish.** The payload was not fired in a real browser; the evidence above is at
+the escaping layer, one decode short of a click. And the check reads the shipped page's own syntax, so
+it holds this shape of handler, not a future one built by `addEventListener` or a template literal.

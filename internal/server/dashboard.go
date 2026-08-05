@@ -831,7 +831,7 @@ function renderIdentitiesList(list) {
     const alertBadge = i.alerts > 0 ? '<span class="alert-count-pill">' + i.alerts + '</span>' : '';
     const privBadge = i.privileged ? '<span class="badge badge-priv">privileged</span>' : '';
     
-    return '<div class="identity-row ' + (isSelected ? 'active' : '') + '" onclick="selectIdentity(\'' + esc(i.id) + '\')">' +
+    return '<div class="identity-row ' + (isSelected ? 'active' : '') + '" onclick="selectIdentity(\'' + escJS(i.id) + '\')">' +
            '<div class="identity-row-header">' +
            '<span class="identity-id">' + esc(i.id) + '</span>' +
            alertBadge +
