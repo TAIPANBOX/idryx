@@ -336,6 +336,43 @@ Or build from source (Go 1.26+):
 make build   # -> ./bin/idryx
 ```
 
+### The two paths give the same bytes, and you can check that
+
+Downloading the binary and building it yourself are not a choice between trust
+and effort. **They produce an identical file**, so you can take the fast path and
+still have somebody verify it afterwards.
+
+```sh
+git checkout v0.3.0
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
+  -ldflags "-s -w -X main.version=v0.3.0" -o mine ./cmd/idryx
+sha256sum mine        # compare with SHA256SUMS from the release page
+```
+
+Measured on 5 August 2026 against the real published artifact:
+`idryx_v0.3.0_darwin_arm64` from the Releases page, built on a Linux runner
+cross-compiling to darwin/arm64, and a local build of that tag on macOS are both
+
+```
+8c968574341f48775e898770e98cb586b620101668b86edec24428612e979a80
+```
+
+Three flags make that work, `CGO_ENABLED=0`, `-trimpath` and `-s -w`, and losing
+any one would break it **silently**: the build would still succeed and only
+somebody trying to verify us would find out. CI therefore builds the same source
+in two directories of different lengths on every push and refuses if a byte
+differs (`scripts/reproducible-build.sh`).
+
+**Check it out, do not export it.** Building from a `git archive` extraction or
+a detached `git worktree` leaves Go unable to read the VCS, so it stamps no
+revision and records the module as `(devel)` rather than `v0.3.0`. That binary
+genuinely differs from the release, and the difference looks enormous because a
+version string one byte shorter shifts everything after it. It is one field, not
+a different program.
+
+A different Go version will not reproduce these bytes either. `go.mod` pins the
+toolchain, and a digest is only meaningful beside the compiler that made it.
+
 > Maintainers: a release is cut automatically by CI on `git tag vX.Y.Z && git push --tags`.
 
 ## Quick start

@@ -26,6 +26,18 @@ jobs:
         run: go test -race ./...
       - name: build
         run: go build ./...
+
+      # idryx reads an organisation's identity graph and names which of their
+      # own agents is dangerous, so its own supply chain is what their security
+      # team looks at first. "The source is open" is not an answer to them: it
+      # always was. The answer is that they can rebuild the release and get the
+      # same bytes, measured 2026-08-05 as
+      # 8c968574341f48775e898770e98cb586b620101668b86edec24428612e979a80.
+      #
+      # CGO_ENABLED=0, -trimpath and -s -w hold it, and any one going missing
+      # breaks it in silence.
+      - name: a release can be rebuilt byte for byte
+        run: ./scripts/reproducible-build.sh
       - name: every detector is registered and has a test
         run: ./scripts/detectors-complete.sh
 
