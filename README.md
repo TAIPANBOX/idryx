@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-200-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-202-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -599,10 +599,18 @@ snapshot implements the same `graph.Reader` the in-memory store does, so
 detectors run unchanged. The schema (`internal/graph/schema.sql`)
 additionally carries a producer-assigned `events.severity` column
 (`model.Event.Severity`, used by `tokenfuse`), the Passport-derived
-`identities.parent`/`identities.attestation` columns, and an ordered
+`identities.parent`/`identities.attestation` columns, the MCP
+`identities.shadow` flag, an ordered `declared_models` join table for the
+Passport's declared LLM providers (SPEC §4.5), and an ordered
 `on_behalf_of` join table for full delegation chains (agent-passport SPEC §5),
 all applied as additive `IF NOT EXISTS` migrations, so an existing database
-upgrades in place. Integration tests live behind the `integration` build tag
+upgrades in place. "Detectors run unchanged over either backend" is only
+true while every field the detectors read survives the round trip, so two
+tests hold that with no database at all: one fails when a column is written
+and never read back (or read and never written, or named in SQL and never
+declared), the other when a field is added to `model.Identity`,
+`model.Permission` or `model.DeclaredModel` without a decision about where
+Postgres keeps it. Integration tests live behind the `integration` build tag
 and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 

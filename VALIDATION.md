@@ -314,3 +314,68 @@ end to end: `prev_hash` is tamper-evidence, not tamper-proof, and a rewriter who
 whole file passes this check by construction. And the chain verdict is not yet a detector
 finding: it reaches the operator on stderr and through `tokenfuse.Report`, not as a
 `model.Alert` in the graph, so it does not reach a SIEM sink or the dashboard.
+
+## Two detectors could not fire at all when the graph came from Postgres
+
+2026-08-05, from the same read-only audit. `model.Identity.Shadow` (an MCP server observed in use
+but absent from the sanctioned registry) and `model.Identity.DeclaredModels` (the Passport's
+declared LLM providers, SPEC 4.5) had no columns in `internal/graph/schema.sql`, were never
+written by `IngestIdentities`, and were never read by `Snapshot`. So after
+`idryx load --db --source mcp ...`, a later `idryx detect --db` ran `shadow_mcp` and
+`agent_shadow_tool` over a graph where every Shadow flag was false, and `undeclared_llm` over one
+where every agent had zero declared models. All three returned nothing, with no warning, which is
+exactly what a clean estate looks like. AGENTS.md states as a design rule that detectors "run
+unchanged against the Postgres backend"; for these two fields the backend disagreed with the
+in-memory graph and nothing compared them.
+
+Fixed additively, in the `IF NOT EXISTS` style the file already uses: an `identities.shadow`
+column, and an ordered `declared_models` join table (`identity_id`, `position`, `provider`,
+`model`, `endpoint`) built exactly like the existing `on_behalf_of` chain table, because a
+repeated field with meaningful order is the case that table already solves. Shadow upserts as a
+sticky OR (`shadow = identities.shadow OR EXCLUDED.shadow`), matching the in-memory
+`Store.AddIdentity`, so a later inventory that omits the flag cannot quietly sanction a shadow
+server. Declarations are replaced in place on re-ingest, like permissions and the delegation
+chain, so a repeated load refreshes rather than duplicates.
+
+**The check that would have caught it needs no database, which is why it now exists.** Two
+non-integration tests read the SQL this package issues and the schema it applies
+(`internal/graph/columns_test.go`). The first fails when a column is written and never read back,
+read and never written, or named in SQL and never declared in `schema.sql`. The second fails when
+a field on `model.Identity`, `model.Permission` or `model.DeclaredModel` has no recorded decision
+about where the Postgres backend keeps it, so adding a field forces that decision in the same
+change rather than leaving it to be discovered by a detector that silently returns nothing.
+
+The second was red against the unfixed tree (@measured `go test ./internal/graph/`, 2026-08-05):
+
+```
+--- FAIL: TestModelFieldsAllHaveAPersistenceDecision (0.00s)
+    columns_test.go:257: model.Identity.DeclaredModels claims to live in declared_models.identity_id, which schema.sql does not declare
+    columns_test.go:260: model.Identity.DeclaredModels claims to live in declared_models.identity_id, which nothing in this package ever writes
+    columns_test.go:257: model.Identity.Shadow claims to live in identities.shadow, which schema.sql does not declare
+    columns_test.go:260: model.Identity.Shadow claims to live in identities.shadow, which nothing in this package ever writes
+    columns_test.go:263: model.Identity.Shadow claims to live in identities.shadow, which nothing in this package ever reads back
+    ...
+FAIL	github.com/TAIPANBOX/idryx/internal/graph
+```
+
+The first passed against the unfixed tree, because a column that exists nowhere is in neither
+list, so it was verified by breaking instead, three ways, each of which fails it for its own
+reason (@measured `go test ./internal/graph/ -run TestPgStoreWritesAndReadsTheSameColumns`,
+2026-08-05, each mutation applied and reverted in turn):
+
+```
+identities.shadow is written and never read back: the value reaches Postgres and no Snapshot ever returns it, so no detector can see it
+identities.shadow is read and never written: every row comes back as the schema default, which is indistinguishable from real data
+identities.shadow appears in SQL but schema.sql declares no such column, so migrate() leaves it missing
+```
+
+**What this did not establish.** The two live-Postgres tests
+(`TestPgShadowAndDeclaredModelsRoundTrip`, `TestPgShadowFlagIsStickyLikePrivileged`) were written
+and compile under the `integration` tag (@measured `go vet -tags integration ./internal/graph/`,
+2026-08-05, clean), and they were NOT run here: this machine has no Postgres and no running
+container runtime, so CI's `integration` job is the first place they execute. The
+database-free checks above are what actually ran. Nothing here says anything about an existing
+production database's migration behaviour beyond the additive `IF NOT EXISTS` shape the rest of
+the file already relies on, and no detector was driven end to end over `--db` in this session:
+the round trip is asserted at the store boundary (`IngestIdentities` then `Snapshot`), not
+through `idryx detect --db`.

@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS identities (
     last_used    TIMESTAMPTZ,
     runtime      TEXT NOT NULL DEFAULT '',
     parent       TEXT NOT NULL DEFAULT '',
-    attestation  TEXT NOT NULL DEFAULT ''
+    attestation  TEXT NOT NULL DEFAULT '',
+    shadow       BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Ensure existing database instances are migrated if they only have the Phase 0/1 columns.
@@ -25,6 +26,29 @@ ALTER TABLE identities ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT ''
 -- on_behalf_of chain below (§5).
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS parent TEXT NOT NULL DEFAULT '';
 ALTER TABLE identities ADD COLUMN IF NOT EXISTS attestation TEXT NOT NULL DEFAULT '';
+
+-- MCP inventory (OWASP MCP Top 10, Shadow MCP Servers): a server observed in
+-- use but absent from the sanctioned registry. Without this column the
+-- Postgres backend returned every MCP server with Shadow false, so shadow_mcp
+-- and agent_shadow_tool found nothing over --db no matter what was ingested,
+-- and "no shadow servers" was indistinguishable from "the flag was never
+-- stored".
+ALTER TABLE identities ADD COLUMN IF NOT EXISTS shadow BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Passport-declared LLM providers/models (agent-passport SPEC §4.5), the
+-- declared side of the AI inventory that undeclared_llm compares against
+-- observed egress. A repeated field, so it gets an ordered join table rather
+-- than a column, exactly like the delegation chain below: declaration order
+-- is the Passport's own and is worth preserving. Replaced in place on
+-- re-ingest (delete then insert), so re-running a load is idempotent.
+CREATE TABLE IF NOT EXISTS declared_models (
+    identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    position    INT  NOT NULL,
+    provider    TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    endpoint    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (identity_id, position)
+);
 
 -- Phase 5.1: OnBehalfOf became a full delegation chain (agent-passport SPEC §5:
 -- ordered root-first, last = immediate principal) instead of one hop, so the
