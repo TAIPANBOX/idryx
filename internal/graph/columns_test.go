@@ -216,10 +216,11 @@ var identityPersistence = map[string]persistence{
 }
 
 var permissionPersistence = map[string]persistence{
-	"Name":  {Table: "permissions", Column: "name"},
-	"Admin": {Table: "permissions", Column: "admin"},
-	"Used":  {Table: "permissions", Column: "used"},
-	"ARN":   {Table: "permissions", Column: "arn"},
+	"Name":    {Table: "permissions", Column: "name"},
+	"Admin":   {Table: "permissions", Column: "admin"},
+	"Used":    {Table: "permissions", Column: "used"},
+	"ARN":     {Table: "permissions", Column: "arn"},
+	"Actions": {Table: "permission_actions", Column: "action"},
 }
 
 var declaredModelPersistence = map[string]persistence{

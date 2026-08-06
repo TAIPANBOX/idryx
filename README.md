@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-202-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-212-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -245,7 +245,7 @@ suppresses scoring during a learning period to avoid false positives.
 | `stale_nhi` | NHI | medium, high if admin | a service account unused past a 90-day window (or never used) |
 | `over_privileged_nhi` | NHI | high | an NHI holding admin-equivalent permissions |
 | `orphaned_nhi` | NHI | low | an NHI with no mapped owner (nobody to rotate or revoke it) |
-| `privilege_escalation` | NHI | high | an NHI holding a stealthy escalation permission (AWS `iam:PassRole`/`PutRolePolicy`, GCP `actAs`/`getAccessToken`, Azure `roleAssignments/write`) that grants a path to admin without holding admin |
+| `privilege_escalation` | NHI | high | an NHI holding a stealthy escalation permission (AWS `iam:PassRole`/`PutRolePolicy`, GCP `actAs`/`getAccessToken`, Azure `roleAssignments/write`) that grants a path to admin without holding admin, matched against what the grant allows (an AWS policy document, a GCP predefined role, an Azure built-in role) rather than what it is called |
 | `shared_credential` | NHI | high | an NHI whose credential is used across many distinct IPs, countries, or devices, the signature of a leaked or shared key |
 | `excessive_agency` | Agents / AI | high, critical at deeper delegation | an AI agent that reaches admin-equivalent permissions through its delegation chain (OWASP LLM06) |
 | `shadow_ai` | Agents / AI | medium, high for NHIs/agents | an identity whose egress reaches a known external LLM API (OpenAI, Anthropic, Gemini) |
@@ -520,9 +520,9 @@ runs deterministic detectors.
 | `entra` | events | Microsoft Entra ID sign-in log |
 | `cloudtrail` | events | AWS CloudTrail (ConsoleLogin + API activity) |
 | `egress` | events | generic network-egress (identity -> destination host; VPC flow / proxy / CASB, or idryx's own `ebpf-capture` sensor, see below) |
-| `aws_iam` | NHI inventory | IAM users/roles as service accounts, with permissions, owner tags, last-used |
-| `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles and owner hints (optional Cloud Audit Log usage enrichment via `--gcp-audit`) |
-| `azure` | NHI inventory | Azure AD service principals + role assignments, with owners and credential expiry |
+| `aws_iam` | NHI inventory | IAM users/roles as service accounts, with permissions, owner tags, last-used, and the actions each grant actually allows, read out of inline policy documents and the default version of each customer-managed policy (optional CloudTrail usage enrichment via `--cloudtrail`) |
+| `gcp_iam` | NHI inventory | GCP service accounts + project IAM policy, with roles, owner hints, and the escalation permissions each predefined role is known to contain (optional Cloud Audit Log usage enrichment via `--gcp-audit`) |
+| `azure` | NHI inventory | Azure AD service principals + role assignments, with owners, credential expiry, and the escalation actions each built-in role definition contains |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
 | `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer |

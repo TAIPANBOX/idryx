@@ -148,6 +148,23 @@ func (s *PgStore) IngestIdentities(ctx context.Context, identities []model.Ident
 				id.ID, p.Name, p.Admin, p.Used, p.ARN); err != nil {
 				return fmt.Errorf("insert permission %q for %q: %w", p.Name, id.ID, err)
 			}
+			// The actions the grant allows (from an AWS policy document or a
+			// GCP/Azure role definition). The DELETE above cascades the old
+			// rows away; the ON CONFLICT path above does not, so clear them
+			// explicitly and rewrite, which keeps a re-ingest idempotent
+			// either way.
+			if _, err := tx.ExecContext(ctx,
+				"DELETE FROM permission_actions WHERE identity_id = $1 AND permission_name = $2",
+				id.ID, p.Name); err != nil {
+				return fmt.Errorf("clear actions for permission %q of %q: %w", p.Name, id.ID, err)
+			}
+			for i, action := range p.Actions {
+				if _, err := tx.ExecContext(ctx,
+					`INSERT INTO permission_actions (identity_id, permission_name, position, action) VALUES ($1, $2, $3, $4)`,
+					id.ID, p.Name, i, action); err != nil {
+					return fmt.Errorf("insert action[%d] for permission %q of %q: %w", i, p.Name, id.ID, err)
+				}
+			}
 		}
 	}
 
@@ -283,6 +300,31 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		return nil, err
 	}
 
+	// Retrieve the actions each grant allows BEFORE the permissions
+	// themselves, so each Permission can be built complete: Permissions is a
+	// slice, and appending to it moves the elements, so there is nothing
+	// stable to attach to afterwards.
+	actionsByPerm := map[string]map[string][]string{}
+	actRows, err := s.db.QueryContext(ctx,
+		`SELECT identity_id, permission_name, action FROM permission_actions ORDER BY identity_id, permission_name, position`)
+	if err != nil {
+		return nil, err
+	}
+	defer actRows.Close()
+	for actRows.Next() {
+		var identityID, permName, action string
+		if err := actRows.Scan(&identityID, &permName, &action); err != nil {
+			return nil, err
+		}
+		if actionsByPerm[identityID] == nil {
+			actionsByPerm[identityID] = map[string][]string{}
+		}
+		actionsByPerm[identityID][permName] = append(actionsByPerm[identityID][permName], action)
+	}
+	if err := actRows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Retrieve all permissions and attach them to their identities in the store
 	permRows, err := s.db.QueryContext(ctx,
 		`SELECT identity_id, name, admin, used, arn FROM permissions`)
@@ -296,6 +338,7 @@ func (s *PgStore) Snapshot(ctx context.Context) (*Store, error) {
 		if err := permRows.Scan(&identityID, &p.Name, &p.Admin, &p.Used, &p.ARN); err != nil {
 			return nil, err
 		}
+		p.Actions = actionsByPerm[identityID][p.Name]
 		if idNode := store.ensure(identityID); idNode != nil {
 			idNode.Permissions = append(idNode.Permissions, p)
 		}

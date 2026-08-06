@@ -580,3 +580,66 @@ func TestPgShadowFlagIsStickyLikePrivileged(t *testing.T) {
 		}
 	}
 }
+
+// TestPgPermissionActionsRoundTrip is the live-database half of the
+// escalation fix. The actions a grant allows (read out of an AWS policy
+// document, or derived from a GCP/Azure role definition) are what
+// privilege_escalation keys on, so a Postgres-backed graph that dropped
+// them would silence the detector again exactly the way the missing shadow
+// column silenced shadow_mcp. Order is the policy document's own and is
+// preserved by position.
+func TestPgPermissionActionsRoundTrip(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	identities := []model.Identity{
+		{
+			ID:     "arn:aws:iam::123456789012:role/ci-deployer",
+			Type:   model.IdentityServiceAccount,
+			Source: "aws_iam",
+			Permissions: []model.Permission{
+				{Name: "deploy-service-roles", Actions: []string{"iam:passrole", "ecs:runtask"}},
+				{Name: "ReadOnlyAccess", ARN: "arn:aws:iam::aws:policy/ReadOnlyAccess"},
+			},
+		},
+	}
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	read := func() map[string][]string {
+		t.Helper()
+		store, err := s.Snapshot(ctx)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		out := map[string][]string{}
+		for _, id := range store.Identities() {
+			for _, p := range id.Permissions {
+				out[p.Name] = p.Actions
+			}
+		}
+		return out
+	}
+
+	got := read()
+	deploy := got["deploy-service-roles"]
+	if len(deploy) != 2 || deploy[0] != "iam:passrole" || deploy[1] != "ecs:runtask" {
+		t.Errorf("actions = %v, want [iam:passrole ecs:runtask] in document order", deploy)
+	}
+	if n := len(got["ReadOnlyAccess"]); n != 0 {
+		t.Errorf("a grant with no derived actions came back with %d", n)
+	}
+
+	// Re-ingesting with a narrowed policy must replace the action list, not
+	// append to it: an operator who removed iam:PassRole yesterday cannot
+	// still be told they hold it.
+	identities[0].Permissions[0].Actions = []string{"ecs:runtask"}
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+	got = read()
+	if deploy := got["deploy-service-roles"]; len(deploy) != 1 || deploy[0] != "ecs:runtask" {
+		t.Errorf("actions after re-ingest = %v, want [ecs:runtask]: the list is replaced, never grown", deploy)
+	}
+}

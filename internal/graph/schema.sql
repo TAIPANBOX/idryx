@@ -156,6 +156,23 @@ CREATE TABLE IF NOT EXISTS permissions (
 -- use this instead of reconstructing an ARN from the name.
 ALTER TABLE permissions ADD COLUMN IF NOT EXISTS arn TEXT NOT NULL DEFAULT '';
 
+-- The cloud actions a grant actually allows, read out of an AWS policy
+-- document or derived from a GCP/Azure role definition. Repeated per
+-- permission, so an ordered child table rather than a column, matching
+-- on_behalf_of and declared_models. The privilege_escalation detector keys on
+-- these, so a Postgres-backed graph that dropped them would silence it again
+-- exactly the way the missing shadow column silenced shadow_mcp. Cascades
+-- from permissions, which IngestIdentities already deletes and rewrites per
+-- identity, so a re-ingest replaces the action list rather than growing it.
+CREATE TABLE IF NOT EXISTS permission_actions (
+    identity_id     TEXT NOT NULL,
+    permission_name TEXT NOT NULL,
+    position        INT  NOT NULL,
+    action          TEXT NOT NULL,
+    PRIMARY KEY (identity_id, permission_name, position),
+    FOREIGN KEY (identity_id, permission_name) REFERENCES permissions (identity_id, name) ON DELETE CASCADE
+);
+
 -- Generated remediation recommendations (right-size / rotation), so the dashboard
 -- and API can serve them from the persisted graph rather than recomputing.
 CREATE TABLE IF NOT EXISTS remediations (

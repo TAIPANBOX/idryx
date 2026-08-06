@@ -42,8 +42,76 @@
       "CreateDate": "2022-01-01T00:00:00Z",
       "Tags": [],
       "AttachedManagedPolicies": [],
-      "RolePolicyList": [{"PolicyName": "inline-s3-read"}],
+      "RolePolicyList": [
+        {
+          "PolicyName": "inline-s3-read",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:ListBucket"],
+                "Resource": "arn:aws:s3:::reports-archive/*"
+              }
+            ]
+          }
+        }
+      ],
       "RoleLastUsed": {"LastUsedDate": "2024-03-01T00:00:00Z"}
+    },
+    {
+      "RoleName": "ci-deployer",
+      "Arn": "arn:aws:iam::123456789012:role/ci-deployer",
+      "CreateDate": "2026-01-05T00:00:00Z",
+      "Tags": [{"Key": "owner", "Value": "platform-team"}],
+      "AttachedManagedPolicies": [],
+      "RolePolicyList": [
+        {
+          "PolicyName": "deploy-service-roles",
+          "PolicyDocument": "%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22iam%3APassRole%22%2C%22ecs%3ARunTask%22%5D%2C%22Resource%22%3A%22arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ftask-execution%22%7D%5D%7D"
+        }
+      ],
+      "RoleLastUsed": {"LastUsedDate": "2026-05-30T08:00:00Z"}
+    },
+    {
+      "RoleName": "app-config",
+      "Arn": "arn:aws:iam::123456789012:role/app-config",
+      "CreateDate": "2025-11-02T00:00:00Z",
+      "Tags": [{"Key": "owner", "Value": "app-team"}],
+      "AttachedManagedPolicies": [
+        {"PolicyName": "AppConfigAccess", "PolicyArn": "arn:aws:iam::123456789012:policy/AppConfigAccess"}
+      ],
+      "RolePolicyList": [],
+      "RoleLastUsed": {"LastUsedDate": "2026-05-30T09:30:00Z"}
+    }
+  ],
+  "Policies": [
+    {
+      "PolicyName": "AppConfigAccess",
+      "Arn": "arn:aws:iam::123456789012:policy/AppConfigAccess",
+      "DefaultVersionId": "v3",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": false,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {"Effect": "Allow", "Action": "appconfig:GetConfiguration", "Resource": "*"}
+            ]
+          }
+        },
+        {
+          "VersionId": "v3",
+          "IsDefaultVersion": true,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {"Effect": "Allow", "Action": "*", "Resource": "*"}
+            ]
+          }
+        }
+      ]
     }
   ]
 }

@@ -379,3 +379,105 @@ production database's migration behaviour beyond the additive `IF NOT EXISTS` sh
 the file already relies on, and no detector was driven end to end over `--db` in this session:
 the round trip is asserted at the store boundary (`IngestIdentities` then `Snapshot`), not
 through `idryx detect --db`.
+
+## The privilege_escalation detector could not fire from any shipped connector
+
+2026-08-05, from the same read-only audit. `internal/detect/detectors/privilege_escalation.go`
+keys its `dangerousPermissions` map on cloud ACTION strings (`iam:passrole`,
+`iam.serviceaccounts.actas`, `microsoft.authorization/roleassignments/write`). No connector
+produced a name of that shape. `aws_iam` emitted IAM POLICY NAMES from `AttachedManagedPolicies`
+and the inline policy lists, and never read `PolicyDocument` at all. `gcp_iam` emitted ROLE names
+(`roles/storage.admin`). `azure` emitted `roleDefinitionName` ("Owner", "Contributor"). All three
+bundled fixtures confirmed it. The detector's own test built identities by hand with action
+strings no connector emits, so it passed while the feature was unreachable from every input idryx
+can be given.
+
+Same root, wider blast radius: admin equivalence was decided purely by string-matching names
+(`isAdminPolicy`: "administratoraccess" or "admin"), so a customer-managed or inline policy
+granting `"Action": "*"` on `"Resource": "*"` under any ordinary name was invisible to
+`Identity.HasAdmin()`, and therefore to `excessive_agency`, `over_privileged_nhi`,
+`runaway_agent`, `attestation_missing` and `shadow_mcp`.
+
+**How far the parsing goes, and what it deliberately is not.** The aws_iam connector now reads
+policy documents: inline documents in both encodings a real export carries (URL-encoded JSON in a
+string from the API, a decoded object from the AWS CLI), and the DEFAULT version of each
+customer-managed policy from the same call's `Policies` section. From a document it derives the
+allowed action strings and whether the grant is administrator-equivalent. Deny statements grant
+nothing and are skipped; a `NotAction` list is never read as the actions allowed, which is the
+one way a naive reading inverts a statement's meaning. Conditions are not evaluated, so a
+conditioned Allow reads as an Allow, which over-reports rather than under-reports. GCP and Azure
+have no document to read, so each got a hand-maintained table of what their named roles contain:
+the escalation permissions inside the GCP predefined roles that carry one (owner, editor, the
+`iam.serviceAccount*` family), and the escalation actions inside the Azure built-in roles.
+Contributor is the one worth reading twice: it grants everything EXCEPT authorization writes, so
+it does not get `roleAssignments/write`, and a test fails if it ever does, because that would be
+a false accusation on one of the most widely assigned roles in Azure.
+
+**What remains, precisely.** A full IAM policy-language evaluator is out of scope and is not
+here: no condition evaluation, no `NotResource`, no resource-path matching (an action allowed
+only on one bucket ARN reads the same as one allowed on `*`, except for the admin verdict, which
+does require `Resource: "*"`), no permission boundaries, no SCPs, no session policies, and no
+trust-policy analysis (`sts:AssumeRole` reachability between roles, which is its own graph
+problem). AWS-managed policies are still judged by name and ARN, because their documents are not
+in this export at all. On GCP, a CUSTOM role's contents are not in a project IAM policy, so a
+custom role granting `iam.serviceAccounts.actAs` is still invisible; the same holds for a custom
+Azure role definition, since `az role assignment list` reports only the role's name. Both tables
+are hand-maintained (`@claude`, 2026-08-05) from documented role contents, not fetched live, so a
+provider changing a predefined role's contents is a change nothing here would notice. Closing the
+custom-role half means taking a second input (`gcloud iam roles describe`,
+`az role definition list`), which is a connector-shaped change, not a detector one.
+
+**The tests are driven from the bundled fixtures, not from hand-built identities**, so what they
+prove is the path from connector to detector rather than the detector in isolation, which is the
+exact gap that let this ship. Red against the unfixed tree (@measured `go test ./internal/detect/
+./internal/graph/`, 2026-08-05):
+
+```
+--- FAIL: TestPrivilegeEscalationReachableFromBundledConnectors/aws_iam (0.00s)
+        connector_reach_test.go:99: privilege_escalation did not fire for arn:aws:iam::123456789012:role/ci-deployer (an inline policy document allowing iam:PassRole; the connector never read PolicyDocument at all)
+    --- FAIL: TestPrivilegeEscalationReachableFromBundledConnectors/gcp_iam (0.00s)
+        connector_reach_test.go:99: privilege_escalation did not fire for gcp:ci-deployer@my-proj.iam.gserviceaccount.com (roles/owner contains iam.serviceAccounts.actAs; the connector emitted the role name and nothing knew what is inside it)
+    --- FAIL: TestPrivilegeEscalationReachableFromBundledConnectors/azure (0.00s)
+        connector_reach_test.go:99: privilege_escalation did not fire for azure:11111111-1111-1111-1111-111111111111 (the Owner built-in role contains Microsoft.Authorization/roleAssignments/write; the connector emitted "Owner")
+--- FAIL: TestAdminEquivalenceFromAPolicyDocumentNotAName (0.00s)
+    connector_reach_test.go:132: arn:aws:iam::123456789012:role/app-config holds a customer-managed policy allowing * on *, and HasAdmin() is false: every admin-based detector is blind to it
+    connector_reach_test.go:139: over_privileged_nhi did not fire for arn:aws:iam::123456789012:role/app-config, whose policy document grants everything on everything
+```
+
+**What was added to the fixtures**, since a test that invents its own input proves less than one
+that reads what ships. `testdata/aws_iam.json` gained: a `PolicyDocument` on the existing
+`inline-s3-read` inline policy (`s3:GetObject`, `s3:ListBucket` on one bucket, the benign case
+that must NOT fire); a `ci-deployer` role whose inline policy is URL-encoded exactly as the API
+returns it and allows `iam:PassRole`; an `app-config` role attached to a customer-managed policy
+under the ordinary name `AppConfigAccess`; and a top-level `Policies` section for that policy
+with two versions, where the non-default v1 allows one appconfig read and the DEFAULT v3 allows
+`*` on `*`. That last shape is doing two jobs: it is the admin-equivalence case, and it is the
+regression test for reading the wrong version, since a connector that took v1 would report a
+narrow policy that was widened. The GCP and Azure fixtures needed nothing added: `roles/owner`
+and `Owner` were already there and were already unreachable.
+
+The fix is visible in the shipped demo, not only in tests (@measured
+`./bin/idryx detect --source aws_iam ./testdata/aws_iam.json`, 2026-08-05):
+
+```
+high  over_privileged_nhi   arn:aws:iam::123456789012:role/app-config   NHI holds admin-equivalent permissions
+high  privilege_escalation  arn:aws:iam::123456789012:role/ci-deployer  NHI holds dangerous escalation permission "iam:passrole" via grant "deploy-service-roles" (AWS: Allow passing roles to AWS services)
+```
+
+**Folded in, on inspection.** The derived actions had to reach Postgres too, or this fix would
+have reintroduced the defect above one level down: the detector would fire from a file and stay
+silent over `--db`. They persist in an ordered `permission_actions` child table, and the
+persistence ratchet added earlier is what caught it, immediately and by name
+(`model.Permission.Actions has no persistence decision`). Separately, `matchDangerous`'s fallback
+scan iterated a Go map, so a permission string containing two escalation names reported whichever
+one map iteration reached first: a summary that could differ between runs on identical input,
+against invariant 1. It now iterates a sorted key list.
+
+**What this did not establish.** No real cloud export from a real account: every fixture here is
+hand-written to the documented shape of `aws iam get-account-authorization-details`,
+`gcloud projects get-iam-policy` and `az role assignment list`. Nothing was run against AWS, GCP
+or Azure. The GCP and Azure role tables are assertions about what those providers' roles contain,
+taken from documentation rather than measured against a live IAM API, and they are the part of
+this change most likely to age. And `permission_actions` was exercised through the
+`integration`-tagged round-trip test, which needs a Postgres this machine does not have, so CI is
+the first place it runs.
