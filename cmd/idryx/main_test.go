@@ -16,8 +16,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/TAIPANBOX/agent-stack-go/event"
 	"github.com/TAIPANBOX/idryx/internal/bom"
+	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
+	"github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -782,5 +785,133 @@ func TestMainExitCodeCleanRunIsZero(t *testing.T) {
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		t.Fatalf("expected exit 0, got err=%v\noutput:\n%s", runErr, out)
+	}
+}
+
+// chainedFixture writes n agent-event lines carrying the SPEC 6.5 prev_hash
+// chain, through the shared module's own writer, and returns the path plus
+// the raw lines so a test can tamper with one.
+func chainedFixture(t *testing.T, n int) (string, []string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bus.ndjson")
+	w, err := event.NewChainedWriter(path)
+	if err != nil {
+		t.Fatalf("new chained writer: %v", err)
+	}
+	for i := 0; i < n; i++ {
+		if err := w.Write(event.Event{
+			Schema:  event.SchemaV02,
+			TS:      fmt.Sprintf("2026-08-05T10:0%d:00Z", i),
+			Source:  "tokenfuse",
+			Type:    "spend_spike",
+			AgentID: "agent://acme.example/bot",
+		}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+}
+
+// TestReportTokenFuseChainStatesAreDistinguishable is the operator-facing
+// half of the prev_hash fix: the three states must read differently on
+// stderr. "The log was intact", "the producer keeps no chain, so nothing is
+// known", and "the chain is broken at line N" are three different facts, and
+// before this only the first two were indistinguishable silence.
+func TestReportTokenFuseChainStatesAreDistinguishable(t *testing.T) {
+	intact := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Chained: 2, Heads: 1},
+		})
+	})
+	if !strings.Contains(intact, "intact") || !strings.Contains(intact, "bus.ndjson") {
+		t.Errorf("an intact chain must say so, naming the stream, got %q", intact)
+	}
+
+	absent := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Heads: 3},
+		})
+	})
+	if strings.Contains(absent, "intact") {
+		t.Errorf("a stream with no chain must not read as intact, got %q", absent)
+	}
+	if !strings.Contains(absent, "no prev_hash chain") {
+		t.Errorf("a stream with no chain must say so, got %q", absent)
+	}
+
+	broken := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Chained: 1, Heads: 1, Breaks: []tokenfuse.ChainBreak{
+				{File: "bus.ndjson", Line: 3, Expected: "sha256:aaa", Found: "sha256:bbb"},
+			}},
+		})
+	})
+	if !strings.Contains(broken, "line 3") {
+		t.Errorf("a break must be reported with its position, got %q", broken)
+	}
+	if strings.Contains(broken, "intact") {
+		t.Errorf("a broken chain must not read as intact, got %q", broken)
+	}
+}
+
+// TestPopulateVerifiesChainOnIngest is the wiring check: a real --load
+// tokenfuse:<path> over a tampered stream must surface the break on stderr,
+// and must still ingest every event. A detection tool that discards a log
+// because the log shows evidence of tampering has been talked out of its
+// own finding.
+func TestPopulateVerifiesChainOnIngest(t *testing.T) {
+	_, lines := chainedFixture(t, 4)
+	lines[1] = strings.Replace(lines[1], `"type":"spend_spike"`, `"type":"sustained_loop"`, 1)
+	tampered := filepath.Join(t.TempDir(), "tampered.ndjson")
+	if err := os.WriteFile(tampered, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var g graph.Reader
+	out := captureStderr(t, func() {
+		var err error
+		g, err = buildGraph("", "", "", "", "", "", "", loadList{{Source: "tokenfuse", Path: tampered}})
+		if err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "line 3") || !strings.Contains(out, tampered) {
+		t.Errorf("expected the chain break reported with its file and position, got %q", out)
+	}
+
+	var events int
+	for _, id := range g.Identities() {
+		events += len(id.Events)
+	}
+	if events != 4 {
+		t.Errorf("ingested %d events, want 4: a broken chain must not discard the stream", events)
+	}
+}
+
+// TestPopulateReportsAnIntactChain is the same path over an untampered
+// stream: the operator gets a positive statement that the log verified,
+// which is the only thing that distinguishes it from nobody having looked.
+func TestPopulateReportsAnIntactChain(t *testing.T) {
+	path, _ := chainedFixture(t, 3)
+	out := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loadList{{Source: "tokenfuse", Path: path}}); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "intact") {
+		t.Errorf("expected an intact-chain statement on stderr, got %q", out)
+	}
+	if strings.Contains(out, "BROKEN") {
+		t.Errorf("a clean stream must not report a break, got %q", out)
 	}
 }

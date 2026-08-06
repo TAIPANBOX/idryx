@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-190-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-200-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -205,6 +205,14 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`,
   `dlp_block`, `taint_block`, `mcp_drift`) map to named constants; any other
   type, from TokenFuse or another producer, is tolerated generically.
+  Every such stream is checked against the SPEC 6.5 `prev_hash` integrity
+  chain on ingest, through `agent-stack-go`'s own `event.VerifyChain`, and
+  the verdict goes to stderr: chain intact, chain broken at these lines, or
+  no chain present at all. The three are stated separately because "the log
+  verified" and "nobody looked" are different facts. A break is reported and
+  never fatal: the events are still ingested, since a tool that discards a
+  log because the log shows evidence of tampering can be silenced by
+  tampering with it.
 
 Three detectors read this agent-governance state directly: `attestation_missing`
 (fires on standing privilege alone, a privileged/admin agent with no

@@ -245,3 +245,72 @@ through the same shared loop in `runDetect`, via Slack/webhook mocks -- its own 
 separately driven into a failure to confirm this specific loop counts an OTLP failure identically,
 though the loop's logic is sink-agnostic (it only calls the `sink.Sink` interface, the same one
 Slack and webhook implement).
+
+## The shared contract was four minor versions stale, and the delta was the integrity check
+
+2026-08-05, from the same read-only audit. `go.mod` pinned
+`github.com/TAIPANBOX/agent-stack-go v0.3.0` while the module was tagged through v0.5.1, and
+everything added to its wire packages since v0.3.0 is one file: `event/chain.go`, the SPEC 6.5
+`prev_hash` tamper-evidence chain (`Canonicalize`, `ChainHash`, `VerifyChain`, `ChainedWriter`).
+So idryx ingested append-only agent-event NDJSON with no integrity check available to it at all,
+while AGENTS.md invariant 3 names that module the single pinned source of the wire types. An
+identity plane that reads a log somebody else appends to, and cannot say whether the log it read
+is the log that was written, is missing the one property the format was given for it.
+
+Fixed by bumping the pin to v0.5.1 and calling `event.VerifyChain` on every agent-event-bus
+ingest (`internal/ingest/tokenfuse`), with the verdict carried in the connector's existing
+`Report` and printed by `cmd/idryx`'s existing `reportTokenFuse` path. The verification is a
+second pass over the same bytes rather than an inline copy of the hashing rule inside `Parse`'s
+own loop, on purpose: a second implementation of the wire contract in this repository is exactly
+the drift invariant 3 exists to prevent.
+
+**A broken chain is reported, loudly, and is never fatal.** Idryx is a detection tool whose value
+is noticing tampering. Refusing to ingest a stream that shows evidence of tampering would hand an
+attacker a way to delete every finding in a file by editing one line of it, and the events are
+still evidence: the chain says they may not be all of it, or not as written. It also matches the
+connector's existing contract (SPEC 6.1/6.7): a content problem is counted and reported, never a
+reason to abort the file. What the fix does add is that **an operator can tell "the log was
+intact" from "nobody checked"**, which before this was the same silence. Every bus ingest now
+prints exactly one of four lines: chain intact (with the counts), chain BROKEN (with each break's
+file and physical line number), no `prev_hash` chain present at all, or chain not checked. A
+legal restart is not a break, per the spec and `VerifyChain`'s own distinction: it is a second
+chain head, and the tests hold that.
+
+Before the fix, none of this compiled, because the pinned module had no chain package at all
+(@measured `go test ./internal/ingest/tokenfuse/`, 2026-08-05, against the unfixed tree):
+
+```
+# github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse [github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse.test]
+internal/ingest/tokenfuse/chain_test.go:19:18: undefined: event.NewChainedWriter
+internal/ingest/tokenfuse/chain_test.go:68:10: rep.Chain undefined (type Report has no field or method Chain)
+...
+FAIL	github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse [build failed]
+```
+
+The operator-facing half was driven separately, against the bumped module but the unfixed
+reporting path, so a green connector could not stand in for a silent CLI (@measured `go test
+./cmd/idryx/ -run Chain`, 2026-08-05):
+
+```
+--- FAIL: TestReportTokenFuseChainStatesAreDistinguishable (0.00s)
+    main_test.go:835: an intact chain must say so, naming the stream, got ""
+    main_test.go:848: a stream with no chain must say so, got ""
+    main_test.go:860: a break must be reported with its position, got ""
+--- FAIL: TestPopulateVerifiesChainOnIngest (0.00s)
+    main_test.go:889: expected the chain break reported with its file and position, got ""
+--- FAIL: TestPopulateReportsAnIntactChain (0.00s)
+    main_test.go:912: expected an intact-chain statement on stderr, got ""
+```
+
+All ten pass after the fix, and the fixtures they verify are written by the shared module's own
+`ChainedWriter` rather than by hand, so the bytes under test are the bytes a real bus producer
+writes (@measured `go test ./internal/ingest/tokenfuse/ ./cmd/idryx/`, 2026-08-05, both `ok`).
+
+**What this did not establish.** No tampered stream from a real producer: every fixture here is
+written and then edited by the test. The break position is the line AFTER the edited one, which
+is correct and is what a hash chain can prove (the first link that no longer holds), not a claim
+that idryx identifies the edited record itself. Nothing about a chain that was rewritten
+end to end: `prev_hash` is tamper-evidence, not tamper-proof, and a rewriter who re-chains the
+whole file passes this check by construction. And the chain verdict is not yet a detector
+finding: it reaches the operator on stderr and through `tokenfuse.Report`, not as a
+`model.Alert` in the graph, so it does not reach a SIEM sink or the dashboard.

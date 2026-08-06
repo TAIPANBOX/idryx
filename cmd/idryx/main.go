@@ -359,16 +359,63 @@ func populate(g *graph.Store, spec loadSpec) error {
 // reportTokenFuse prints a one-line stderr summary when an agent-event-bus
 // batch (tokenfuse, wardryx, mockryx, verdryx: see agentBusSources) had
 // anything worth flagging (agent-passport SPEC §6.1/§7: unknown fields and
-// types are tolerated, never errors, but they are still worth surfacing).
+// types are tolerated, never errors, but they are still worth surfacing),
+// followed by the verdict on the stream's prev_hash integrity chain.
 // source is the --source/--load name that selected the loader (for the
 // message only; it plays no part in identity/event attribution, which
 // comes from each envelope's own `source` field).
 func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
-	if rep.Malformed == 0 && len(rep.UnknownTypes) == 0 {
-		return
+	if rep.Malformed > 0 || len(rep.UnknownTypes) > 0 {
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
+			source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
 	}
-	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
-		source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+	reportChain(source, pathOrGlob, rep.Chain)
+}
+
+// maxReportedBreaks caps how many individual chain breaks are listed. One
+// edit near the start of a stream breaks every line after it, so an
+// uncapped list is a wall of stderr that buries the first and most useful
+// line number. The count is always stated in full.
+const maxReportedBreaks = 5
+
+// reportChain states, on every agent-event-bus ingest, what the SPEC §6.5
+// prev_hash chain says about the stream. It prints in all four cases on
+// purpose, including the good one: an operator has to be able to tell "the
+// log was intact" from "nobody checked", and before this fix both were the
+// same silence.
+//
+// A break is reported, never fatal. This is a deliberate choice and the
+// reasoning belongs beside it: idryx is a detection tool whose value is
+// noticing tampering, and refusing to ingest a stream that shows evidence of
+// tampering would let an attacker delete every finding in a file by editing
+// one line of it. The events are still evidence; the chain says they may not
+// be all of it, or not as written. That is a finding to surface loudly, not
+// a reason to go quiet. It also matches the connector's existing contract
+// (SPEC §6.1/§7, and the malformed-line handling above): a content problem
+// is counted and reported, never a reason to abort the file.
+func reportChain(source, pathOrGlob string, c tokenfuse.Chain) {
+	switch {
+	case !c.Verified:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain NOT CHECKED (the stream could not be read through), so nothing here says whether it was tampered with\n",
+			source, pathOrGlob)
+	case len(c.Breaks) > 0:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain BROKEN at %d line(s); the events were still ingested, and the log is no longer evidence of its own completeness\n",
+			source, pathOrGlob, len(c.Breaks))
+		for i, b := range c.Breaks {
+			if i == maxReportedBreaks {
+				fmt.Fprintf(os.Stderr, "idryx:   ... and %d more\n", len(c.Breaks)-maxReportedBreaks)
+				break
+			}
+			fmt.Fprintf(os.Stderr, "idryx:   %s line %d: expected prev_hash %s, found %s\n",
+				b.File, b.Line, b.Expected, b.Found)
+		}
+	case !c.Present():
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: no prev_hash chain present (SPEC 6.5 keeps it optional), so this ingest is not evidence for or against tampering\n",
+			source, pathOrGlob)
+	default:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain intact: %d event(s) chained, %d chain head(s), %d unverifiable\n",
+			source, pathOrGlob, c.Chained, c.Heads, len(c.Unverifiable))
+	}
 }
 
 // reportIngest prints a one-line stderr summary when an okta/entra/
