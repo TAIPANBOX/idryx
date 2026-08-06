@@ -15,6 +15,15 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
+// testDSN returns the integration DSN, skipping when there is none.
+//
+// This package shares that one database with internal/graph, whose own
+// helper TRUNCATEs it at the start of every test. Nothing here truncates,
+// and every assertion below is scoped to the identities this test ingested,
+// so a stray row from another package cannot change the verdict. The run
+// itself is serialized with `go test -p 1` (Makefile and CI) so a truncate
+// cannot land between this test's ingest and its read: a shared fixture that
+// only works when nobody else is looking is a flake waiting for a busy day.
 func testDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
