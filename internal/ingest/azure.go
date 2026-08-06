@@ -56,8 +56,9 @@ func Azure(data []byte) ([]model.Identity, error) {
 		}
 		for _, role := range rolesByPrincipal[sp.ID] {
 			id.Permissions = append(id.Permissions, model.Permission{
-				Name:  role,
-				Admin: isAzureAdminRole(role),
+				Name:    role,
+				Admin:   isAzureAdminRole(role),
+				Actions: escalationActionsInAzureRole(role),
 			})
 		}
 		// The most recent credential expiry stands in for a freshness signal:
@@ -69,6 +70,60 @@ func Azure(data []byte) ([]model.Identity, error) {
 		out = append(out, id)
 	}
 	return out, nil
+}
+
+// azureRoleEscalationActions records, for the Azure built-in roles that carry
+// them, the escalation-relevant actions the role definition contains.
+// `az role assignment list` reports a roleDefinitionName ("Owner",
+// "Contributor") and nothing about the actions behind it, so without this
+// table the privilege_escalation detector, which keys on action strings,
+// could never fire from this connector.
+//
+// Scope, stated: built-in roles only, and only the actions in the detector's
+// own escalation list. Hand-maintained (@claude, 2026-08-06) from the
+// documented built-in role definitions rather than fetched live, because this
+// connector reads an export and never calls Azure. A CUSTOM role definition's
+// actions are not in this input at all, so a custom role granting
+// Microsoft.Authorization/roleAssignments/write is still invisible here.
+//
+// Contributor is the one worth reading twice: it grants everything EXCEPT
+// authorization writes, so it does not get roleAssignments/write, and giving
+// it one would be a false accusation on one of the most widely assigned roles
+// in Azure. It does get deployments/write and runCommand/action, which are
+// real escalation paths (deploy a template, or run a command inside a VM, as
+// a more privileged identity).
+var azureRoleEscalationActions = map[string][]string{
+	"owner": {
+		"microsoft.authorization/roleassignments/write",
+		"microsoft.authorization/roledefinitions/write",
+		"microsoft.resources/deployments/write",
+		"microsoft.compute/virtualmachines/runcommand/action",
+	},
+	"user access administrator": {
+		"microsoft.authorization/roleassignments/write",
+		"microsoft.authorization/roledefinitions/write",
+	},
+	"role based access control administrator": {
+		"microsoft.authorization/roleassignments/write",
+	},
+	"contributor": {
+		"microsoft.resources/deployments/write",
+		"microsoft.compute/virtualmachines/runcommand/action",
+	},
+	"virtual machine contributor": {
+		"microsoft.compute/virtualmachines/runcommand/action",
+	},
+}
+
+// escalationActionsInAzureRole returns the escalation-relevant actions an
+// Azure built-in role is known to contain, or nil when the role is not in the
+// table (which means "not known", never "contains none").
+func escalationActionsInAzureRole(role string) []string {
+	actions, ok := azureRoleEscalationActions[strings.ToLower(strings.TrimSpace(role))]
+	if !ok {
+		return nil
+	}
+	return normalizeActions(actions)
 }
 
 // isAzureAdminRole flags built-in roles that grant broad control.

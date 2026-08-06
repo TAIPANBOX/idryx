@@ -62,8 +62,9 @@ func GCPIAM(data []byte) ([]model.Identity, error) {
 		}
 		for _, role := range rolesByEmail[sa.Email] {
 			id.Permissions = append(id.Permissions, model.Permission{
-				Name:  role,
-				Admin: isAdminRole(role),
+				Name:    role,
+				Admin:   isAdminRole(role),
+				Actions: escalationPermissionsInRole(role),
 			})
 		}
 		id.Privileged = id.HasAdmin()
@@ -169,6 +170,74 @@ func servicesFromRole(role string) []string {
 		return []string{r[:i]}
 	}
 	return nil
+}
+
+// gcpRoleEscalationPermissions records, for the GCP roles that carry one, the
+// escalation-relevant permissions the role contains. A GCP project IAM policy
+// (`gcloud projects get-iam-policy`) binds ROLES to members and says nothing
+// about what is inside a role, so without this table the only thing idryx
+// knew about roles/owner was its name, and the privilege_escalation detector,
+// which keys on permission strings, could never fire from this connector.
+//
+// Scope and honesty about it: these are predefined roles only, and only the
+// permissions that appear in the detector's own escalation list. It is a
+// hand-maintained map (@claude, 2026-08-06), not a fetch of the live role
+// definition: this connector is offline by design and reads the export it was
+// given. Google can change what a predefined role contains, and a CUSTOM
+// role's contents are not in this input at all, so a custom role granting
+// iam.serviceAccounts.actAs is still invisible here. Both limits are stated
+// in VALIDATION.md rather than papered over.
+var gcpRoleEscalationPermissions = map[string][]string{
+	// Primitive roles. Owner and Editor both carry service-account
+	// impersonation and key creation, which is the classic GCP escalation
+	// path (act as a more privileged service account).
+	"roles/owner": {
+		"iam.serviceaccounts.actas",
+		"iam.serviceaccounts.getaccesstoken",
+		"iam.serviceaccounts.getopenidtoken",
+		"iam.serviceaccounts.implicitdelegation",
+		"iam.serviceaccounts.signblob",
+		"iam.serviceaccounts.signjwt",
+		"iam.serviceaccounts.setiampolicy",
+		"iam.serviceaccountkeys.create",
+	},
+	"roles/editor": {
+		"iam.serviceaccounts.actas",
+		"iam.serviceaccountkeys.create",
+	},
+	// The service-account roles, which exist precisely to delegate
+	// impersonation.
+	"roles/iam.serviceaccountuser": {
+		"iam.serviceaccounts.actas",
+	},
+	"roles/iam.serviceaccounttokencreator": {
+		"iam.serviceaccounts.getaccesstoken",
+		"iam.serviceaccounts.getopenidtoken",
+		"iam.serviceaccounts.implicitdelegation",
+		"iam.serviceaccounts.signblob",
+		"iam.serviceaccounts.signjwt",
+	},
+	"roles/iam.serviceaccountkeyadmin": {
+		"iam.serviceaccountkeys.create",
+	},
+	"roles/iam.serviceaccountadmin": {
+		"iam.serviceaccounts.setiampolicy",
+	},
+	"roles/iam.workloadidentityuser": {
+		"iam.serviceaccounts.getaccesstoken",
+		"iam.serviceaccounts.getopenidtoken",
+	},
+}
+
+// escalationPermissionsInRole returns the escalation-relevant permissions a
+// GCP role is known to contain, or nil when the role is not in the table
+// (which means "not known", never "contains none").
+func escalationPermissionsInRole(role string) []string {
+	perms, ok := gcpRoleEscalationPermissions[strings.ToLower(role)]
+	if !ok {
+		return nil
+	}
+	return normalizeActions(perms)
 }
 
 // isAdminRole flags GCP primitive and admin roles. roles/owner and roles/editor

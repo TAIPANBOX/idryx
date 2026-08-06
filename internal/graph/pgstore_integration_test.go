@@ -447,3 +447,199 @@ func TestPgLegacyOnBehalfOfBackfill(t *testing.T) {
 		}
 	}
 }
+
+// TestPgShadowAndDeclaredModelsRoundTrip is the live-database half of the
+// two fields the Postgres backend used to drop on the floor.
+//
+// model.Identity.Shadow (an MCP server in use but absent from the
+// sanctioned registry) and model.Identity.DeclaredModels (the Passport 4.5
+// declaration) had no columns, were never written by IngestIdentities and
+// never read by Snapshot. Three detectors key on them: shadow_mcp and
+// agent_shadow_tool on Shadow, undeclared_llm on DeclaredModels. Over
+// --db all three ran against a graph where every Shadow flag was false and
+// every agent had zero declared models, and all three returned nothing with
+// no warning, which is indistinguishable from a clean estate.
+func TestPgShadowAndDeclaredModelsRoundTrip(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	identities := []model.Identity{
+		{
+			ID:     "mcp:shadow-shell@https://mcp.unknown.dev/shell",
+			Type:   model.IdentityMCPServer,
+			Source: "mcp",
+			Shadow: true,
+			Permissions: []model.Permission{
+				{Name: "shell_exec", Admin: true},
+			},
+		},
+		{
+			ID:     "mcp:github-mcp@https://mcp.internal/github",
+			Type:   model.IdentityMCPServer,
+			Source: "mcp",
+			Owner:  "platform",
+			Shadow: false,
+			Permissions: []model.Permission{
+				{Name: "repo_read"},
+			},
+		},
+		{
+			ID:      "agent://acme.example/support/bot",
+			Type:    model.IdentityAgent,
+			Source:  "agents",
+			Owner:   "platform",
+			Runtime: "langgraph",
+			DeclaredModels: []model.DeclaredModel{
+				{Provider: "anthropic", Model: "claude-sonnet-4-5", Endpoint: "api.anthropic.com"},
+				{Provider: "openai"},
+			},
+		},
+	}
+
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("ingest identities: %v", err)
+	}
+	store, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	byID := map[string]*model.Identity{}
+	for _, id := range store.Identities() {
+		byID[id.ID] = id
+	}
+
+	shadow := byID["mcp:shadow-shell@https://mcp.unknown.dev/shell"]
+	if shadow == nil || !shadow.Shadow {
+		t.Errorf("shadow MCP server came back with Shadow=false: %+v, so shadow_mcp and agent_shadow_tool see a sanctioned server", shadow)
+	}
+	sanctioned := byID["mcp:github-mcp@https://mcp.internal/github"]
+	if sanctioned == nil || sanctioned.Shadow {
+		t.Errorf("sanctioned MCP server came back with Shadow=true: %+v", sanctioned)
+	}
+
+	agent := byID["agent://acme.example/support/bot"]
+	if agent == nil {
+		t.Fatal("agent missing from snapshot")
+	}
+	if len(agent.DeclaredModels) != 2 {
+		t.Fatalf("DeclaredModels = %+v, want 2 (undeclared_llm skips an agent that declared nothing, so losing these silences it)", agent.DeclaredModels)
+	}
+	// Declaration order is the Passport's own and is preserved by position.
+	if got := agent.DeclaredModels[0]; got.Provider != "anthropic" || got.Model != "claude-sonnet-4-5" || got.Endpoint != "api.anthropic.com" {
+		t.Errorf("DeclaredModels[0] = %+v, want the full anthropic declaration", got)
+	}
+	if got := agent.DeclaredModels[1]; got.Provider != "openai" || got.Model != "" || got.Endpoint != "" {
+		t.Errorf("DeclaredModels[1] = %+v, want a provider-only declaration (the optional fields stay empty)", got)
+	}
+
+	// Re-ingesting the same batch must be idempotent: the declaration is
+	// replaced in place, not appended to, the same way permissions and the
+	// delegation chain already are.
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+	store, err = s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot after re-ingest: %v", err)
+	}
+	for _, id := range store.Identities() {
+		if id.ID == "agent://acme.example/support/bot" && len(id.DeclaredModels) != 2 {
+			t.Errorf("re-ingest duplicated the declaration: %+v", id.DeclaredModels)
+		}
+	}
+}
+
+// TestPgShadowFlagIsStickyLikePrivileged holds the merge rule: the
+// in-memory Store.AddIdentity ORs Shadow in and never clears it (a server
+// seen unsanctioned once stays flagged for the run), so the Postgres upsert
+// has to do the same. A later inventory that omits the flag must not quietly
+// sanction a shadow server.
+func TestPgShadowFlagIsStickyLikePrivileged(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	id := "mcp:notes-mcp@https://mcp.unknown.dev/notes"
+	if err := s.IngestIdentities(ctx, []model.Identity{
+		{ID: id, Type: model.IdentityMCPServer, Source: "mcp", Shadow: true},
+	}); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if err := s.IngestIdentities(ctx, []model.Identity{
+		{ID: id, Type: model.IdentityMCPServer, Source: "mcp", Shadow: false},
+	}); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+
+	store, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, got := range store.Identities() {
+		if got.ID == id && !got.Shadow {
+			t.Error("a second ingest without the flag cleared Shadow; it is a sticky OR, like privileged")
+		}
+	}
+}
+
+// TestPgPermissionActionsRoundTrip is the live-database half of the
+// escalation fix. The actions a grant allows (read out of an AWS policy
+// document, or derived from a GCP/Azure role definition) are what
+// privilege_escalation keys on, so a Postgres-backed graph that dropped
+// them would silence the detector again exactly the way the missing shadow
+// column silenced shadow_mcp. Order is the policy document's own and is
+// preserved by position.
+func TestPgPermissionActionsRoundTrip(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	identities := []model.Identity{
+		{
+			ID:     "arn:aws:iam::123456789012:role/ci-deployer",
+			Type:   model.IdentityServiceAccount,
+			Source: "aws_iam",
+			Permissions: []model.Permission{
+				{Name: "deploy-service-roles", Actions: []string{"iam:passrole", "ecs:runtask"}},
+				{Name: "ReadOnlyAccess", ARN: "arn:aws:iam::aws:policy/ReadOnlyAccess"},
+			},
+		},
+	}
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	read := func() map[string][]string {
+		t.Helper()
+		store, err := s.Snapshot(ctx)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		out := map[string][]string{}
+		for _, id := range store.Identities() {
+			for _, p := range id.Permissions {
+				out[p.Name] = p.Actions
+			}
+		}
+		return out
+	}
+
+	got := read()
+	deploy := got["deploy-service-roles"]
+	if len(deploy) != 2 || deploy[0] != "iam:passrole" || deploy[1] != "ecs:runtask" {
+		t.Errorf("actions = %v, want [iam:passrole ecs:runtask] in document order", deploy)
+	}
+	if n := len(got["ReadOnlyAccess"]); n != 0 {
+		t.Errorf("a grant with no derived actions came back with %d", n)
+	}
+
+	// Re-ingesting with a narrowed policy must replace the action list, not
+	// append to it: an operator who removed iam:PassRole yesterday cannot
+	// still be told they hold it.
+	identities[0].Permissions[0].Actions = []string{"ecs:runtask"}
+	if err := s.IngestIdentities(ctx, identities); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+	got = read()
+	if deploy := got["deploy-service-roles"]; len(deploy) != 1 || deploy[0] != "ecs:runtask" {
+		t.Errorf("actions after re-ingest = %v, want [ecs:runtask]: the list is replaced, never grown", deploy)
+	}
+}

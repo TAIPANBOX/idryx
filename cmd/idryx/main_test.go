@@ -16,8 +16,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/TAIPANBOX/agent-stack-go/event"
 	"github.com/TAIPANBOX/idryx/internal/bom"
+	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
+	"github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -783,4 +786,253 @@ func TestMainExitCodeCleanRunIsZero(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("expected exit 0, got err=%v\noutput:\n%s", runErr, out)
 	}
+}
+
+// chainedFixture writes n agent-event lines carrying the SPEC 6.5 prev_hash
+// chain, through the shared module's own writer, and returns the path plus
+// the raw lines so a test can tamper with one.
+func chainedFixture(t *testing.T, n int) (string, []string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bus.ndjson")
+	w, err := event.NewChainedWriter(path)
+	if err != nil {
+		t.Fatalf("new chained writer: %v", err)
+	}
+	for i := 0; i < n; i++ {
+		if err := w.Write(event.Event{
+			Schema:  event.SchemaV02,
+			TS:      fmt.Sprintf("2026-08-05T10:0%d:00Z", i),
+			Source:  "tokenfuse",
+			Type:    "spend_spike",
+			AgentID: "agent://acme.example/bot",
+		}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+}
+
+// TestReportTokenFuseChainStatesAreDistinguishable is the operator-facing
+// half of the prev_hash fix: the three states must read differently on
+// stderr. "The log was intact", "the producer keeps no chain, so nothing is
+// known", and "the chain is broken at line N" are three different facts, and
+// before this only the first two were indistinguishable silence.
+func TestReportTokenFuseChainStatesAreDistinguishable(t *testing.T) {
+	intact := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Chained: 2, Heads: 1},
+		})
+	})
+	if !strings.Contains(intact, "intact") || !strings.Contains(intact, "bus.ndjson") {
+		t.Errorf("an intact chain must say so, naming the stream, got %q", intact)
+	}
+
+	absent := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Heads: 3},
+		})
+	})
+	if strings.Contains(absent, "intact") {
+		t.Errorf("a stream with no chain must not read as intact, got %q", absent)
+	}
+	if !strings.Contains(absent, "no prev_hash chain") {
+		t.Errorf("a stream with no chain must say so, got %q", absent)
+	}
+
+	broken := captureStderr(t, func() {
+		reportTokenFuse("tokenfuse", "bus.ndjson", tokenfuse.Report{
+			Lines: 3,
+			Chain: tokenfuse.Chain{Verified: true, Chained: 1, Heads: 1, Breaks: []tokenfuse.ChainBreak{
+				{File: "bus.ndjson", Line: 3, Expected: "sha256:aaa", Found: "sha256:bbb"},
+			}},
+		})
+	})
+	if !strings.Contains(broken, "line 3") {
+		t.Errorf("a break must be reported with its position, got %q", broken)
+	}
+	if strings.Contains(broken, "intact") {
+		t.Errorf("a broken chain must not read as intact, got %q", broken)
+	}
+}
+
+// TestPopulateVerifiesChainOnIngest is the wiring check: a real --load
+// tokenfuse:<path> over a tampered stream must surface the break on stderr,
+// and must still ingest every event. A detection tool that discards a log
+// because the log shows evidence of tampering has been talked out of its
+// own finding.
+func TestPopulateVerifiesChainOnIngest(t *testing.T) {
+	_, lines := chainedFixture(t, 4)
+	lines[1] = strings.Replace(lines[1], `"type":"spend_spike"`, `"type":"sustained_loop"`, 1)
+	tampered := filepath.Join(t.TempDir(), "tampered.ndjson")
+	if err := os.WriteFile(tampered, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var g graph.Reader
+	out := captureStderr(t, func() {
+		var err error
+		g, err = buildGraph("", "", "", "", "", "", "", loadList{{Source: "tokenfuse", Path: tampered}})
+		if err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "line 3") || !strings.Contains(out, tampered) {
+		t.Errorf("expected the chain break reported with its file and position, got %q", out)
+	}
+
+	var events int
+	for _, id := range g.Identities() {
+		events += len(id.Events)
+	}
+	if events != 4 {
+		t.Errorf("ingested %d events, want 4: a broken chain must not discard the stream", events)
+	}
+}
+
+// TestPopulateReportsAnIntactChain is the same path over an untampered
+// stream: the operator gets a positive statement that the log verified,
+// which is the only thing that distinguishes it from nobody having looked.
+func TestPopulateReportsAnIntactChain(t *testing.T) {
+	path, _ := chainedFixture(t, 3)
+	out := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loadList{{Source: "tokenfuse", Path: path}}); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if !strings.Contains(out, "intact") {
+		t.Errorf("expected an intact-chain statement on stderr, got %q", out)
+	}
+	if strings.Contains(out, "BROKEN") {
+		t.Errorf("a clean stream must not report a break, got %q", out)
+	}
+}
+
+// TestLoadModeAppliesCloudTrailEnrichment is the regression test for the
+// second ignored flag. loadList.Set populated only Source and Path, so the
+// CTPath/AuditPath of every spec built from --load stayed empty, the
+// usage-enrichment paths never ran, and least_privilege stayed silent with
+// no error: an operator who passed --cloudtrail got the same output as one
+// who did not.
+func TestLoadModeAppliesCloudTrailEnrichment(t *testing.T) {
+	loads := loadList{{Source: "aws_iam", Path: "../../testdata/aws_iam.json"}}
+	g, err := buildGraph("", "", "", "", "../../testdata/cloudtrail.json", "", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+
+	used := 0
+	for _, id := range g.Identities() {
+		for _, p := range id.Permissions {
+			if p.Used {
+				used++
+			}
+		}
+	}
+	if used == 0 {
+		t.Fatal("no permission was marked used, so --cloudtrail did nothing in --load mode")
+	}
+
+	alerts := detectorAlerts(t, g, "least_privilege")
+	if len(alerts) == 0 {
+		t.Error("least_privilege fired nothing: with usage data it must be able to name never-exercised grants")
+	}
+}
+
+// TestLoadModeAppliesGCPAuditEnrichment is the same for the GCP half.
+func TestLoadModeAppliesGCPAuditEnrichment(t *testing.T) {
+	loads := loadList{{Source: "gcp_iam", Path: "../../testdata/gcp_iam.json"}}
+	g, err := buildGraph("", "", "", "", "", "../../testdata/gcp_audit.json", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+	used := 0
+	for _, id := range g.Identities() {
+		for _, p := range id.Permissions {
+			if p.Used {
+				used++
+			}
+		}
+	}
+	if used == 0 {
+		t.Fatal("no role was marked used, so --gcp-audit did nothing in --load mode")
+	}
+}
+
+// TestUsageFlagWithNoMatchingSourceIsAnError: applying the flag is the fix
+// where it can apply. Where it cannot (no aws_iam/gcp_iam source in the run
+// at all, including --db, where enrichment happened at load time), the
+// honest answer is to refuse and name the combination, rather than accept a
+// flag and drop it.
+func TestUsageFlagWithNoMatchingSourceIsAnError(t *testing.T) {
+	cases := []struct {
+		name      string
+		source    string
+		db        string
+		ctPath    string
+		auditPath string
+		loads     loadList
+		wantIn    string
+	}{
+		{
+			name:   "cloudtrail with an okta load",
+			ctPath: "../../testdata/cloudtrail.json",
+			loads:  loadList{{Source: "okta", Path: "../../testdata/events.json"}},
+			wantIn: "--cloudtrail",
+		},
+		{
+			name:      "gcp-audit with an aws_iam load",
+			auditPath: "../../testdata/gcp_audit.json",
+			loads:     loadList{{Source: "aws_iam", Path: "../../testdata/aws_iam.json"}},
+			wantIn:    "--gcp-audit",
+		},
+		{
+			name:   "cloudtrail with a single okta source",
+			source: "okta",
+			ctPath: "../../testdata/cloudtrail.json",
+			wantIn: "--cloudtrail",
+		},
+		{
+			name:   "cloudtrail with --db",
+			db:     "postgres://unused",
+			ctPath: "../../testdata/cloudtrail.json",
+			wantIn: "--cloudtrail",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := ""
+			if tc.source != "" && len(tc.loads) == 0 && tc.db == "" {
+				path = "../../testdata/events.json"
+			}
+			_, err := buildGraph(tc.source, "", path, tc.db, tc.ctPath, tc.auditPath, "", tc.loads)
+			if err == nil {
+				t.Fatalf("expected an error naming %s, got none: the flag was accepted and ignored", tc.wantIn)
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Errorf("error = %q, want it to name %s so the operator knows which flag did nothing", err, tc.wantIn)
+			}
+		})
+	}
+}
+
+// detectorAlerts runs one registered detector over g by name.
+func detectorAlerts(t *testing.T, g graph.Reader, name string) []model.Alert {
+	t.Helper()
+	var out []model.Alert
+	for _, a := range runDetectors(g) {
+		if a.Detector == name {
+			out = append(out, a)
+		}
+	}
+	return out
 }

@@ -145,7 +145,72 @@ func mergePermission(dst, in model.Permission) model.Permission {
 	if in.ARN != "" {
 		dst.ARN = in.ARN
 	}
+	dst.Actions = unionActions(dst.Actions, in.Actions)
 	return dst
+}
+
+// unionActions folds two reports of the same grant's action strings, keeping
+// first-seen order and dropping repeats.
+//
+// Union rather than last-wins, because model.Permission documents that "an
+// empty Actions never means 'allows nothing'": it means the source had no way
+// to say. A managed policy whose document was not in the export and the same
+// policy read from an inline document are two reports of one grant, one of
+// them blind. Letting the blind one overwrite the sighted one would delete
+// evidence, and privilege_escalation reads exactly this field to decide
+// whether a grant allows iam:PassRole. That is the same direction Admin and
+// Used take one line up: positive evidence accumulates, an absent observation
+// never clears a present one.
+func unionActions(dst, in []string) []string {
+	if len(in) == 0 {
+		return dst
+	}
+	if len(dst) == 0 {
+		return append([]string(nil), in...)
+	}
+	seen := make(map[string]bool, len(dst)+len(in))
+	for _, a := range dst {
+		seen[a] = true
+	}
+	for _, a := range in {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		dst = append(dst, a)
+	}
+	return dst
+}
+
+// MarkPrivileged folds an operator-supplied privileged set into a graph that
+// already exists. New(privileged) covers the case where the set is known
+// before anything is ingested; this covers the case where it is not, which is
+// every Postgres snapshot: the graph comes back from the database already
+// populated, and the CLI's --privileged set has to reach it afterwards or it
+// reaches nothing at all. Ten detectors raise severity for a privileged
+// identity, so a set that is accepted and dropped produces systematically
+// under-ranked findings with nothing saying why.
+//
+// It marks identities already in the graph and remembers the set for any
+// created later, matching New's behaviour. An identity named in the set but
+// absent from the graph is NOT invented: --privileged says which identities
+// matter more, not which exist.
+func (s *Store) MarkPrivileged(privileged map[string]bool) {
+	if len(privileged) == 0 {
+		return
+	}
+	if s.privileged == nil {
+		s.privileged = make(map[string]bool, len(privileged))
+	}
+	for id, p := range privileged {
+		if !p {
+			continue
+		}
+		s.privileged[id] = true
+		if node, ok := s.identities[id]; ok {
+			node.Privileged = true
+		}
+	}
 }
 
 // DelegationChain returns the chain of identity IDs an agent acts through,

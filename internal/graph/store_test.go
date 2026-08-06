@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -363,7 +364,7 @@ func TestAddIdentityMergesPermissionFlags(t *testing.T) {
 		Used:  true,
 		ARN:   "arn:aws:iam::aws:policy/AdministratorAccess",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merged permission = %+v, want %+v", got, want)
 	}
 
@@ -374,7 +375,92 @@ func TestAddIdentityMergesPermissionFlags(t *testing.T) {
 		ID:          "role:deploy",
 		Permissions: []model.Permission{{Name: "AdministratorAccess"}},
 	})
-	if got := g.Identities()[0].Permissions[0]; got != want {
+	if got := g.Identities()[0].Permissions[0]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("permission after a later bare report = %+v, want unchanged %+v", got, want)
+	}
+}
+
+// TestMarkPrivilegedAppliesToAnAlreadyBuiltGraph is the store-level half of
+// the ignored --privileged flag. Over --db the graph is a Snapshot built
+// from what the database holds, so the CLI's privileged set has to be folded
+// into an existing graph rather than handed to New() before it is filled.
+// Ten detectors raise severity for a privileged identity, so a set that is
+// accepted and dropped produces systematically under-ranked findings with
+// nothing saying why.
+func TestMarkPrivilegedAppliesToAnAlreadyBuiltGraph(t *testing.T) {
+	s := New(nil) // nil set, as Snapshot builds it when no row is flagged
+	s.AddIdentity(model.Identity{ID: "alice@x.com"})
+	s.AddIdentity(model.Identity{ID: "bob@x.com"})
+
+	s.MarkPrivileged(map[string]bool{"alice@x.com": true, "never-seen@x.com": true})
+
+	byID := map[string]*model.Identity{}
+	for _, id := range s.Identities() {
+		byID[id.ID] = id
+	}
+	if !byID["alice@x.com"].Privileged {
+		t.Error("alice was named in the privileged set and came back unprivileged")
+	}
+	if byID["bob@x.com"].Privileged {
+		t.Error("bob was not in the set and was marked privileged")
+	}
+	if _, ok := byID["never-seen@x.com"]; ok {
+		t.Error("an identity named in the set but absent from the graph must not be invented")
+	}
+
+	// An identity that arrives later still picks the flag up, the same way
+	// New(privileged) has always behaved.
+	s.AddEvent(model.Event{IdentityID: "never-seen@x.com"})
+	for _, id := range s.Identities() {
+		if id.ID == "never-seen@x.com" && !id.Privileged {
+			t.Error("an identity created after MarkPrivileged did not pick up the flag")
+		}
+	}
+}
+
+// TestAddIdentityUnionsActionsAcrossReports pins the field the dedup rule
+// gained on 2026-08-06, when real IAM policy-document parsing landed beside
+// permission dedup. The two changes met here: dedup folds repeated reports of
+// one grant, and Actions is the field a blind source reports empty.
+//
+// privilege_escalation reads Actions to decide whether a grant allows
+// iam:PassRole, so a blind report overwriting a sighted one would not just
+// lose data, it would silence a detector. Red before unionActions existed:
+// the second AddIdentity left Actions empty.
+func TestAddIdentityUnionsActionsAcrossReports(t *testing.T) {
+	g := New(nil)
+	g.AddIdentity(model.Identity{
+		ID: "role:ci-deployer",
+		Permissions: []model.Permission{{
+			Name:    "deploy-service-roles",
+			Actions: []string{"iam:passrole"},
+		}},
+	})
+	// A second connector describes the same grant with no document to read,
+	// which is what an AWS-managed policy looks like in an export.
+	g.AddIdentity(model.Identity{
+		ID:          "role:ci-deployer",
+		Permissions: []model.Permission{{Name: "deploy-service-roles"}},
+	})
+
+	ids := g.Identities()
+	if len(ids) != 1 || len(ids[0].Permissions) != 1 {
+		t.Fatalf("permissions = %+v, want exactly 1", ids[0].Permissions)
+	}
+	if got := ids[0].Permissions[0].Actions; !reflect.DeepEqual(got, []string{"iam:passrole"}) {
+		t.Fatalf("actions = %v, want [iam:passrole]: a blind report cleared a sighted one", got)
+	}
+
+	// Two sighted reports union without repeating.
+	g.AddIdentity(model.Identity{
+		ID: "role:ci-deployer",
+		Permissions: []model.Permission{{
+			Name:    "deploy-service-roles",
+			Actions: []string{"iam:passrole", "sts:assumerole"},
+		}},
+	})
+	want := []string{"iam:passrole", "sts:assumerole"}
+	if got := g.Identities()[0].Permissions[0].Actions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("actions = %v, want %v", got, want)
 	}
 }
