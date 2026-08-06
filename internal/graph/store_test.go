@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -259,6 +260,126 @@ func TestAddIdentityMergesDeclaredModels(t *testing.T) {
 	}
 }
 
+// permNames returns the permission names on the single identity in g, in
+// stored order, so a test can assert both the count and that no name repeats.
+func permNames(t *testing.T, g *Store) []string {
+	t.Helper()
+	ids := g.Identities()
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+	out := make([]string, 0, len(ids[0].Permissions))
+	for _, p := range ids[0].Permissions {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// TestAddIdentityDedupesPermissionsByName is the inventory-side half of the
+// replay-inflation rule TestAddEventDedupesOnNaturalKey holds for events: the
+// same inventory ingested twice (the same file named in --load more than once,
+// or two connectors reporting the same identity) must not double an identity's
+// permission list. least_privilege reports "N/M granted permissions unused"
+// straight to an operator and names each unused grant, so a duplicated
+// permission both inflates M and prints the same grant twice in the revoke
+// recommendation.
+func TestAddIdentityDedupesPermissionsByName(t *testing.T) {
+	in := model.Identity{
+		ID:   "agent:support-triage",
+		Type: model.IdentityAgent,
+		Permissions: []model.Permission{
+			{Name: "slack_post"},
+			{Name: "s3_read", Used: true},
+		},
+	}
+
+	g := New(nil)
+	g.AddIdentity(in)
+	g.AddIdentity(in)
+	if got := permNames(t, g); len(got) != 2 {
+		t.Fatalf("permissions after re-ingesting the identical inventory 2x = %v, want 2 (deduped by name)", got)
+	}
+
+	// A genuinely new grant from a later source (e.g. an mcp inventory adding
+	// a tool to an identity aws_iam already described) is not a duplicate and
+	// must still be recorded: the merge is a union by name, not a replace.
+	g.AddIdentity(model.Identity{
+		ID:          "agent:support-triage",
+		Permissions: []model.Permission{{Name: "s3_delete"}},
+	})
+	if got := permNames(t, g); len(got) != 3 {
+		t.Fatalf("permissions after a later source added one new grant = %v, want 3 (must not over-dedupe)", got)
+	}
+
+	// Duplicate names inside a single incoming slice collapse too, the way
+	// the Postgres backend's ON CONFLICT (identity_id, name) already makes
+	// them collapse within one IngestIdentities batch.
+	dupWithin := New(nil)
+	dupWithin.AddIdentity(model.Identity{
+		ID: "agent:support-triage",
+		Permissions: []model.Permission{
+			{Name: "slack_post"},
+			{Name: "slack_post"},
+		},
+	})
+	if got := permNames(t, dupWithin); len(got) != 1 {
+		t.Fatalf("permissions from one slice naming the same grant twice = %v, want 1", got)
+	}
+}
+
+// TestAddIdentityMergesPermissionFlags pins what happens to the flags when two
+// reports of the same grant meet. AddIdentity already merges the identity's own
+// fields rather than replacing them, and each permission field follows the rule
+// its kind already follows one scope up: booleans are ORed (like Privileged and
+// Shadow), and a non-empty string wins while an empty one never clears (like
+// Source, Owner, Runtime and Attestation). For a security tool that direction
+// is the safe one: an observation that a grant is admin-equivalent, or that it
+// was exercised, cannot be erased by a later source that simply did not look.
+func TestAddIdentityMergesPermissionFlags(t *testing.T) {
+	g := New(nil)
+	g.AddIdentity(model.Identity{
+		ID:          "role:deploy",
+		Permissions: []model.Permission{{Name: "AdministratorAccess"}},
+	})
+	// A usage-enriched re-ingest of the same role: same grant, now known to be
+	// admin-equivalent, observed in use, and carrying its real ARN.
+	g.AddIdentity(model.Identity{
+		ID: "role:deploy",
+		Permissions: []model.Permission{{
+			Name:  "AdministratorAccess",
+			Admin: true,
+			Used:  true,
+			ARN:   "arn:aws:iam::aws:policy/AdministratorAccess",
+		}},
+	})
+
+	ids := g.Identities()
+	if len(ids) != 1 || len(ids[0].Permissions) != 1 {
+		t.Fatalf("permissions = %+v, want exactly 1", ids[0].Permissions)
+	}
+	got := ids[0].Permissions[0]
+	want := model.Permission{
+		Name:  "AdministratorAccess",
+		Admin: true,
+		Used:  true,
+		ARN:   "arn:aws:iam::aws:policy/AdministratorAccess",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged permission = %+v, want %+v", got, want)
+	}
+
+	// The reverse order must not undo any of it: a later bare report of the
+	// same grant (an inventory source with no usage data and no ARN concept)
+	// leaves every flag standing.
+	g.AddIdentity(model.Identity{
+		ID:          "role:deploy",
+		Permissions: []model.Permission{{Name: "AdministratorAccess"}},
+	})
+	if got := g.Identities()[0].Permissions[0]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("permission after a later bare report = %+v, want unchanged %+v", got, want)
+	}
+}
+
 // TestMarkPrivilegedAppliesToAnAlreadyBuiltGraph is the store-level half of
 // the ignored --privileged flag. Over --db the graph is a Snapshot built
 // from what the database holds, so the CLI's privileged set has to be folded
@@ -294,5 +415,52 @@ func TestMarkPrivilegedAppliesToAnAlreadyBuiltGraph(t *testing.T) {
 		if id.ID == "never-seen@x.com" && !id.Privileged {
 			t.Error("an identity created after MarkPrivileged did not pick up the flag")
 		}
+	}
+}
+
+// TestAddIdentityUnionsActionsAcrossReports pins the field the dedup rule
+// gained on 2026-08-06, when real IAM policy-document parsing landed beside
+// permission dedup. The two changes met here: dedup folds repeated reports of
+// one grant, and Actions is the field a blind source reports empty.
+//
+// privilege_escalation reads Actions to decide whether a grant allows
+// iam:PassRole, so a blind report overwriting a sighted one would not just
+// lose data, it would silence a detector. Red before unionActions existed:
+// the second AddIdentity left Actions empty.
+func TestAddIdentityUnionsActionsAcrossReports(t *testing.T) {
+	g := New(nil)
+	g.AddIdentity(model.Identity{
+		ID: "role:ci-deployer",
+		Permissions: []model.Permission{{
+			Name:    "deploy-service-roles",
+			Actions: []string{"iam:passrole"},
+		}},
+	})
+	// A second connector describes the same grant with no document to read,
+	// which is what an AWS-managed policy looks like in an export.
+	g.AddIdentity(model.Identity{
+		ID:          "role:ci-deployer",
+		Permissions: []model.Permission{{Name: "deploy-service-roles"}},
+	})
+
+	ids := g.Identities()
+	if len(ids) != 1 || len(ids[0].Permissions) != 1 {
+		t.Fatalf("permissions = %+v, want exactly 1", ids[0].Permissions)
+	}
+	if got := ids[0].Permissions[0].Actions; !reflect.DeepEqual(got, []string{"iam:passrole"}) {
+		t.Fatalf("actions = %v, want [iam:passrole]: a blind report cleared a sighted one", got)
+	}
+
+	// Two sighted reports union without repeating.
+	g.AddIdentity(model.Identity{
+		ID: "role:ci-deployer",
+		Permissions: []model.Permission{{
+			Name:    "deploy-service-roles",
+			Actions: []string{"iam:passrole", "sts:assumerole"},
+		}},
+	})
+	want := []string{"iam:passrole", "sts:assumerole"}
+	if got := g.Identities()[0].Permissions[0].Actions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("actions = %v, want %v", got, want)
 	}
 }

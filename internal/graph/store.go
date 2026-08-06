@@ -51,7 +51,9 @@ func (s *Store) AddEvent(e model.Event) {
 
 // AddIdentity merges a fully-described identity (e.g. an NHI from an IAM
 // connector) into the graph. Metadata fields are filled in; events from other
-// sources on the same ID are preserved.
+// sources on the same ID are preserved, and permissions are unioned by name
+// (see mergePermissions) rather than appended, so re-ingesting one inventory
+// cannot double a grant.
 func (s *Store) AddIdentity(in model.Identity) {
 	id := s.ensure(in.ID)
 	if in.Type != model.IdentityHuman {
@@ -90,8 +92,94 @@ func (s *Store) AddIdentity(in model.Identity) {
 	if in.Shadow {
 		id.Shadow = true
 	}
-	id.Permissions = append(id.Permissions, in.Permissions...)
+	id.Permissions = mergePermissions(id.Permissions, in.Permissions)
 	id.Events = append(id.Events, in.Events...)
+}
+
+// mergePermissions unions in into existing by permission name, appending a name
+// not seen before and folding a repeat into the entry already there. This is
+// the inventory-side half of the rule AddEvent holds for events: replaying a
+// source file (the same file named in --load more than once, or two connectors
+// describing the same identity) cannot inflate what a detector counts. It
+// matters most to least_privilege, which reports "N/M granted permissions
+// unused" and names each unused grant straight to an operator: an unconditional
+// append doubled the M and printed every unused grant twice. The Postgres
+// backend already had this property from its UNIQUE (identity_id, name) index
+// and the ON CONFLICT upsert in IngestIdentities; the in-memory Store was the
+// remaining half.
+func mergePermissions(existing, in []model.Permission) []model.Permission {
+	if len(in) == 0 {
+		return existing
+	}
+	at := make(map[string]int, len(existing)+len(in))
+	for i, p := range existing {
+		if _, seen := at[p.Name]; !seen {
+			at[p.Name] = i
+		}
+	}
+	for _, p := range in {
+		i, seen := at[p.Name]
+		if !seen {
+			at[p.Name] = len(existing)
+			existing = append(existing, p)
+			continue
+		}
+		existing[i] = mergePermission(existing[i], p)
+	}
+	return existing
+}
+
+// mergePermission folds one report of a grant into another, field by field, by
+// the same rules AddIdentity applies one scope up to the identity's own fields:
+// booleans OR (like Privileged and Shadow), and a non-empty string wins while
+// an empty one never clears (like Source, Owner, Runtime and Attestation). For
+// an identity-security tool that direction is the safe one. An observation that
+// a grant is admin-equivalent, or that it was exercised, is positive evidence
+// somebody saw something; a later source reporting neither has usually not
+// contradicted it, only failed to look, and letting that erase the earlier
+// finding would silently turn a used admin grant back into an unused ordinary
+// one in the operator's report.
+func mergePermission(dst, in model.Permission) model.Permission {
+	dst.Admin = dst.Admin || in.Admin
+	dst.Used = dst.Used || in.Used
+	if in.ARN != "" {
+		dst.ARN = in.ARN
+	}
+	dst.Actions = unionActions(dst.Actions, in.Actions)
+	return dst
+}
+
+// unionActions folds two reports of the same grant's action strings, keeping
+// first-seen order and dropping repeats.
+//
+// Union rather than last-wins, because model.Permission documents that "an
+// empty Actions never means 'allows nothing'": it means the source had no way
+// to say. A managed policy whose document was not in the export and the same
+// policy read from an inline document are two reports of one grant, one of
+// them blind. Letting the blind one overwrite the sighted one would delete
+// evidence, and privilege_escalation reads exactly this field to decide
+// whether a grant allows iam:PassRole. That is the same direction Admin and
+// Used take one line up: positive evidence accumulates, an absent observation
+// never clears a present one.
+func unionActions(dst, in []string) []string {
+	if len(in) == 0 {
+		return dst
+	}
+	if len(dst) == 0 {
+		return append([]string(nil), in...)
+	}
+	seen := make(map[string]bool, len(dst)+len(in))
+	for _, a := range dst {
+		seen[a] = true
+	}
+	for _, a := range in {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		dst = append(dst, a)
+	}
+	return dst
 }
 
 // MarkPrivileged folds an operator-supplied privileged set into a graph that
