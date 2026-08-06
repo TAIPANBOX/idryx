@@ -604,7 +604,8 @@ additionally carries a producer-assigned `events.severity` column
 (`model.Event.Severity`, used by `tokenfuse`), the Passport-derived
 `identities.parent`/`identities.attestation` columns, the MCP
 `identities.shadow` flag, an ordered `declared_models` join table for the
-Passport's declared LLM providers (SPEC §4.5), and an ordered
+Passport's declared LLM providers (SPEC §4.5), an ordered `permission_actions`
+join table for the cloud actions each grant allows, and an ordered
 `on_behalf_of` join table for full delegation chains (agent-passport SPEC §5),
 all applied as additive `IF NOT EXISTS` migrations, so an existing database
 upgrades in place. "Detectors run unchanged over either backend" is only
