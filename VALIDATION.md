@@ -481,3 +481,64 @@ taken from documentation rather than measured against a live IAM API, and they a
 this change most likely to age. And `permission_actions` was exercised through the
 `integration`-tagged round-trip test, which needs a Postgres this machine does not have, so CI is
 the first place it runs.
+
+## Two flags were accepted, documented, and silently ignored
+
+2026-08-05, from the same read-only audit. Both are applied now rather than refused, with one
+narrow exception stated below.
+
+**`--privileged` did nothing whenever `--db` was used.** `buildGraph`'s Postgres branch returned
+the snapshot without ever referencing its `privileged` parameter; the set was applied only at
+`idryx load` time. Ten detectors raise severity for a privileged identity, so
+`idryx detect --db --privileged alice@x.com` ranked alice exactly as if she had not been named,
+and the output carried nothing to say so. An operator who learns after loading that an identity
+matters had no way to tell idryx. Fixed with `graph.Store.MarkPrivileged`, which folds the set
+into a graph that already exists: it marks the identities present and remembers the set for any
+created later, matching what `New(privileged)` has always done. An identity named in the set but
+absent from the graph is not invented, because `--privileged` says which identities matter more,
+not which exist.
+
+**`--cloudtrail` and `--gcp-audit` did nothing in `--load` mode.** `loadList.Set` populated only
+`Source` and `Path`, so the `CTPath`/`AuditPath` of every spec built from `--load` stayed empty,
+the usage-enrichment paths in `populate` were unreachable, and `least_privilege` (which stays
+silent without usage data, by design) said nothing. Passing the flag and omitting it produced
+identical output. Fixed by attaching the run's usage paths to each `--load` spec whose source can
+use them, which is the same thing the single-`--source` path already did.
+
+**Where a flag cannot apply at all, it is now an error naming the combination**, which is the
+"or refuse" half: `--cloudtrail` with no `aws_iam` source anywhere in the run, `--gcp-audit` with
+no `gcp_iam`, and either with `--db`, where the graph comes from the database and enrichment
+happened (or did not) at `idryx load` time. The check runs before the database is opened, so the
+operator gets the flag error rather than a connection error. This also closes the same silent
+ignore on the single-`--source` path, which had it too (`--source okta --cloudtrail ct.json` was
+accepted and dropped).
+
+Red against the unfixed tree, at both levels (@measured `go test ./internal/graph/` and
+`go test ./cmd/idryx/ -run 'LoadMode|UsageFlag'`, 2026-08-05):
+
+```
+internal/graph/store_test.go:274:4: s.MarkPrivileged undefined (type *Store has no field or method MarkPrivileged)
+FAIL	github.com/TAIPANBOX/idryx/internal/graph [build failed]
+```
+
+```
+--- FAIL: TestLoadModeAppliesCloudTrailEnrichment (0.00s)
+    main_test.go:941: no permission was marked used, so --cloudtrail did nothing in --load mode
+--- FAIL: TestLoadModeAppliesGCPAuditEnrichment (0.00s)
+    main_test.go:966: no role was marked used, so --gcp-audit did nothing in --load mode
+--- FAIL: TestUsageFlagWithNoMatchingSourceIsAnError/cloudtrail_with_an_okta_load (0.00s)
+        main_test.go:1019: expected an error naming --cloudtrail, got none: the flag was accepted and ignored
+--- FAIL: TestUsageFlagWithNoMatchingSourceIsAnError/cloudtrail_with_--db (0.61s)
+        main_test.go:1022: error = "ping postgres: failed to connect to `user=factory database=`: ... lookup unused: no such host", want it to name --cloudtrail so the operator knows which flag did nothing
+```
+
+That last line is worth keeping: the `--db` case failed by trying to CONNECT first, which is why
+the check now runs ahead of `graph.OpenPg` rather than inside the branch.
+
+**What this did not establish.** The `--privileged` fix is proven at the store boundary by a test
+that needs no database (`TestMarkPrivilegedAppliesToAnAlreadyBuiltGraph`), and end to end by
+`TestDetectDBAppliesPrivilegedFlag`, which is `integration`-tagged, needs a real Postgres, and
+did NOT run here: this machine has no Postgres and no running container runtime. CI's
+`integration` job now covers `./cmd/idryx/` as well as `./internal/graph/`, so that is where it
+first executes. Nothing here changes what `idryx load --db --privileged` does; it already applied
+the set, and it still does.

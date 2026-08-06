@@ -179,6 +179,73 @@ func (h headerList) Set(v string) error {
 	return nil
 }
 
+// usageEnrichment pairs a usage-log flag with the inventory source it can
+// enrich. --cloudtrail marks which AWS permissions were actually exercised,
+// --gcp-audit does the same for GCP roles; both are read at ingest time by
+// the connector that owns that source, so neither means anything without it.
+var usageEnrichment = []struct {
+	flag   string // the CLI flag, for the error message
+	source string // the --source/--load name it enriches
+}{
+	{"--cloudtrail", "aws_iam"},
+	{"--gcp-audit", "gcp_iam"},
+}
+
+// checkUsageFlags refuses a usage-log flag that has nothing to enrich in this
+// run, naming the combination.
+//
+// Applying the flag is the fix wherever it can apply, and buildGraph now does
+// that for --load (where the paths were silently dropped) as well as for a
+// single --source. But there are runs where it cannot apply at all: no
+// aws_iam/gcp_iam source anywhere, or --db, where the graph comes from the
+// database and enrichment already happened (or did not) at `idryx load` time.
+// Accepting a documented flag and doing nothing with it is the defect this
+// function exists to end, so those runs get an error rather than output that
+// looks the same either way.
+func checkUsageFlags(source, db, ctPath, auditPath string, loads loadList) error {
+	present := map[string]bool{}
+	if len(loads) > 0 {
+		for _, spec := range loads {
+			present[spec.Source] = true
+		}
+	} else if db == "" {
+		present[source] = true
+	}
+
+	for _, u := range usageEnrichment {
+		given := ctPath
+		if u.flag == "--gcp-audit" {
+			given = auditPath
+		}
+		if given == "" || present[u.source] {
+			continue
+		}
+		switch {
+		case db != "":
+			return fmt.Errorf("%s enriches %s at ingest time and does nothing with --db: run `idryx load --db --source %s --%s ...` to persist the usage, or drop the flag",
+				u.flag, u.source, u.source, strings.TrimPrefix(u.flag, "--"))
+		default:
+			return fmt.Errorf("%s enriches the %s source, which this run does not read: add --source %s or --load %s:<path>, or drop the flag",
+				u.flag, u.source, u.source, u.source)
+		}
+	}
+	return nil
+}
+
+// withUsagePaths returns spec with the run's usage-log paths attached when
+// they apply to its source. Before this, loadList.Set populated only Source
+// and Path, so every spec built from --load carried an empty CTPath/AuditPath
+// and the enrichment paths in populate() were unreachable from --load mode.
+func withUsagePaths(spec loadSpec, ctPath, auditPath string) loadSpec {
+	if spec.Source == "aws_iam" && spec.CTPath == "" {
+		spec.CTPath = ctPath
+	}
+	if spec.Source == "gcp_iam" && spec.AuditPath == "" {
+		spec.AuditPath = auditPath
+	}
+	return spec
+}
+
 // buildGraph returns an identity graph from one of: a Postgres snapshot (db set),
 // several stitched sources (loads set), or a single source file. Exactly one of
 // the three is used, in that precedence. passports, when non-empty, is layered on
@@ -186,6 +253,10 @@ func (h headerList) Set(v string) error {
 // enriches an identity's static metadata (owner/runtime/parent/attestation), it
 // never substitutes for a behavioral or inventory source.
 func buildGraph(source, privileged, path, db, ctPath, auditPath, passports string, loads loadList) (graph.Reader, error) {
+	if err := checkUsageFlags(source, db, ctPath, auditPath, loads); err != nil {
+		return nil, err
+	}
+
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
@@ -196,6 +267,13 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath, passports strin
 		if err != nil {
 			return nil, err
 		}
+		// The graph arrives already populated, so the operator's privileged
+		// set has to be folded in here. Without this, --privileged was
+		// accepted and dropped on every --db run: it is applied at `idryx
+		// load` time and nowhere else, so `detect --db --privileged
+		// alice@x.com` ranked alice exactly as if she were not named, across
+		// the ten detectors that raise severity for a privileged identity.
+		snap.MarkPrivileged(privilegedSet(privileged))
 		if err := loadPassports(snap, passports); err != nil {
 			return nil, err
 		}
@@ -208,7 +286,7 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath, passports strin
 	// (e.g. agent_shadow_tool, which needs agents + mcp) only fire here.
 	if len(loads) > 0 {
 		for _, spec := range loads {
-			if err := populate(g, spec); err != nil {
+			if err := populate(g, withUsagePaths(spec, ctPath, auditPath)); err != nil {
 				return nil, err
 			}
 		}
@@ -499,8 +577,8 @@ func runDetect(args []string) error {
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		webhookHdr = headerList{}
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	var loads loadList
@@ -682,8 +760,8 @@ func runServe(args []string) error {
 		addr       = fs.String("addr", defaultServeAddr, "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 		refresh    = fs.Duration("refresh", 15*time.Second, "re-read the source and rebuild the graph every interval so a long-lived server stays live (0 disables; ignored with --db)")
 	)
@@ -963,8 +1041,8 @@ func runRemediate(args []string) error {
 	var (
 		source     = fs.String("source", "aws_iam", "source: aws_iam|gcp_iam|azure|agents|mcp")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable")

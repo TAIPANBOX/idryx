@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-212-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-216-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -453,7 +453,7 @@ make build
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
 ./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx
-./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts
+./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts (also applies with --db)
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
 IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTTP trace spans
@@ -462,6 +462,9 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 # least-privilege: enrich inventory with observed usage to flag unused grants
 ./bin/idryx detect --source aws_iam --cloudtrail ct.json iam.json    # mark used AWS permissions
 ./bin/idryx detect --source gcp_iam --gcp-audit  audit.json iam.json # mark used GCP roles
+./bin/idryx detect --load aws_iam:iam.json --cloudtrail ct.json      # same enrichment in --load mode
+# --cloudtrail/--gcp-audit with no aws_iam/gcp_iam source in the run (including
+# --db, where enrichment happens at load time) is an error, not a silent no-op.
 
 # agent identities: TokenFuse events + Passport enrichment (owner/runtime/parent/attestation)
 ./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson

@@ -133,4 +133,4 @@ jobs:
       - name: integration tests
         env:
           DATABASE_URL: postgres://idryx:idryx@localhost:5432/idryx_test?sslmode=disable
-        run: go test -tags integration ./internal/graph/
+        run: go test -tags integration ./internal/graph/ ./cmd/idryx/

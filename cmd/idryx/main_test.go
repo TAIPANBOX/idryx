@@ -915,3 +915,124 @@ func TestPopulateReportsAnIntactChain(t *testing.T) {
 		t.Errorf("a clean stream must not report a break, got %q", out)
 	}
 }
+
+// TestLoadModeAppliesCloudTrailEnrichment is the regression test for the
+// second ignored flag. loadList.Set populated only Source and Path, so the
+// CTPath/AuditPath of every spec built from --load stayed empty, the
+// usage-enrichment paths never ran, and least_privilege stayed silent with
+// no error: an operator who passed --cloudtrail got the same output as one
+// who did not.
+func TestLoadModeAppliesCloudTrailEnrichment(t *testing.T) {
+	loads := loadList{{Source: "aws_iam", Path: "../../testdata/aws_iam.json"}}
+	g, err := buildGraph("", "", "", "", "../../testdata/cloudtrail.json", "", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+
+	used := 0
+	for _, id := range g.Identities() {
+		for _, p := range id.Permissions {
+			if p.Used {
+				used++
+			}
+		}
+	}
+	if used == 0 {
+		t.Fatal("no permission was marked used, so --cloudtrail did nothing in --load mode")
+	}
+
+	alerts := detectorAlerts(t, g, "least_privilege")
+	if len(alerts) == 0 {
+		t.Error("least_privilege fired nothing: with usage data it must be able to name never-exercised grants")
+	}
+}
+
+// TestLoadModeAppliesGCPAuditEnrichment is the same for the GCP half.
+func TestLoadModeAppliesGCPAuditEnrichment(t *testing.T) {
+	loads := loadList{{Source: "gcp_iam", Path: "../../testdata/gcp_iam.json"}}
+	g, err := buildGraph("", "", "", "", "", "../../testdata/gcp_audit.json", "", loads)
+	if err != nil {
+		t.Fatalf("buildGraph: %v", err)
+	}
+	used := 0
+	for _, id := range g.Identities() {
+		for _, p := range id.Permissions {
+			if p.Used {
+				used++
+			}
+		}
+	}
+	if used == 0 {
+		t.Fatal("no role was marked used, so --gcp-audit did nothing in --load mode")
+	}
+}
+
+// TestUsageFlagWithNoMatchingSourceIsAnError: applying the flag is the fix
+// where it can apply. Where it cannot (no aws_iam/gcp_iam source in the run
+// at all, including --db, where enrichment happened at load time), the
+// honest answer is to refuse and name the combination, rather than accept a
+// flag and drop it.
+func TestUsageFlagWithNoMatchingSourceIsAnError(t *testing.T) {
+	cases := []struct {
+		name      string
+		source    string
+		db        string
+		ctPath    string
+		auditPath string
+		loads     loadList
+		wantIn    string
+	}{
+		{
+			name:   "cloudtrail with an okta load",
+			ctPath: "../../testdata/cloudtrail.json",
+			loads:  loadList{{Source: "okta", Path: "../../testdata/events.json"}},
+			wantIn: "--cloudtrail",
+		},
+		{
+			name:      "gcp-audit with an aws_iam load",
+			auditPath: "../../testdata/gcp_audit.json",
+			loads:     loadList{{Source: "aws_iam", Path: "../../testdata/aws_iam.json"}},
+			wantIn:    "--gcp-audit",
+		},
+		{
+			name:   "cloudtrail with a single okta source",
+			source: "okta",
+			ctPath: "../../testdata/cloudtrail.json",
+			wantIn: "--cloudtrail",
+		},
+		{
+			name:   "cloudtrail with --db",
+			db:     "postgres://unused",
+			ctPath: "../../testdata/cloudtrail.json",
+			wantIn: "--cloudtrail",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := ""
+			if tc.source != "" && len(tc.loads) == 0 && tc.db == "" {
+				path = "../../testdata/events.json"
+			}
+			_, err := buildGraph(tc.source, "", path, tc.db, tc.ctPath, tc.auditPath, "", tc.loads)
+			if err == nil {
+				t.Fatalf("expected an error naming %s, got none: the flag was accepted and ignored", tc.wantIn)
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Errorf("error = %q, want it to name %s so the operator knows which flag did nothing", err, tc.wantIn)
+			}
+		})
+	}
+}
+
+// detectorAlerts runs one registered detector over g by name.
+func detectorAlerts(t *testing.T, g graph.Reader, name string) []model.Alert {
+	t.Helper()
+	var out []model.Alert
+	for _, a := range runDetectors(g) {
+		if a.Detector == name {
+			out = append(out, a)
+		}
+	}
+	return out
+}

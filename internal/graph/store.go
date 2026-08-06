@@ -94,6 +94,37 @@ func (s *Store) AddIdentity(in model.Identity) {
 	id.Events = append(id.Events, in.Events...)
 }
 
+// MarkPrivileged folds an operator-supplied privileged set into a graph that
+// already exists. New(privileged) covers the case where the set is known
+// before anything is ingested; this covers the case where it is not, which is
+// every Postgres snapshot: the graph comes back from the database already
+// populated, and the CLI's --privileged set has to reach it afterwards or it
+// reaches nothing at all. Ten detectors raise severity for a privileged
+// identity, so a set that is accepted and dropped produces systematically
+// under-ranked findings with nothing saying why.
+//
+// It marks identities already in the graph and remembers the set for any
+// created later, matching New's behaviour. An identity named in the set but
+// absent from the graph is NOT invented: --privileged says which identities
+// matter more, not which exist.
+func (s *Store) MarkPrivileged(privileged map[string]bool) {
+	if len(privileged) == 0 {
+		return
+	}
+	if s.privileged == nil {
+		s.privileged = make(map[string]bool, len(privileged))
+	}
+	for id, p := range privileged {
+		if !p {
+			continue
+		}
+		s.privileged[id] = true
+		if node, ok := s.identities[id]; ok {
+			node.Privileged = true
+		}
+	}
+}
+
 // DelegationChain returns the chain of identity IDs an agent acts through,
 // starting at id and following OnBehalfOf upward to the ultimate principal.
 // The starting id is included first, then each principal in id's own chain
