@@ -14,6 +14,27 @@ import (
 type awsAuthDetails struct {
 	UserDetailList []awsPrincipal `json:"UserDetailList"`
 	RoleDetailList []awsPrincipal `json:"RoleDetailList"`
+	// Policies is the same call's managed-policy section: every
+	// customer-managed policy in the account with its version documents. It
+	// is where an attached policy's actual contents live, and reading it is
+	// the only way to know what a customer-managed policy grants without
+	// asking AWS a second question. Absent from exports produced with
+	// --filter User,Role, in which case attached managed policies keep their
+	// name and ARN and gain no actions, which is the honest result.
+	Policies []awsManagedPolicy `json:"Policies"`
+}
+
+type awsManagedPolicy struct {
+	PolicyName        string             `json:"PolicyName"`
+	Arn               string             `json:"Arn"`
+	DefaultVersionID  string             `json:"DefaultVersionId"`
+	PolicyVersionList []awsPolicyVersion `json:"PolicyVersionList"`
+}
+
+type awsPolicyVersion struct {
+	Document         json.RawMessage `json:"Document"`
+	VersionID        string          `json:"VersionId"`
+	IsDefaultVersion bool            `json:"IsDefaultVersion"`
 }
 
 type awsPrincipal struct {
@@ -40,6 +61,10 @@ type awsPolicy struct {
 
 type awsInline struct {
 	PolicyName string `json:"PolicyName"`
+	// PolicyDocument is the inline policy itself: URL-encoded JSON in a
+	// string from the API, a decoded object from the AWS CLI. Kept raw and
+	// decoded by decodePolicyDocument, which accepts both.
+	PolicyDocument json.RawMessage `json:"PolicyDocument"`
 }
 
 type awsLastUsed struct {
@@ -54,17 +79,53 @@ func AWSIAM(data []byte) ([]model.Identity, error) {
 		return nil, err
 	}
 
+	managed := managedPolicyIndex(d.Policies)
+
 	var out []model.Identity
 	for _, p := range d.UserDetailList {
-		out = append(out, principalToIdentity(p, p.UserPolicyList))
+		out = append(out, principalToIdentity(p, p.UserPolicyList, managed))
 	}
 	for _, p := range d.RoleDetailList {
-		out = append(out, principalToIdentity(p, p.RolePolicyList))
+		out = append(out, principalToIdentity(p, p.RolePolicyList, managed))
 	}
 	return out, nil
 }
 
-func principalToIdentity(p awsPrincipal, inline []awsInline) model.Identity {
+// managedPolicyGrant is what one customer-managed policy allows, resolved
+// once per document so every principal attached to it gets the same answer.
+type managedPolicyGrant struct {
+	actions []string
+	admin   bool
+}
+
+// managedPolicyIndex resolves each managed policy in the export to its
+// DEFAULT version's document, keyed by ARN. The default version is the one
+// in force; an older version that granted less is not what the principal
+// holds today, and reading the wrong one is how a policy that was widened
+// last month still reads as narrow.
+func managedPolicyIndex(policies []awsManagedPolicy) map[string]managedPolicyGrant {
+	out := make(map[string]managedPolicyGrant, len(policies))
+	for _, p := range policies {
+		if p.Arn == "" {
+			continue
+		}
+		for _, v := range p.PolicyVersionList {
+			if !v.IsDefaultVersion && (p.DefaultVersionID == "" || v.VersionID != p.DefaultVersionID) {
+				continue
+			}
+			doc, ok := decodePolicyDocument(v.Document)
+			if !ok {
+				continue
+			}
+			actions, admin := policyEffect(doc)
+			out[p.Arn] = managedPolicyGrant{actions: actions, admin: admin}
+			break
+		}
+	}
+	return out
+}
+
+func principalToIdentity(p awsPrincipal, inline []awsInline, managed map[string]managedPolicyGrant) model.Identity {
 	id := model.Identity{
 		ID:      p.Arn,
 		Type:    model.IdentityServiceAccount,
@@ -77,17 +138,31 @@ func principalToIdentity(p awsPrincipal, inline []awsInline) model.Identity {
 	}
 
 	for _, m := range p.AttachedManaged {
+		// The name-based check stays: an AWS-managed policy has no document
+		// in this export, so AdministratorAccess is still recognized by its
+		// ARN. The document, when the export carries one, can only widen the
+		// verdict, never narrow it.
+		grant := managed[m.PolicyArn]
 		id.Permissions = append(id.Permissions, model.Permission{
-			Name:  m.PolicyName,
-			ARN:   m.PolicyArn, // real ARN, aws- or customer-managed; remediation must use this, not reconstruct it
-			Admin: isAdminPolicy(m.PolicyName, m.PolicyArn),
+			Name:    m.PolicyName,
+			ARN:     m.PolicyArn, // real ARN, aws- or customer-managed; remediation must use this, not reconstruct it
+			Admin:   isAdminPolicy(m.PolicyName, m.PolicyArn) || grant.admin,
+			Actions: grant.actions,
 		})
 	}
 	for _, in := range inline {
+		var actions []string
+		admin := isAdminPolicy(in.PolicyName, "")
+		if doc, ok := decodePolicyDocument(in.PolicyDocument); ok {
+			var docAdmin bool
+			actions, docAdmin = policyEffect(doc)
+			admin = admin || docAdmin
+		}
 		id.Permissions = append(id.Permissions, model.Permission{
 			Name: in.PolicyName,
 			// Inline policies have no ARN of their own in AWS; ARN stays empty.
-			Admin: isAdminPolicy(in.PolicyName, ""),
+			Admin:   admin,
+			Actions: actions,
 		})
 	}
 	id.Privileged = id.HasAdmin()

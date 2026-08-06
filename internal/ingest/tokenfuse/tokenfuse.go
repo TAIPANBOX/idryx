@@ -60,13 +60,73 @@ var knownTypes = map[string]model.EventType{
 }
 
 // Report summarizes one Parse or Load call: how many lines were read, how
-// many were malformed and skipped, and which event types fell outside the
-// v0.1 registry (still ingested, just tallied for visibility).
+// many were malformed and skipped, which event types fell outside the
+// v0.1 registry (still ingested, just tallied for visibility), and the
+// state of the stream's SPEC 6.5 prev_hash integrity chain.
 type Report struct {
 	Lines        int
 	Malformed    int
 	UnknownTypes map[string]int
+	Chain        Chain
 }
+
+// ChainBreak is one genuine prev_hash violation: an event whose prev_hash is
+// present and does not match the hash of the event on the line before it. It
+// carries the file and the 1-based PHYSICAL line number (blank lines
+// included, so `sed -n '<line>p' <file>` shows the offending record), because
+// a line number without a file means nothing when Load read a glob.
+type ChainBreak struct {
+	File     string
+	Line     int
+	Expected string // the hash of the preceding event, i.e. what prev_hash should have been
+	Found    string // what the line actually carried
+}
+
+// Chain is the verdict of the SPEC 6.5 prev_hash check over the stream, run
+// on every ingest by agent-stack-go's own event.VerifyChain (invariant 3:
+// the shared module is the single source of the wire types, and of the
+// hashing rule with them).
+//
+// The three states an operator has to be able to tell apart are all
+// representable here, which is the whole point of the type:
+//
+//   - Verified && Present() && Intact(): the log was checked and holds.
+//   - Verified && !Present(): checked, and the producer maintains no chain,
+//     so nothing about tampering is known either way. prev_hash is optional
+//     per spec, so this is legal and common, and it is NOT a clean bill of
+//     health.
+//   - !Verified: nobody checked. Only possible on a Report that never went
+//     through Parse/Load.
+type Chain struct {
+	// Verified reports that the check ran over the whole stream.
+	Verified bool
+	// Chained is the number of events whose prev_hash matched the event on
+	// the line before them.
+	Chained int
+	// Heads is the number of events carrying no prev_hash: one for the
+	// stream head, plus one per legal restart (SPEC 6.5 keeps prev_hash
+	// optional, so a producer that could not resume its chain after a
+	// process restart is within the spec). A restart is never a break.
+	Heads int
+	// Unverifiable holds the physical line numbers of events whose prev_hash
+	// could not be checked because there was nothing checkable before them:
+	// the stream opens mid-chain (a rotated segment), or the preceding line
+	// was malformed. Reported, never accused of being a break.
+	Unverifiable []int
+	// Breaks holds the genuine mismatches.
+	Breaks []ChainBreak
+}
+
+// Present reports whether the stream carries a prev_hash chain at all. A
+// stream of chain heads only (no event referencing another) carries none.
+func (c Chain) Present() bool {
+	return c.Chained > 0 || len(c.Unverifiable) > 0 || len(c.Breaks) > 0
+}
+
+// Intact reports whether the chain was checked and no genuine break was
+// found. It is deliberately false on an unverified Report: silence must
+// never read as a clean bill of health.
+func (c Chain) Intact() bool { return c.Verified && len(c.Breaks) == 0 }
 
 func newReport() Report {
 	return Report{UnknownTypes: map[string]int{}}
@@ -78,6 +138,50 @@ func (r *Report) merge(o Report) {
 	for t, n := range o.UnknownTypes {
 		r.UnknownTypes[t] += n
 	}
+	r.Chain.merge(o.Chain)
+}
+
+// merge folds one file's chain verdict into an aggregate over several files.
+// Verified is an AND: an aggregate is only "checked" if every file in it was.
+func (c *Chain) merge(o Chain) {
+	c.Verified = c.Verified && o.Verified
+	c.Chained += o.Chained
+	c.Heads += o.Heads
+	c.Unverifiable = append(c.Unverifiable, o.Unverifiable...)
+	c.Breaks = append(c.Breaks, o.Breaks...)
+}
+
+// verifyChain runs the shared module's SPEC 6.5 verifier over one stream and
+// maps its report onto Chain, stamping file onto every break.
+//
+// It is a second pass over the same bytes, on purpose: the hashing rule
+// lives in agent-stack-go and re-implementing it inline in Parse's own loop
+// would put a second copy of the wire contract in this repository, which is
+// exactly the drift AGENTS.md invariant 3 exists to prevent.
+func verifyChain(data []byte, file string) Chain {
+	rep, err := event.VerifyChain(bytes.NewReader(data))
+	if err != nil {
+		// The only error VerifyChain returns is the scanner's, on a line
+		// longer than its 4 MiB buffer. Parse's own scanner has the same
+		// limit and would skip that line too, so the honest answer is
+		// "this stream was not fully checked".
+		return Chain{Verified: false}
+	}
+	c := Chain{
+		Verified:     true,
+		Chained:      rep.Chained,
+		Heads:        len(rep.HeadLines),
+		Unverifiable: rep.Unverifiable,
+	}
+	for _, b := range rep.Breaks {
+		c.Breaks = append(c.Breaks, ChainBreak{
+			File:     file,
+			Line:     b.Line,
+			Expected: b.Expected,
+			Found:    b.Found,
+		})
+	}
+	return c
 }
 
 // Parse decodes one NDJSON blob of taipanbox.dev/agent-event envelopes
@@ -107,8 +211,23 @@ func (r *Report) merge(o Report) {
 // (schema, ts, source, type, agent_id, per SPEC §6.1 and
 // agentstack/event.Unmarshal), or has an unparseable ts, is counted in
 // Report.Malformed and skipped; it never aborts the rest of the file.
+//
+// Every stream is also checked against the SPEC §6.5 prev_hash integrity
+// chain, and the verdict is returned in Report.Chain. A broken chain does
+// NOT stop the ingest and does not drop a single event: see the reasoning
+// on Chain and in cmd/idryx's reportTokenFuse. Idryx exists to notice
+// tampering, and refusing to ingest a stream that shows evidence of it
+// would hand an attacker a way to delete every finding in the file by
+// editing one line of it.
 func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
+	return parse(data, "")
+}
+
+// parse is Parse with the file name the data came from, so a chain break
+// can name it. Empty when the caller had only bytes (Parse's own contract).
+func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
 	rep := newReport()
+	rep.Chain = verifyChain(data, file)
 	seenAgents := map[string]bool{}
 	seenHumans := map[string]bool{}
 	var identities []model.Identity
@@ -192,6 +311,11 @@ func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
 // only returns an error for I/O failures (bad glob pattern, unreadable
 // file); content problems are tolerated per Parse's contract and surfaced in
 // the returned Report instead.
+//
+// Each file's prev_hash chain is verified on its own and the verdicts are
+// merged: line numbers are per-file, which is why every ChainBreak carries
+// the file it was found in. Two files are two chains, so the second file
+// starting a fresh chain is a head, not a break.
 func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
 	matches, err := filepath.Glob(pathOrGlob)
 	if err != nil {
@@ -205,6 +329,11 @@ func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
 	sort.Strings(matches)
 
 	rep := newReport()
+	// The aggregate starts as checked and each file ANDs its own verdict in
+	// (Chain.merge). An aggregate over zero files cannot happen here: a glob
+	// that matches nothing falls back to the literal path above, and an
+	// unreadable file returns before any merge.
+	rep.Chain.Verified = true
 	seenAgents := map[string]bool{}
 	seenHumans := map[string]bool{}
 	var identities []model.Identity
@@ -215,7 +344,7 @@ func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
 		if err != nil {
 			return nil, nil, Report{}, fmt.Errorf("tokenfuse: read %s: %w", path, err)
 		}
-		ids, evs, r := Parse(data)
+		ids, evs, r := parse(data, path)
 		for _, id := range ids {
 			switch id.Type {
 			case model.IdentityAgent:

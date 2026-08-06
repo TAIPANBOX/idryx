@@ -15,7 +15,7 @@ test:
 
 # Requires a running Postgres; set DATABASE_URL.
 test-integration:
-	go test -tags integration ./internal/graph/
+	go test -p 1 -tags integration ./internal/graph/ ./cmd/idryx/
 
 vet:
 	go vet ./...

@@ -82,6 +82,24 @@ type Permission struct {
 	Admin bool   // grants admin-equivalent access
 	Used  bool   // whether this grant has been observed in use (when usage data exists)
 
+	// Actions are the cloud action strings this grant actually allows, when
+	// the connector can know them: read out of an AWS policy document
+	// (inline, or a customer-managed policy's default version), or derived
+	// from the documented contents of a GCP predefined role or an Azure
+	// built-in role. They are lowercased and normalized to the provider's own
+	// spelling ("iam:passrole", "iam.serviceaccounts.actas",
+	// "microsoft.authorization/roleassignments/write"), which is the shape
+	// the privilege_escalation detector matches on.
+	//
+	// They hang off the grant that allows them and are deliberately NOT
+	// permissions in their own right: least_privilege lists unused permission
+	// NAMES to an operator and remediation generates Terraform from them, so
+	// an action string in either place would be noise at best and a wrong
+	// diff at worst. Empty when the source gives no way to know (an opaque
+	// custom role, a managed policy whose document was not included in the
+	// export), and an empty Actions never means "allows nothing".
+	Actions []string
+
 	// ARN is the connector-reported real resource identifier for this grant,
 	// when the source provides one (e.g. an AWS attached managed policy's
 	// PolicyArn). It is authoritative and must be preferred over any

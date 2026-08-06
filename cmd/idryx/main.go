@@ -179,6 +179,73 @@ func (h headerList) Set(v string) error {
 	return nil
 }
 
+// usageEnrichment pairs a usage-log flag with the inventory source it can
+// enrich. --cloudtrail marks which AWS permissions were actually exercised,
+// --gcp-audit does the same for GCP roles; both are read at ingest time by
+// the connector that owns that source, so neither means anything without it.
+var usageEnrichment = []struct {
+	flag   string // the CLI flag, for the error message
+	source string // the --source/--load name it enriches
+}{
+	{"--cloudtrail", "aws_iam"},
+	{"--gcp-audit", "gcp_iam"},
+}
+
+// checkUsageFlags refuses a usage-log flag that has nothing to enrich in this
+// run, naming the combination.
+//
+// Applying the flag is the fix wherever it can apply, and buildGraph now does
+// that for --load (where the paths were silently dropped) as well as for a
+// single --source. But there are runs where it cannot apply at all: no
+// aws_iam/gcp_iam source anywhere, or --db, where the graph comes from the
+// database and enrichment already happened (or did not) at `idryx load` time.
+// Accepting a documented flag and doing nothing with it is the defect this
+// function exists to end, so those runs get an error rather than output that
+// looks the same either way.
+func checkUsageFlags(source, db, ctPath, auditPath string, loads loadList) error {
+	present := map[string]bool{}
+	if len(loads) > 0 {
+		for _, spec := range loads {
+			present[spec.Source] = true
+		}
+	} else if db == "" {
+		present[source] = true
+	}
+
+	for _, u := range usageEnrichment {
+		given := ctPath
+		if u.flag == "--gcp-audit" {
+			given = auditPath
+		}
+		if given == "" || present[u.source] {
+			continue
+		}
+		switch {
+		case db != "":
+			return fmt.Errorf("%s enriches %s at ingest time and does nothing with --db: run `idryx load --db --source %s --%s ...` to persist the usage, or drop the flag",
+				u.flag, u.source, u.source, strings.TrimPrefix(u.flag, "--"))
+		default:
+			return fmt.Errorf("%s enriches the %s source, which this run does not read: add --source %s or --load %s:<path>, or drop the flag",
+				u.flag, u.source, u.source, u.source)
+		}
+	}
+	return nil
+}
+
+// withUsagePaths returns spec with the run's usage-log paths attached when
+// they apply to its source. Before this, loadList.Set populated only Source
+// and Path, so every spec built from --load carried an empty CTPath/AuditPath
+// and the enrichment paths in populate() were unreachable from --load mode.
+func withUsagePaths(spec loadSpec, ctPath, auditPath string) loadSpec {
+	if spec.Source == "aws_iam" && spec.CTPath == "" {
+		spec.CTPath = ctPath
+	}
+	if spec.Source == "gcp_iam" && spec.AuditPath == "" {
+		spec.AuditPath = auditPath
+	}
+	return spec
+}
+
 // buildGraph returns an identity graph from one of: a Postgres snapshot (db set),
 // several stitched sources (loads set), or a single source file. Exactly one of
 // the three is used, in that precedence. passports, when non-empty, is layered on
@@ -186,6 +253,10 @@ func (h headerList) Set(v string) error {
 // enriches an identity's static metadata (owner/runtime/parent/attestation), it
 // never substitutes for a behavioral or inventory source.
 func buildGraph(source, privileged, path, db, ctPath, auditPath, passports string, loads loadList) (graph.Reader, error) {
+	if err := checkUsageFlags(source, db, ctPath, auditPath, loads); err != nil {
+		return nil, err
+	}
+
 	if db != "" {
 		store, err := graph.OpenPg(context.Background(), db)
 		if err != nil {
@@ -196,6 +267,13 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath, passports strin
 		if err != nil {
 			return nil, err
 		}
+		// The graph arrives already populated, so the operator's privileged
+		// set has to be folded in here. Without this, --privileged was
+		// accepted and dropped on every --db run: it is applied at `idryx
+		// load` time and nowhere else, so `detect --db --privileged
+		// alice@x.com` ranked alice exactly as if she were not named, across
+		// the ten detectors that raise severity for a privileged identity.
+		snap.MarkPrivileged(privilegedSet(privileged))
 		if err := loadPassports(snap, passports); err != nil {
 			return nil, err
 		}
@@ -208,7 +286,7 @@ func buildGraph(source, privileged, path, db, ctPath, auditPath, passports strin
 	// (e.g. agent_shadow_tool, which needs agents + mcp) only fire here.
 	if len(loads) > 0 {
 		for _, spec := range loads {
-			if err := populate(g, spec); err != nil {
+			if err := populate(g, withUsagePaths(spec, ctPath, auditPath)); err != nil {
 				return nil, err
 			}
 		}
@@ -359,16 +437,63 @@ func populate(g *graph.Store, spec loadSpec) error {
 // reportTokenFuse prints a one-line stderr summary when an agent-event-bus
 // batch (tokenfuse, wardryx, mockryx, verdryx: see agentBusSources) had
 // anything worth flagging (agent-passport SPEC §6.1/§7: unknown fields and
-// types are tolerated, never errors, but they are still worth surfacing).
+// types are tolerated, never errors, but they are still worth surfacing),
+// followed by the verdict on the stream's prev_hash integrity chain.
 // source is the --source/--load name that selected the loader (for the
 // message only; it plays no part in identity/event attribution, which
 // comes from each envelope's own `source` field).
 func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
-	if rep.Malformed == 0 && len(rep.UnknownTypes) == 0 {
-		return
+	if rep.Malformed > 0 || len(rep.UnknownTypes) > 0 {
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
+			source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
 	}
-	fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
-		source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+	reportChain(source, pathOrGlob, rep.Chain)
+}
+
+// maxReportedBreaks caps how many individual chain breaks are listed. One
+// edit near the start of a stream breaks every line after it, so an
+// uncapped list is a wall of stderr that buries the first and most useful
+// line number. The count is always stated in full.
+const maxReportedBreaks = 5
+
+// reportChain states, on every agent-event-bus ingest, what the SPEC §6.5
+// prev_hash chain says about the stream. It prints in all four cases on
+// purpose, including the good one: an operator has to be able to tell "the
+// log was intact" from "nobody checked", and before this fix both were the
+// same silence.
+//
+// A break is reported, never fatal. This is a deliberate choice and the
+// reasoning belongs beside it: idryx is a detection tool whose value is
+// noticing tampering, and refusing to ingest a stream that shows evidence of
+// tampering would let an attacker delete every finding in a file by editing
+// one line of it. The events are still evidence; the chain says they may not
+// be all of it, or not as written. That is a finding to surface loudly, not
+// a reason to go quiet. It also matches the connector's existing contract
+// (SPEC §6.1/§7, and the malformed-line handling above): a content problem
+// is counted and reported, never a reason to abort the file.
+func reportChain(source, pathOrGlob string, c tokenfuse.Chain) {
+	switch {
+	case !c.Verified:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain NOT CHECKED (the stream could not be read through), so nothing here says whether it was tampered with\n",
+			source, pathOrGlob)
+	case len(c.Breaks) > 0:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain BROKEN at %d line(s); the events were still ingested, and the log is no longer evidence of its own completeness\n",
+			source, pathOrGlob, len(c.Breaks))
+		for i, b := range c.Breaks {
+			if i == maxReportedBreaks {
+				fmt.Fprintf(os.Stderr, "idryx:   ... and %d more\n", len(c.Breaks)-maxReportedBreaks)
+				break
+			}
+			fmt.Fprintf(os.Stderr, "idryx:   %s line %d: expected prev_hash %s, found %s\n",
+				b.File, b.Line, b.Expected, b.Found)
+		}
+	case !c.Present():
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: no prev_hash chain present (SPEC 6.5 keeps it optional), so this ingest is not evidence for or against tampering\n",
+			source, pathOrGlob)
+	default:
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: prev_hash chain intact: %d event(s) chained, %d chain head(s), %d unverifiable\n",
+			source, pathOrGlob, c.Chained, c.Heads, len(c.Unverifiable))
+	}
 }
 
 // reportIngest prints a one-line stderr summary when an okta/entra/
@@ -452,8 +577,8 @@ func runDetect(args []string) error {
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		webhookHdr = headerList{}
 		minSev     = fs.String("min-severity", "high", "minimum severity to deliver to sinks: low|medium|high|critical")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	var loads loadList
@@ -635,8 +760,8 @@ func runServe(args []string) error {
 		addr       = fs.String("addr", defaultServeAddr, "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 		refresh    = fs.Duration("refresh", 15*time.Second, "re-read the source and rebuild the graph every interval so a long-lived server stays live (0 disables; ignored with --db)")
 	)
@@ -916,8 +1041,8 @@ func runRemediate(args []string) error {
 	var (
 		source     = fs.String("source", "aws_iam", "source: aws_iam|gcp_iam|azure|agents|mcp")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (only with --source aws_iam)")
-		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (only with --source gcp_iam)")
+		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
+		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable")
