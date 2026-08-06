@@ -181,7 +181,7 @@ func servicesFromRole(role string) []string {
 //
 // Scope and honesty about it: these are predefined roles only, and only the
 // permissions that appear in the detector's own escalation list. It is a
-// hand-maintained map (@claude, 2026-08-05), not a fetch of the live role
+// hand-maintained map (@claude, 2026-08-06), not a fetch of the live role
 // definition: this connector is offline by design and reads the export it was
 // given. Google can change what a predefined role contains, and a CUSTOM
 // role's contents are not in this input at all, so a custom role granting

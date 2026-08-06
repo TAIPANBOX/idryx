@@ -80,7 +80,7 @@ func Azure(data []byte) ([]model.Identity, error) {
 // could never fire from this connector.
 //
 // Scope, stated: built-in roles only, and only the actions in the detector's
-// own escalation list. Hand-maintained (@claude, 2026-08-05) from the
+// own escalation list. Hand-maintained (@claude, 2026-08-06) from the
 // documented built-in role definitions rather than fetched live, because this
 // connector reads an export and never calls Azure. A CUSTOM role definition's
 // actions are not in this input at all, so a custom role granting

@@ -248,6 +248,11 @@ Slack and webhook implement).
 
 ## The shared contract was four minor versions stale, and the delta was the integrity check
 
+*The four sections below open with 2026-08-05, the date of the read-only audit that found
+them, matching the sections above. Their `@measured` markers carry 2026-08-06, the date the
+fixes and their runs actually happened: a measurement is true about its own moment, and dating
+one to the day the defect was found would be the first thing to decay.*
+
 2026-08-05, from the same read-only audit. `go.mod` pinned
 `github.com/TAIPANBOX/agent-stack-go v0.3.0` while the module was tagged through v0.5.1, and
 everything added to its wire packages since v0.3.0 is one file: `event/chain.go`, the SPEC 6.5
@@ -277,7 +282,7 @@ legal restart is not a break, per the spec and `VerifyChain`'s own distinction: 
 chain head, and the tests hold that.
 
 Before the fix, none of this compiled, because the pinned module had no chain package at all
-(@measured `go test ./internal/ingest/tokenfuse/`, 2026-08-05, against the unfixed tree):
+(@measured `go test ./internal/ingest/tokenfuse/`, 2026-08-06, against the unfixed tree):
 
 ```
 # github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse [github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse.test]
@@ -289,7 +294,7 @@ FAIL	github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse [build failed]
 
 The operator-facing half was driven separately, against the bumped module but the unfixed
 reporting path, so a green connector could not stand in for a silent CLI (@measured `go test
-./cmd/idryx/ -run Chain`, 2026-08-05):
+./cmd/idryx/ -run Chain`, 2026-08-06):
 
 ```
 --- FAIL: TestReportTokenFuseChainStatesAreDistinguishable (0.00s)
@@ -304,7 +309,7 @@ reporting path, so a green connector could not stand in for a silent CLI (@measu
 
 All ten pass after the fix, and the fixtures they verify are written by the shared module's own
 `ChainedWriter` rather than by hand, so the bytes under test are the bytes a real bus producer
-writes (@measured `go test ./internal/ingest/tokenfuse/ ./cmd/idryx/`, 2026-08-05, both `ok`).
+writes (@measured `go test ./internal/ingest/tokenfuse/ ./cmd/idryx/`, 2026-08-06, both `ok`).
 
 **What this did not establish.** No tampered stream from a real producer: every fixture here is
 written and then edited by the test. The break position is the line AFTER the edited one, which
@@ -345,7 +350,7 @@ a field on `model.Identity`, `model.Permission` or `model.DeclaredModel` has no 
 about where the Postgres backend keeps it, so adding a field forces that decision in the same
 change rather than leaving it to be discovered by a detector that silently returns nothing.
 
-The second was red against the unfixed tree (@measured `go test ./internal/graph/`, 2026-08-05):
+The second was red against the unfixed tree (@measured `go test ./internal/graph/`, 2026-08-06):
 
 ```
 --- FAIL: TestModelFieldsAllHaveAPersistenceDecision (0.00s)
@@ -361,7 +366,7 @@ FAIL	github.com/TAIPANBOX/idryx/internal/graph
 The first passed against the unfixed tree, because a column that exists nowhere is in neither
 list, so it was verified by breaking instead, three ways, each of which fails it for its own
 reason (@measured `go test ./internal/graph/ -run TestPgStoreWritesAndReadsTheSameColumns`,
-2026-08-05, each mutation applied and reverted in turn):
+2026-08-06, each mutation applied and reverted in turn):
 
 ```
 identities.shadow is written and never read back: the value reaches Postgres and no Snapshot ever returns it, so no detector can see it
@@ -372,7 +377,7 @@ identities.shadow appears in SQL but schema.sql declares no such column, so migr
 **What this did not establish.** The two live-Postgres tests
 (`TestPgShadowAndDeclaredModelsRoundTrip`, `TestPgShadowFlagIsStickyLikePrivileged`) were written
 and compile under the `integration` tag (@measured `go vet -tags integration ./internal/graph/`,
-2026-08-05, clean), and they were NOT run here: this machine has no Postgres and no running
+2026-08-06, clean), and they were NOT run here: this machine has no Postgres and no running
 container runtime, so CI's `integration` job is the first place they execute. The
 database-free checks above are what actually ran. Nothing here says anything about an existing
 production database's migration behaviour beyond the additive `IF NOT EXISTS` shape the rest of
@@ -422,7 +427,7 @@ problem). AWS-managed policies are still judged by name and ARN, because their d
 in this export at all. On GCP, a CUSTOM role's contents are not in a project IAM policy, so a
 custom role granting `iam.serviceAccounts.actAs` is still invisible; the same holds for a custom
 Azure role definition, since `az role assignment list` reports only the role's name. Both tables
-are hand-maintained (`@claude`, 2026-08-05) from documented role contents, not fetched live, so a
+are hand-maintained (`@claude`, 2026-08-06) from documented role contents, not fetched live, so a
 provider changing a predefined role's contents is a change nothing here would notice. Closing the
 custom-role half means taking a second input (`gcloud iam roles describe`,
 `az role definition list`), which is a connector-shaped change, not a detector one.
@@ -430,7 +435,7 @@ custom-role half means taking a second input (`gcloud iam roles describe`,
 **The tests are driven from the bundled fixtures, not from hand-built identities**, so what they
 prove is the path from connector to detector rather than the detector in isolation, which is the
 exact gap that let this ship. Red against the unfixed tree (@measured `go test ./internal/detect/
-./internal/graph/`, 2026-08-05):
+./internal/graph/`, 2026-08-06):
 
 ```
 --- FAIL: TestPrivilegeEscalationReachableFromBundledConnectors/aws_iam (0.00s)
@@ -457,7 +462,7 @@ narrow policy that was widened. The GCP and Azure fixtures needed nothing added:
 and `Owner` were already there and were already unreachable.
 
 The fix is visible in the shipped demo, not only in tests (@measured
-`./bin/idryx detect --source aws_iam ./testdata/aws_iam.json`, 2026-08-05):
+`./bin/idryx detect --source aws_iam ./testdata/aws_iam.json`, 2026-08-06):
 
 ```
 high  over_privileged_nhi   arn:aws:iam::123456789012:role/app-config   NHI holds admin-equivalent permissions
@@ -514,7 +519,7 @@ ignore on the single-`--source` path, which had it too (`--source okta --cloudtr
 accepted and dropped).
 
 Red against the unfixed tree, at both levels (@measured `go test ./internal/graph/` and
-`go test ./cmd/idryx/ -run 'LoadMode|UsageFlag'`, 2026-08-05):
+`go test ./cmd/idryx/ -run 'LoadMode|UsageFlag'`, 2026-08-06):
 
 ```
 internal/graph/store_test.go:274:4: s.MarkPrivileged undefined (type *Store has no field or method MarkPrivileged)
