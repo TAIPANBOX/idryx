@@ -245,3 +245,67 @@ through the same shared loop in `runDetect`, via Slack/webhook mocks -- its own 
 separately driven into a failure to confirm this specific loop counts an OTLP failure identically,
 though the loop's logic is sink-agnostic (it only calls the `sink.Sink` interface, the same one
 Slack and webhook implement).
+
+## Ingesting one inventory twice doubled every permission
+
+2026-08-06, from a read-only audit of the source. `graph.Store.AddIdentity`
+(`internal/graph/store.go`) ended on `id.Permissions = append(id.Permissions, in.Permissions...)`,
+an unconditional append, so the same inventory merged into one in-memory graph twice came back
+carrying every grant twice. Every other field in that same function already merged rather than
+accumulated: `Privileged` ORs, `Source`/`Owner`/`Runtime`/`Attestation` overwrite only when the
+incoming value is non-empty, `LastUsed` keeps the later of the two. Permissions were the one field
+that grew.
+
+The rule was already written down twice in this repository, and held in both other places.
+`AddEvent`, ten lines above in the same file, dedupes on the event's natural key and says why:
+replaying a source file "cannot double-count events and inflate threshold detectors like
+mfa_fatigue". The Postgres backend never had the bug either, from `UNIQUE (identity_id, name)` on
+`permissions` plus an `ON CONFLICT (identity_id, name) DO UPDATE` behind a per-identity clear in
+`IngestIdentities`. The in-memory inventory path was the remaining half.
+
+**What an operator saw.** `least_privilege` reports "N/M granted permissions unused" and names each
+unused grant straight to a human, so a duplicated permission inflated the denominator *and* printed
+the recommendation twice. Naming `testdata/agents.json` once, then twice, against the unfixed tree
+(@measured `go run ./cmd/idryx detect --load agents:./testdata/agents.json [--load ...]`,
+2026-08-06):
+
+```
+once   2/3 granted permissions unused, recommend revoking: s3_delete, slack_post
+twice  4/6 granted permissions unused, recommend revoking: s3_delete, s3_delete, slack_post, slack_post
+```
+
+After the fix the two invocations print the identical line, and the run total is 11 alerts either
+way (@measured, same commands, 2026-08-06). Both regression tests were run against the unfixed tree
+first and failed on the append itself rather than on a typo (@measured `go test ./internal/graph/
+-run 'TestAddIdentityDedupesPermissionsByName|TestAddIdentityMergesPermissionFlags'`, 2026-08-06):
+
+```
+store_test.go:299: permissions after re-ingesting the identical inventory 2x =
+                   [slack_post s3_read slack_post s3_read], want 2 (deduped by name)
+store_test.go:357: permissions = [{Name:AdministratorAccess Admin:false Used:false ARN:}
+                   {Name:AdministratorAccess Admin:true Used:true ARN:arn:aws:...}], want exactly 1
+```
+
+Fixed by unioning permissions by name in `mergePermissions`. Where two reports of one grant meet,
+each field follows the rule its kind already follows one scope up: booleans OR (like `Privileged`
+and `Shadow`), a non-empty string wins and an empty one never clears (like `Source` and `Runtime`).
+That direction is the safe one for an identity plane. `Admin` and `Used` are positive evidence that
+somebody observed something, and a later source reporting neither has usually not contradicted it,
+only failed to look; letting it win would turn a used admin grant back into an unused ordinary one
+in the operator's report.
+
+**Where the two backends still differ, deliberately named rather than claimed away.** In-memory now
+unions across sources; Postgres replaces an identity's whole permission set per `IngestIdentities`
+call. Nothing is double-counted on either side, which is what this fix was about, but two sources
+each describing part of one identity's grants converge differently. That gap is not reachable from
+today's CLI: `idryx load --db` takes exactly one source file per invocation and has no `--load`
+list, so cross-source stitching exists only on the in-memory path. It becomes reachable the moment
+`load` grows one. @claude, from reading `runLoad` and `IngestIdentities`, not from a run.
+
+**What this did not establish.** No Postgres was involved: `internal/graph/pgstore_integration_test.go`
+sits behind the `integration` build tag and needs a live database, so the claim that the Postgres
+backend never had this bug is read off the schema and the upsert, not measured against a server. The
+in-memory side is measured, both at the unit boundary and through the real CLI. The merge rule is
+also pinned only for the fields `model.Permission` has today (`Name`, `Admin`, `Used`, `ARN`); a
+field added later gets no rule from these tests and will merge by whatever `mergePermission` says at
+that point, which is a line somebody has to remember to write.
