@@ -14,13 +14,14 @@ import (
 )
 
 type bpfConnEvent struct {
-	_      structs.HostLayout
-	Pid    uint32
-	Dport  [2]uint8
-	Family uint8
-	Pad0   uint8
-	Daddr  [16]uint8
-	Comm   [16]int8
+	_        structs.HostLayout
+	CgroupId uint64
+	Pid      uint32
+	Dport    [2]uint8
+	Family   uint8
+	Pad0     uint8
+	Daddr    [16]uint8
+	Comm     [16]int8
 }
 
 type bpfSkippedCounts struct {
