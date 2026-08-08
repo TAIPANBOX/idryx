@@ -11,13 +11,32 @@ it reports:
 ```sh
 gofmt -l .                        # MUST print nothing
 go vet ./...                      # MUST exit 0
+go run honnef.co/go/tools/cmd/staticcheck@latest ./...   # MUST exit 0
 go test ./...                     # all packages MUST be ok
+./scripts/readme-numbers.sh       # every number the README states
+./scripts/reproducible-build.sh   # the release asset names (invariant 6)
+./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
 ./scripts/detectors-complete.sh   # every detector registered and tested
 ```
 
-`make lint` runs the first two; `make test` the third. CI additionally runs
-`go test -race ./...` and, in a separate job, integration tests behind the
-`integration` build tag against a Postgres service.
+`make lint` runs the first two; `make test` the tests. CI additionally runs
+`go test -race ./...` rather than plain `go test`, and, in separate jobs,
+integration tests behind the `integration` build tag against a Postgres
+service, plus the eBPF build.
+
+**This list was three commands short until 2026-08-08, and the omission cost
+two red CI runs in one day.** It named `gofmt`, `go vet`, `go test` and
+`detectors-complete.sh`, while the `build` job runs nine things: staticcheck
+and all four scripts were missing from it. One session ran the two scripts this
+file named, pushed, and was told by CI that the README badge had drifted; a
+later one wrote a `destinations` slice nothing read, which staticcheck catches
+and `go vet` does not.
+
+The general shape is worth more than the fix: **an instruction file that lists
+some of the gate is trusted for all of it.** If you add a check to
+`.github/workflows/ci.yml`, add it here in the same commit, and if you are
+about to trust this list, `grep 'run:' .github/workflows/ci.yml` is four
+seconds and settles it.
 
 Common trap: editing a Go map/struct literal and leaving it misaligned. Always
 `gofmt -w` the files you touch. The most recent human-written detector shipped
