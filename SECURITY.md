@@ -85,10 +85,21 @@ rather than folding into the table above:
   Passport record whatsoever), which is a real gap it closes regardless of
   this limitation, not a claim that it resolves identity reliably under an
   adversarial host.
-- **Explicitly out of scope for this version.** Beaconing/periodogram
-  detection, JA3/JA4 TLS fingerprinting, DNS-tunnel detection, and resolving a
-  captured process to a real governed agent/service identity (rather than a
-  raw process name) are all deferred -- see `idryx-plan.md`'s Phase 4 note.
+- **JA3/JA4 TLS fingerprinting is out of scope permanently, not for this
+  version.** It would require reading the ClientHello, which is reading what
+  the application wrote into its socket, and that contradicts all three clauses
+  above: payloads, TLS inspection, and data after the connection is
+  established. A ClientHello is plaintext, so nothing would be decrypted, but
+  the promise is not about encryption; it is about this sensor not looking
+  inside data at all. Decided 2026-08-09: the promise stands and the
+  fingerprint does not happen.
+- **Still deferred, and these are deferrals rather than decisions.**
+  Beaconing/periodogram detection and DNS-tunnel detection, neither of which
+  needs to read a payload: beaconing works from connection timing, which the
+  sensor now records from the kernel's own clock. Resolving a process to a
+  governed identity is partly built (agent-passport SPEC 3.3, read as a
+  *claim*), and what remains is corroborating a claim rather than believing
+  it.
   This version mirrors what TokenFuse's own `crates/radar` sensor ships
   today, not the originally-specced full scope.
 - **CI builds it, never loads it.** The `ebpf (build)` CI job regenerates

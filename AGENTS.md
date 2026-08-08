@@ -191,11 +191,18 @@ an absent invariant.
 7. **The estate's eBPF network sensor grows here, and nowhere else.** Two
    implementations of one sensor exist: this one (`internal/ebpfcapture`, Go,
    cilium/ebpf) and tokenfuse's `crates/radar` (Rust, aya), which this one was
-   ported from. Every capability the sensor gains from now on, IPv6, timing,
-   TLS ClientHello, beaconing, JA3/JA4, DNS tunnelling, identity correlation,
-   is built in idryx. Radar's role narrows to emitting what it observes into
-   the shared agent-event stream; it does not grow new observation of its own.
+   ported from. Every capability the sensor gains from now on is built in idryx:
+   IPv6, the skipped counters, the cgroup, the kernel timestamp and the
+   self-declared identity already are, and beaconing, DNS tunnelling and
+   corroborating a claim are what remain. Radar's role narrows to emitting what
+   it observes into the shared agent-event stream; it does not grow new
+   observation of its own.
    *(@yurii 2026-08-08, "Idryx основний, radar зводимо до відправника подій")*
+
+   This list named "TLS ClientHello" and "JA3/JA4" until 2026-08-09, when both
+   were decided against rather than scheduled (see SECURITY.md). An invariant
+   that promises a capability nobody intends to build is the kind of sentence a
+   later reader treats as a plan.
 
    **The port outgrew the original in three measurable places, which is why
    this direction and not the other** (@claude, read off both trees

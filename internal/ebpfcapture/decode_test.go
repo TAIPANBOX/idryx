@@ -26,23 +26,36 @@ func connEvent(pid uint32, port uint16, family uint8, addr []byte, comm string) 
 	return connEventIn(0, pid, port, family, addr, comm)
 }
 
+// putU64 writes one native little-endian 64-bit field.
+func putU64(b []byte, v uint64) {
+	for i := 0; i < 8; i++ {
+		b[i] = byte(v >> (8 * i))
+	}
+}
+
 // connEventIn is connEvent with an explicit cgroup id, in connect.c's layout:
 // cgroup_id first because it is the only 8-byte field, then pid, port as raw
 // network-order bytes, family, one pad byte, 16 address bytes, comm.
 func connEventIn(cgroup uint64, pid uint32, port uint16, family uint8, addr []byte, comm string) []byte {
+	return connEventAt(cgroup, 0, pid, port, family, addr, comm)
+}
+
+// connEventAt is the full record in connect.c's layout: the two 8-byte fields
+// first (cgroup, ktime), then pid, port as raw network-order bytes, family, one
+// pad byte, 16 address bytes, comm.
+func connEventAt(cgroup, ktime uint64, pid uint32, port uint16, family uint8, addr []byte, comm string) []byte {
 	b := make([]byte, connEventSize)
-	for i := 0; i < 8; i++ {
-		b[i] = byte(cgroup >> (8 * i)) // native little-endian
-	}
-	b[8] = byte(pid)
-	b[9] = byte(pid >> 8)
-	b[10] = byte(pid >> 16)
-	b[11] = byte(pid >> 24)
-	b[12] = byte(port >> 8) // network byte order: high byte first
-	b[13] = byte(port)
-	b[14] = family
-	copy(b[16:32], addr)
-	copy(b[32:48], comm)
+	putU64(b[0:8], cgroup)
+	putU64(b[8:16], ktime)
+	b[16] = byte(pid)
+	b[17] = byte(pid >> 8)
+	b[18] = byte(pid >> 16)
+	b[19] = byte(pid >> 24)
+	b[20] = byte(port >> 8) // network byte order: high byte first
+	b[21] = byte(port)
+	b[22] = family
+	copy(b[24:40], addr)
+	copy(b[40:56], comm)
 	return b
 }
 
@@ -143,7 +156,7 @@ func TestDecodeConnEventRefusesAShortRecord(t *testing.T) {
 // connect.c. Nothing compiles the two together, so this pins the number the
 // decoder actually indexes with.
 func TestConnEventSizeMatchesTheOffsetsTheDecoderUses(t *testing.T) {
-	const fields = 8 + 4 + 2 + 1 + 1 + 16 + 16 // cgroup + pid + dport + family + pad + daddr + comm
+	const fields = 8 + 8 + 4 + 2 + 1 + 1 + 16 + 16 // cgroup + ktime + pid + dport + family + pad + daddr + comm
 	if connEventSize != fields {
 		t.Errorf("connEventSize = %d, but the fields the decoder reads span %d bytes", connEventSize, fields)
 	}
@@ -397,5 +410,79 @@ func TestAnEmptyClaimIsNotAClaim(t *testing.T) {
 	environ := []byte("AGENT_PASSPORT_ID=\x00PATH=/usr/bin\x00")
 	if got := ClaimedIdentity(findEnv(environ, envVar)); got != "" {
 		t.Errorf("an empty variable produced %q", got)
+	}
+}
+
+func TestDecodeReadsTheKernelTimestamp(t *testing.T) {
+	const ktime = 1_234_567_890_123
+	ev, ok := decodeConnEvent(connEventAt(8471, ktime, 4242, 443, 4, []byte{1, 2, 3, 4}, "curl"))
+	if !ok {
+		t.Fatal("a well-formed record must decode")
+	}
+	if ev.ktimeNS != ktime {
+		t.Errorf("ktimeNS = %d, want %d", ev.ktimeNS, ktime)
+	}
+	// The timestamp shifted every field after it by eight bytes. A decoder
+	// updated for one field and not the rest reads plausible rubbish.
+	if ev.cgroupID != 8471 || ev.pid != 4242 || ev.dport != 443 || ev.family != 4 {
+		t.Errorf("fields around the timestamp shifted: cgroup=%d pid=%d dport=%d family=%d",
+			ev.cgroupID, ev.pid, ev.dport, ev.family)
+	}
+	if got := trimComm(ev.comm[:]); got != "curl" {
+		t.Errorf("comm = %q, want curl", got)
+	}
+}
+
+// The whole point of carrying a kernel timestamp: the interval between two
+// events must come from when the KERNEL saw them, not from when a reader got
+// round to them. This pins that two events one second apart in kernel time
+// render one second apart, whatever the reader was doing in between.
+func TestTheIntervalBetweenTwoEventsSurvivesTheConversion(t *testing.T) {
+	start := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	c := clockOffset{wallAtStart: start, monoAtStart: 5_000_000_000}
+
+	first := c.wallTime(5_000_000_000, time.Time{})
+	second := c.wallTime(6_000_000_000, time.Time{})
+
+	if !first.Equal(start) {
+		t.Errorf("an event at the offset's own instant = %s, want %s", first, start)
+	}
+	if gap := second.Sub(first); gap != time.Second {
+		t.Errorf("interval = %s, want 1s: the kernel saw these one second apart", gap)
+	}
+}
+
+// A zero timestamp means the kernel gave none. Rendering it through the offset
+// would date the flow to the machine's boot: a precise, confident, wrong
+// answer, which is the worst kind for a timestamp.
+func TestAnAbsentKernelTimestampFallsBackRatherThanDatingToBoot(t *testing.T) {
+	c := clockOffset{wallAtStart: time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC), monoAtStart: 5_000_000_000}
+	fallback := time.Date(2026, 8, 9, 12, 34, 56, 0, time.UTC)
+
+	if got := c.wallTime(0, fallback); !got.Equal(fallback) {
+		t.Errorf("a zero ktime rendered as %s, want the caller's own clock %s", got, fallback)
+	}
+	// And with no offset at all (the syscall failed), every event falls back.
+	var none clockOffset
+	if got := none.wallTime(9_999_999, fallback); !got.Equal(fallback) {
+		t.Errorf("with no offset, rendered %s, want %s", got, fallback)
+	}
+}
+
+// The ring buffer can hold entries written between the program attaching and
+// the offset being sampled. Those must keep their order rather than all
+// clamping to the start, which would make distinct events look simultaneous.
+func TestAnEventFromBeforeTheOffsetKeepsItsOrder(t *testing.T) {
+	start := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	c := clockOffset{wallAtStart: start, monoAtStart: 5_000_000_000}
+
+	earlier := c.wallTime(4_000_000_000, time.Time{})
+	later := c.wallTime(4_500_000_000, time.Time{})
+
+	if !earlier.Before(later) {
+		t.Errorf("two pre-offset events collapsed: %s vs %s", earlier, later)
+	}
+	if gap := later.Sub(earlier); gap != 500*time.Millisecond {
+		t.Errorf("interval = %s, want 500ms", gap)
 	}
 }

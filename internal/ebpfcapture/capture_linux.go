@@ -99,6 +99,9 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 	defer reader.Close()
 
 	llmIPs := resolveLLMHosts(knownLLMHosts)
+	// Taken once for the whole capture, so every flow lands on one consistent
+	// mapping from the kernel's clock to the wall clock. See clock.go.
+	clock := newClockOffset()
 	selfPID := uint32(os.Getpid()) // #nosec G115 -- os.Getpid() is bounded by the kernel's pid_max (never remotely near uint32 range); ev.pid (below) is the same uint32 PID representation the kernel itself hands the eBPF program
 
 	stop := make(chan struct{})
@@ -156,7 +159,10 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 		}
 
 		f := Flow{
-			Time:        time.Now().UTC(),
+			// The kernel's own timestamp, rendered as wall clock. It falls back
+			// to this reader's clock when the kernel gave none, which is what
+			// this line always used to be.
+			Time:        clock.wallTime(ev.ktimeNS, time.Now()),
 			Identity:    identity,
 			Destination: destination(ip, ev.dport, llmIPs),
 			PID:         ev.pid,

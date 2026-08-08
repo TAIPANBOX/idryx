@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-242-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-246-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -134,7 +134,9 @@ self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
 layer has shipped since (the `sys_enter_connect` sensor and its
 `unmanaged_egress` detector); what is still ahead in
 [`idryx-plan.md`](idryx-plan.md)'s Phase 4 is the rest of that layer, beaconing,
-JA3/JA4, DNS-tunnel detection and full identity correlation. Blocking,
+DNS-tunnel detection and corroborating a claimed identity. JA3/JA4 is decided
+against rather than pending: it needs the ClientHello, and this sensor promises
+never to read a payload. Blocking,
 `apply`-style enforcement is intentionally out of scope: idryx proposes, it
 never mutates.
 
@@ -637,7 +639,8 @@ does and deliberately does not do.
 ## Status
 
 **Phases 0-3 plus a first eBPF network-behavior layer shipped** (beaconing,
-JA3/JA4, DNS-tunnel detection, and full identity correlation remain, see
+DNS-tunnel detection and corroborating a claimed identity remain; JA3/JA4 is
+decided against, see
 [`idryx-plan.md`](idryx-plan.md)'s Phase 4):
 
 - [x] Phase 0 - ITDR core, in-memory graph, CLI, CI
