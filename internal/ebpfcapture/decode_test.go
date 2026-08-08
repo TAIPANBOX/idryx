@@ -509,3 +509,31 @@ func TestAnImpossibleGapDoesNotWrapIntoTheDistantPast(t *testing.T) {
 		t.Errorf("MaxInt64 itself did not convert: %d", d)
 	}
 }
+
+// The sub-second part must survive the wire format. RFC3339 has no fractional
+// field, so rendering with it rounds every flow to the second: two connections
+// 200ms apart become simultaneous, and the jitter a beacon detector measures
+// becomes a property of the formatter rather than of the traffic.
+func TestTheEgressLogKeepsSubSecondPrecision(t *testing.T) {
+	at := time.Date(2026, 8, 9, 12, 30, 0, 200_000_000, time.UTC)
+	log := ToEgressLog([]Flow{{Time: at, Identity: Identity("curl", 0), Destination: "x:443"}})
+
+	if log.Flows[0].Time != "2026-08-09T12:30:00.2Z" {
+		t.Errorf("time = %q, want the fraction kept", log.Flows[0].Time)
+	}
+	// And the reader this feeds must accept it: egress.go parses against the
+	// RFC3339 layout, which Go matches with or without a fraction.
+	back, err := time.Parse(time.RFC3339, log.Flows[0].Time)
+	if err != nil {
+		t.Fatalf("the egress connector's own parse rejects what we now write: %v", err)
+	}
+	if !back.Equal(at) {
+		t.Errorf("round-tripped to %s, want %s", back, at)
+	}
+	// A whole second still renders without a trailing dot, so old and new logs
+	// look the same where there is nothing to keep.
+	whole := ToEgressLog([]Flow{{Time: at.Truncate(time.Second), Identity: "x", Destination: "y:1"}})
+	if whole.Flows[0].Time != "2026-08-09T12:30:00Z" {
+		t.Errorf("a whole second rendered as %q", whole.Flows[0].Time)
+	}
+}
