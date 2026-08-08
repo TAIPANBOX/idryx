@@ -1,6 +1,7 @@
 package ebpfcapture
 
 import (
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -484,5 +485,27 @@ func TestAnEventFromBeforeTheOffsetKeepsItsOrder(t *testing.T) {
 	}
 	if gap := later.Sub(earlier); gap != 500*time.Millisecond {
 		t.Errorf("interval = %s, want 500ms", gap)
+	}
+}
+
+// time.Duration is an int64. A uint64 gap past math.MaxInt64 wraps to a
+// negative and renders the event roughly 292 years out, in the wrong direction,
+// with nothing complaining. Reaching that needs a 292-year uptime or a corrupt
+// record off the ring buffer, and the second is the reachable one.
+func TestAnImpossibleGapDoesNotWrapIntoTheDistantPast(t *testing.T) {
+	start := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	c := clockOffset{wallAtStart: start, monoAtStart: 1}
+
+	got := c.wallTime(uint64(math.MaxInt64)+2, time.Time{})
+
+	if got.Before(start) {
+		t.Errorf("a gap past MaxInt64 rendered %s, before the offset at %s: it wrapped", got, start)
+	}
+	if !got.Equal(start) {
+		t.Errorf("rendered %s, want the offset's own instant %s", got, start)
+	}
+	// The boundary itself must still convert normally.
+	if d := asDuration(uint64(math.MaxInt64)); d != time.Duration(math.MaxInt64) {
+		t.Errorf("MaxInt64 itself did not convert: %d", d)
 	}
 }

@@ -1,6 +1,9 @@
 package ebpfcapture
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // This file has no build tag: turning a kernel monotonic reading into a wall
 // clock time is arithmetic, and arithmetic is testable without a kernel. The
@@ -47,11 +50,32 @@ func (c clockOffset) wallTime(ktimeNS uint64, fallback time.Time) time.Time {
 		return fallback.UTC()
 	}
 	if ktimeNS >= c.monoAtStart {
-		return c.wallAtStart.Add(time.Duration(ktimeNS - c.monoAtStart)).UTC()
+		return c.wallAtStart.Add(asDuration(ktimeNS - c.monoAtStart)).UTC()
 	}
 	// An event stamped before this capture started: the ring buffer can hold
 	// entries written between the program attaching and the offset being taken.
 	// Subtracting keeps them in order rather than clamping them all to the
 	// start, which would make several distinct events look simultaneous.
-	return c.wallAtStart.Add(-time.Duration(c.monoAtStart - ktimeNS)).UTC()
+	return c.wallAtStart.Add(-asDuration(c.monoAtStart - ktimeNS)).UTC()
+}
+
+// asDuration converts a nanosecond gap to a Duration, or zero when the gap
+// cannot be one.
+//
+// time.Duration is an int64, so a uint64 gap past math.MaxInt64 wraps to a
+// negative and renders an event roughly 292 years off, in the wrong direction,
+// with no complaint from anything. Reaching that needs an uptime of 292 years
+// or a corrupt record, and the second is the reachable one: this value comes
+// off a ring buffer, and every other field from that buffer is already checked
+// for being the wrong size or an unknown family.
+//
+// Zero rather than a clamp: a clamped gap is still an answer, and a gap this
+// large is not a late timestamp, it is a corrupt one. Zero renders the event at
+// the offset's own instant, which is wrong by at most one capture rather than
+// by centuries.
+func asDuration(gap uint64) time.Duration {
+	if gap > math.MaxInt64 {
+		return 0
+	}
+	return time.Duration(gap) // #nosec G115 -- bounded by the line above
 }

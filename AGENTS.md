@@ -18,6 +18,13 @@ go test ./...                     # all packages MUST be ok
 ./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
 ./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
+
+# CI runs these in a separate job called `security`, which is exactly why they
+# get forgotten: the list above matched the `build` job and stopped there, and
+# gosec then refused a branch over an integer conversion that go vet and
+# staticcheck both accepted.
+go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet ./...   # MUST exit 0
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...               # MUST exit 0
 ```
 
 `make lint` runs the first two; `make test` the tests. CI additionally runs
@@ -33,11 +40,17 @@ file named, pushed, and was told by CI that the README badge had drifted; a
 later one wrote a `destinations` slice nothing read, which staticcheck catches
 and `go vet` does not.
 
-The general shape is worth more than the fix: **an instruction file that lists
-some of the gate is trusted for all of it.** If you add a check to
-`.github/workflows/ci.yml`, add it here in the same commit, and if you are
-about to trust this list, `grep 'run:' .github/workflows/ci.yml` is four
-seconds and settles it.
+**It happened a third time on 2026-08-09**, after that paragraph was written.
+The list was corrected to match the `build` job and stopped there, while gosec
+and govulncheck live in a job called `security`. A list covering one job reads
+as covering the gate exactly as a list covering half a job does.
+
+The general shape is worth more than any of the three fixes: **an instruction
+file that lists some of the gate is trusted for all of it.** If you add a check
+to `.github/workflows/ci.yml`, add it here in the same commit, and if you are
+about to trust this list, `grep 'run:' .github/workflows/ci.yml` is four seconds
+and settles it. It now covers `build` and `security`; `ebpf` and `integration`
+need a kernel and a Postgres respectively and are described below instead.
 
 Common trap: editing a Go map/struct literal and leaving it misaligned. Always
 `gofmt -w` the files you touch. The most recent human-written detector shipped
