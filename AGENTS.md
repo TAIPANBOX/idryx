@@ -168,6 +168,40 @@ an absent invariant.
    has vanished is worse than no check. Verified by breaking: putting the version
    back fails it in all four repositories that share this shape.)*
 
+7. **The estate's eBPF network sensor grows here, and nowhere else.** Two
+   implementations of one sensor exist: this one (`internal/ebpfcapture`, Go,
+   cilium/ebpf) and tokenfuse's `crates/radar` (Rust, aya), which this one was
+   ported from. Every capability the sensor gains from now on, IPv6, timing,
+   TLS ClientHello, beaconing, JA3/JA4, DNS tunnelling, identity correlation,
+   is built in idryx. Radar's role narrows to emitting what it observes into
+   the shared agent-event stream; it does not grow new observation of its own.
+   *(@yurii 2026-08-08, "Idryx основний, radar зводимо до відправника подій")*
+
+   **The port outgrew the original in three measurable places, which is why
+   this direction and not the other** (@claude, read off both trees
+   2026-08-08). `connect.c` reads the syscall argument through the
+   BTF-typed `trace_event_raw_sys_enter` from `vmlinux.h`, so it is CO-RE and
+   portable, while radar hard-codes `ctx.read_at::<u64>(24)` with a comment
+   saying "offset 24 on x86_64" and will read the wrong bytes on any other
+   architecture. `capture_linux.go` skips loopback traffic unless the port is
+   11434, 8000 **or 8001**, while radar's filter omits 8001 and drops the
+   packet before its own `is_llm` can recognise the local vLLM port it
+   nevertheless lists. And this one drops its own traffic by PID, while radar
+   compares `comm`, which SECURITY.md correctly says any process can rename.
+
+   The other half of the reason is structural: the eBPF layer here carries
+   invariant 4 and `scripts/ebpf-optional.sh`, and radar carries no invariant
+   and no test in a repository that has twenty of the former.
+
+   **What this does NOT say.** Radar is not deprecated and its existing
+   defects are worth fixing: a sensor that ships and runs should be correct on
+   the machine it runs on. The line is between fixing what is there and adding
+   what is not.
+   *(not enforced. It becomes checkable once radar emits agent-event NDJSON:
+   at that point a gate can assert radar's output is the shared envelope
+   rather than a terminal table. Until then this paragraph is the whole of
+   it, and it should be read as the weakest kind of rule)*
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**
@@ -237,11 +271,17 @@ the build on unused imports rather than tripping the silent-skip detector, so
 it went red for the wrong reason; the second used `golang.org/x/sys/unix` as a
 Linux-only import, and it compiles for darwin and windows both. A break test
 that goes red proves nothing until you know which line made it red.
-**Held by this file alone: invariants 1, 2 and 3.**
+**Held by this file alone: invariants 1, 2, 3 and 7.**
 
 - **Invariant 3** is checkable by asserting no local type duplicates a shared
   one, but is only worth writing if a duplicate ever appears.
 - Invariants 1 and 2 are judgement and probably stay judgement.
+- **Invariant 7** is prose today and has a known point at which it stops being
+  prose: the moment radar emits agent-event NDJSON, a check can require that
+  shape and refuse a terminal-table build. Written down here rather than left
+  as an intention, because a rule about where work happens is exactly the kind
+  nobody notices breaking: the next capability added in the wrong repository
+  compiles, passes its own CI, and reads as progress.
 
 ## Standing rule
 

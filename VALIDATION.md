@@ -246,7 +246,6 @@ separately driven into a failure to confirm this specific loop counts an OTLP fa
 though the loop's logic is sink-agnostic (it only calls the `sink.Sink` interface, the same one
 Slack and webhook implement).
 
-<<<<<<< HEAD
 ## Ingesting one inventory twice doubled every permission
 
 2026-08-06, from a read-only audit of the source. `graph.Store.AddIdentity`
@@ -310,7 +309,7 @@ in-memory side is measured, both at the unit boundary and through the real CLI. 
 also pinned only for the fields `model.Permission` has today (`Name`, `Admin`, `Used`, `ARN`); a
 field added later gets no rule from these tests and will merge by whatever `mergePermission` says at
 that point, which is a line somebody has to remember to write.
-=======
+
 ## The shared contract was four minor versions stale, and the delta was the integrity check
 
 *The four sections below open with 2026-08-05, the date of the read-only audit that found
@@ -612,4 +611,3 @@ did NOT run here: this machine has no Postgres and no running container runtime.
 `integration` job now covers `./cmd/idryx/` as well as `./internal/graph/`, so that is where it
 first executes. Nothing here changes what `idryx load --db --privileged` does; it already applied
 the set, and it still does.
->>>>>>> origin/main

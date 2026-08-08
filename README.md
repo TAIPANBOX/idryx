@@ -6,11 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-<<<<<<< HEAD
 ![tests](https://img.shields.io/badge/tests-219-brightgreen.svg)
-=======
-![tests](https://img.shields.io/badge/tests-216-brightgreen.svg)
->>>>>>> origin/main
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
