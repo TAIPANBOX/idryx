@@ -71,13 +71,16 @@ func (d *ClaimedAgentUnknown) Detect(g graph.Reader) []model.Alert {
 			continue // the claim resolves; nothing to say
 		}
 
+		// Only the LLM providers, deliberately: unlike unmanaged_egress, this
+		// detector's summary names the claimed agent rather than where it
+		// went, because that string is what an operator greps their own
+		// deployment manifests for. Collecting destinations here was copied
+		// from that detector and used by nothing, which staticcheck caught.
 		llmProviders := map[string]bool{}
-		var destinations []string
 		for _, e := range id.Events {
 			if e.Type != model.EventEgress {
 				continue
 			}
-			destinations = append(destinations, e.Resource)
 			if provider, ok := matchLLM(e.Resource); ok {
 				llmProviders[provider] = true
 			}
