@@ -138,7 +138,13 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 			continue // local chatter, not a model port
 		}
 		comm := strings.TrimRight(string(ev.comm[:]), "\x00")
-		f := Flow{Time: time.Now().UTC(), Identity: Identity(comm), Destination: destination(ip, ev.dport, llmIPs), PID: ev.pid}
+		f := Flow{
+			Time:        time.Now().UTC(),
+			Identity:    Identity(comm, ev.cgroupID),
+			Destination: destination(ip, ev.dport, llmIPs),
+			PID:         ev.pid,
+			CgroupID:    ev.cgroupID,
+		}
 		flows = append(flows, f)
 		if opts.OnFlow != nil {
 			opts.OnFlow(f)

@@ -43,7 +43,12 @@ char LICENSE[] SEC("license") = "GPL";
 // a short IPv4 write would otherwise be indistinguishable. _pad0 keeps the
 // 16-byte address 4-aligned and the total unambiguously 40 rather than left to
 // the compiler's own rounding.
+// cgroup_id is first because it is the only 8-byte field: putting it anywhere
+// else would make the compiler insert padding the two sides then have to agree
+// about implicitly. With it leading, every offset below is its own size's
+// multiple and the total is 48 with nothing left to interpretation.
 struct conn_event {
+	__u64 cgroup_id;   // bpf_get_current_cgroup_id(), 0 when unavailable
 	__u32 pid;        // native (host) byte order -- never crosses a network boundary
 	__u8 dport[2];     // raw sockaddr sin_port/sin6_port bytes, network byte order
 	__u8 family;       // 4 for AF_INET, 6 for AF_INET6; never anything else
@@ -198,6 +203,21 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	ev->pid = pid_tgid >> 32;
 	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+
+	// The cgroup this process belongs to, read in the process's own context
+	// rather than from /proc afterwards. That difference is the whole reason
+	// it is here: a userspace reader races the process it is asking about,
+	// and a short-lived agent is exactly the one worth attributing. A `comm`
+	// is a string the process chose and can change with prctl; a cgroup id is
+	// assigned by the kernel and the process cannot rewrite it.
+	//
+	// It is NOT a container id and must not be called one: it is the cgroup's
+	// inode, unique while that cgroup lives and reused afterwards, and a
+	// process outside any container has one too (the root cgroup's, shared by
+	// everything else on the host). Userspace decides what it is worth; this
+	// program only reports it. Zero on a kernel that does not provide it,
+	// which decode.go treats as absent rather than as a cgroup called zero.
+	ev->cgroup_id = bpf_get_current_cgroup_id();
 
 	bpf_ringbuf_submit(ev, 0);
 	return 0;

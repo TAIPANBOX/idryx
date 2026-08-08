@@ -21,17 +21,17 @@ import (
 // file imports encoding/binary and net, and no cilium/ebpf package, so a darwin
 // or windows build still pulls in zero of them.
 
-// connEventSize is sizeof(struct conn_event) in connect.c: 4 (pid) + 2 (dport)
-// + 1 (family) + 1 (pad) + 16 (daddr) + 16 (comm) = 40 bytes.
-// decodeConnEvent refuses anything shorter, so a future connect.c change that
-// isn't mirrored here fails loudly (a skipped record, counted by the caller)
-// rather than silently misreading a shifted layout.
+// connEventSize is sizeof(struct conn_event) in connect.c: 8 (cgroup_id) +
+// 4 (pid) + 2 (dport) + 1 (family) + 1 (pad) + 16 (daddr) + 16 (comm) = 48
+// bytes. decodeConnEvent refuses anything shorter, so a future connect.c
+// change that isn't mirrored here fails loudly (a skipped record, counted by
+// the caller) rather than silently misreading a shifted layout.
 //
-// It was 28 while the sensor was AF_INET-only. The address field is now 16
-// bytes for both families rather than 4 or 16 depending on one, so that there
-// is one record size and one offset table; see connect.c on why that beats a
-// union.
-const connEventSize = 40
+// It was 28 while the sensor was AF_INET-only, then 40 when the address field
+// became 16 bytes for both families, and 48 since the cgroup id arrived. The
+// cgroup id leads the struct because it is the only 8-byte field and would
+// otherwise force padding the two sides have to agree about implicitly.
+const connEventSize = 48
 
 // decodedConnEvent is conn_event's already-byte-order-resolved form: dport and
 // daddr converted out of connect.c's deliberately-raw wire bytes (see
@@ -43,11 +43,12 @@ const connEventSize = 40
 // explicit family, a real IPv6 address in ::ffff:0.0.0.0/96 and a 4-byte IPv4
 // write into a zeroed 16-byte field are the same bytes.
 type decodedConnEvent struct {
-	pid    uint32
-	dport  uint16
-	family uint8
-	daddr  [16]byte
-	comm   [16]byte
+	cgroupID uint64
+	pid      uint32
+	dport    uint16
+	family   uint8
+	daddr    [16]byte
+	comm     [16]byte
 }
 
 // IP returns the destination address, or nil if the record carries a family
@@ -77,11 +78,12 @@ func decodeConnEvent(raw []byte) (decodedConnEvent, bool) {
 		return decodedConnEvent{}, false
 	}
 	var ev decodedConnEvent
-	ev.pid = binary.LittleEndian.Uint32(raw[0:4]) // native x86_64/arm64 byte order, never crosses the network
-	ev.dport = binary.BigEndian.Uint16(raw[4:6])  // raw sin_port/sin6_port bytes: always network (big-endian) order
-	ev.family = raw[6]                            // 4 or 6, written by connect.c; raw[7] is declared padding
-	copy(ev.daddr[:], raw[8:24])                  // raw address bytes, read octet-by-octet, no numeric byte-order question at all
-	copy(ev.comm[:], raw[24:40])
+	ev.cgroupID = binary.LittleEndian.Uint64(raw[0:8]) // native byte order, kernel-assigned, never crosses the network
+	ev.pid = binary.LittleEndian.Uint32(raw[8:12])     // native x86_64/arm64 byte order, never crosses the network
+	ev.dport = binary.BigEndian.Uint16(raw[12:14])     // raw sin_port/sin6_port bytes: always network (big-endian) order
+	ev.family = raw[14]                                // 4 or 6, written by connect.c; raw[15] is declared padding
+	copy(ev.daddr[:], raw[16:32])                      // raw address bytes, read octet-by-octet, no numeric byte-order question at all
+	copy(ev.comm[:], raw[32:48])
 	return ev, true
 }
 
