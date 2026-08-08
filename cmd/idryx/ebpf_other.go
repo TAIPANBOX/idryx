@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	ebpfCaptureFunc = func(context.Context, time.Duration) ([]ebpfcapture.Flow, error) {
-		return nil, fmt.Errorf("ebpf-capture: not supported on %s (Linux only)", runtime.GOOS)
+	ebpfCaptureFunc = func(context.Context, time.Duration) ([]ebpfcapture.Flow, ebpfcapture.SkippedCounts, error) {
+		return nil, ebpfcapture.SkippedCounts{}, fmt.Errorf("ebpf-capture: not supported on %s (Linux only)", runtime.GOOS)
 	}
 }

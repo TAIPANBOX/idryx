@@ -1154,7 +1154,7 @@ func writeRemediationArtifacts(dir string, recs []*remediation.Recommendation) e
 // error) sets this via init(), selected by GOOS at compile time -- so this
 // file needs no build tag of its own even though the real implementation is
 // Linux-only.
-var ebpfCaptureFunc func(ctx context.Context, duration time.Duration) ([]ebpfcapture.Flow, error)
+var ebpfCaptureFunc func(ctx context.Context, duration time.Duration) ([]ebpfcapture.Flow, ebpfcapture.SkippedCounts, error)
 
 // runEBPFCapture drives idryx's Linux-only eBPF network-behavior sensor
 // (internal/ebpfcapture): capture live outbound connections and write them
@@ -1184,7 +1184,7 @@ func runEBPFCapture(args []string) error {
 		fmt.Fprintln(os.Stderr, "idryx: capturing outbound connections via eBPF until interrupted (Ctrl+C)...")
 	}
 
-	flows, err := ebpfCaptureFunc(ctx, *duration)
+	flows, skipped, err := ebpfCaptureFunc(ctx, *duration)
 	if err != nil {
 		return err
 	}
@@ -1204,5 +1204,23 @@ func runEBPFCapture(args []string) error {
 		return fmt.Errorf("write egress log: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "idryx: captured %d flow(s)\n", len(flows))
+
+	// What the sensor did NOT report, said out loud. AGENTS.md invariant 4:
+	// idryx must say what it could not observe rather than present a partial
+	// graph as a complete one, and "captured 0 flow(s)" alone cannot
+	// distinguish a quiet host from a sensor watching the wrong thing.
+	//
+	// The two out-of-scope counters are informational; a full ring buffer is
+	// not, because it means connections this sensor wanted to record were lost,
+	// so it is worded as a warning and named last, where an operator reading a
+	// terminal stops.
+	if skipped.Any() {
+		fmt.Fprintf(os.Stderr, "idryx: not reported -- %d connect(s) over other address families (AF_UNIX, netlink, ...), %d unreadable sockaddr(s)\n",
+			skipped.OtherFamily, skipped.Unreadable)
+	}
+	if skipped.Lost() {
+		fmt.Fprintf(os.Stderr, "idryx: WARNING: %d connection(s) were dropped because the ring buffer was full; this capture is incomplete\n",
+			skipped.RingbufFull)
+	}
 	return nil
 }
