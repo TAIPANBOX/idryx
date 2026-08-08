@@ -2,6 +2,7 @@ package ebpfcapture
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,16 +23,26 @@ import (
 // as raw network-order bytes, family, one pad byte, 16 address bytes, comm
 // NUL-padded.
 func connEvent(pid uint32, port uint16, family uint8, addr []byte, comm string) []byte {
+	return connEventIn(0, pid, port, family, addr, comm)
+}
+
+// connEventIn is connEvent with an explicit cgroup id, in connect.c's layout:
+// cgroup_id first because it is the only 8-byte field, then pid, port as raw
+// network-order bytes, family, one pad byte, 16 address bytes, comm.
+func connEventIn(cgroup uint64, pid uint32, port uint16, family uint8, addr []byte, comm string) []byte {
 	b := make([]byte, connEventSize)
-	b[0] = byte(pid)
-	b[1] = byte(pid >> 8)
-	b[2] = byte(pid >> 16)
-	b[3] = byte(pid >> 24)
-	b[4] = byte(port >> 8) // network byte order: high byte first
-	b[5] = byte(port)
-	b[6] = family
-	copy(b[8:24], addr)
-	copy(b[24:40], comm)
+	for i := 0; i < 8; i++ {
+		b[i] = byte(cgroup >> (8 * i)) // native little-endian
+	}
+	b[8] = byte(pid)
+	b[9] = byte(pid >> 8)
+	b[10] = byte(pid >> 16)
+	b[11] = byte(pid >> 24)
+	b[12] = byte(port >> 8) // network byte order: high byte first
+	b[13] = byte(port)
+	b[14] = family
+	copy(b[16:32], addr)
+	copy(b[32:48], comm)
 	return b
 }
 
@@ -132,7 +143,7 @@ func TestDecodeConnEventRefusesAShortRecord(t *testing.T) {
 // connect.c. Nothing compiles the two together, so this pins the number the
 // decoder actually indexes with.
 func TestConnEventSizeMatchesTheOffsetsTheDecoderUses(t *testing.T) {
-	const fields = 4 + 2 + 1 + 1 + 16 + 16 // pid + dport + family + pad + daddr + comm
+	const fields = 8 + 4 + 2 + 1 + 1 + 16 + 16 // cgroup + pid + dport + family + pad + daddr + comm
 	if connEventSize != fields {
 		t.Errorf("connEventSize = %d, but the fields the decoder reads span %d bytes", connEventSize, fields)
 	}
@@ -210,7 +221,7 @@ func TestSkippedDistinguishesOutOfScopeTrafficFromLostEvidence(t *testing.T) {
 }
 
 func TestIdentityIsPrefixedSoTheDetectorCanRecognizeIt(t *testing.T) {
-	got := Identity("python3")
+	got := Identity("python3", 0)
 	if got != "proc:python3" {
 		t.Errorf("Identity(python3) = %q, want proc:python3", got)
 	}
@@ -223,7 +234,7 @@ func TestIdentityIsPrefixedSoTheDetectorCanRecognizeIt(t *testing.T) {
 func TestToEgressLogProducesTheShapeTheEgressConnectorParses(t *testing.T) {
 	at := time.Date(2026, 8, 8, 12, 30, 0, 0, time.UTC)
 	log := ToEgressLog([]Flow{
-		{Time: at, Identity: Identity("curl"), Destination: "api.openai.com:443", PID: 7},
+		{Time: at, Identity: Identity("curl", 0), Destination: "api.openai.com:443", PID: 7},
 	})
 
 	if len(log.Flows) != 1 {
@@ -264,4 +275,60 @@ func trimComm(b []byte) string {
 		}
 	}
 	return string(b)
+}
+
+// The cgroup id is what makes two containers running the same binary two
+// identities instead of one. comm alone collapsed them, and a process can
+// rewrite its own comm with prctl while it cannot touch its cgroup.
+func TestTheCgroupSeparatesTwoContainersRunningTheSameBinary(t *testing.T) {
+	one := Identity("python3", 8471)
+	two := Identity("python3", 9002)
+
+	if one == two {
+		t.Fatalf("two cgroups running python3 collapsed into one identity: %q", one)
+	}
+	if one != "proc:python3@cg8471" {
+		t.Errorf("identity = %q, want proc:python3@cg8471", one)
+	}
+	// The prefix unmanaged_egress selects on must survive the qualification,
+	// or the detector stops seeing these identities and says nothing about it.
+	for _, id := range []string{one, two} {
+		if !strings.HasPrefix(id, IdentityPrefix) {
+			t.Errorf("%q lost the %q prefix the detector selects on", id, IdentityPrefix)
+		}
+	}
+}
+
+// A kernel that gives no cgroup id must produce the identity this package
+// produced before cgroups existed here, not "proc:curl@cg0": zero means absent,
+// and an absent cgroup rendered as cgroup zero would group every unattributed
+// process on such a host into one identity.
+func TestAnAbsentCgroupLeavesTheIdentityUnqualified(t *testing.T) {
+	if got := Identity("curl", 0); got != "proc:curl" {
+		t.Errorf("identity = %q, want proc:curl", got)
+	}
+}
+
+func TestDecodeReadsTheCgroupFromItsOwnOffset(t *testing.T) {
+	raw := connEventIn(8471, 4242, 443, 4, []byte{93, 184, 216, 34}, "python3")
+
+	ev, ok := decodeConnEvent(raw)
+	if !ok {
+		t.Fatal("a well-formed record must decode")
+	}
+	if ev.cgroupID != 8471 {
+		t.Errorf("cgroupID = %d, want 8471", ev.cgroupID)
+	}
+	// Everything after it must still land: the cgroup id shifted every other
+	// field by eight bytes, and a decoder updated for one field and not the
+	// rest reads plausible rubbish rather than failing.
+	if ev.pid != 4242 || ev.dport != 443 || ev.family != 4 {
+		t.Errorf("fields after the cgroup shifted: pid=%d dport=%d family=%d", ev.pid, ev.dport, ev.family)
+	}
+	if got := ev.IP().String(); got != "93.184.216.34" {
+		t.Errorf("IP = %s, want 93.184.216.34", got)
+	}
+	if got := trimComm(ev.comm[:]); got != "python3" {
+		t.Errorf("comm = %q, want python3", got)
+	}
 }

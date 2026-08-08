@@ -16,26 +16,56 @@
 // platform-specific.
 package ebpfcapture
 
+import "strconv"
+
 // IdentityPrefix marks a graph identity ID as sourced from raw eBPF
 // capture: a process observed making a real network connection, with no
 // attribution to any governed agent or service identity. See Identity.
 const IdentityPrefix = "proc:"
 
 // Identity returns the graph identity ID a captured connection is recorded
-// under, from the connecting process's comm (its short name, e.g. "curl",
-// "python3", as bpf_get_current_comm reports it -- see connect.c).
+// under: the connecting process's comm (its short name, e.g. "curl",
+// "python3", as bpf_get_current_comm reports it -- see connect.c), qualified
+// by its cgroup when the kernel gave one.
 //
-// Every process sharing a comm is grouped into one identity. This is
-// deliberately coarse, not a bug to fix later without notice: eBPF alone
-// observes a raw connect() syscall, nothing more, so it cannot tell two
-// concurrent instances of the same binary apart, and it cannot resolve a
-// process to a specific agent:// identity the way a Passport or an
-// agent-event envelope can (the identity a *governed* connector would
-// report). A "proc:"-prefixed identity is idryx's honest way of saying
-// "real network activity was observed here, attributable only to a
-// process name" -- see the unmanaged_egress detector, which exists
-// specifically to surface that this is the only evidence idryx has for
-// these identities.
-func Identity(comm string) string {
-	return IdentityPrefix + comm
+//	Identity("curl", 0)      == "proc:curl"
+//	Identity("curl", 8471)   == "proc:curl@cg8471"
+//
+// **Why the cgroup is in the identity rather than beside it.** The egress wire
+// shape this feeds is exactly {time, identity, destination, bytes} (see
+// flow.go), and it is shared with a connector that parses logs idryx did not
+// produce. The identity string is the only field that can carry more without
+// changing a format somebody else writes.
+//
+// **Why the prefix does not change.** unmanaged_egress selects on "proc:" and
+// nothing else. A new prefix would make it stop seeing these identities, and
+// it would stop silently: no error, no finding, just a detector that reports
+// nothing for the exact case it exists for. A suffix is additive, so a
+// qualified identity is still matched by every selector that matched the
+// unqualified one.
+//
+// **What a cgroup id is and is not.** It is the cgroup's inode: kernel-assigned,
+// unique while that cgroup lives, and reused afterwards. Two processes in one
+// container share it, which is exactly the grouping wanted here. It is NOT a
+// container id, it does not survive a restart, and a process outside any
+// container carries the root cgroup's, shared with everything else on the host.
+// So it sharpens attribution without ever asserting identity: two connections
+// with the same suffix came from the same cgroup, and that is the whole claim.
+//
+// **What it fixes.** comm alone is a string the process chose, changeable with
+// prctl, and shared by every instance of a binary: fifty containers each
+// running python3 collapsed into one identity called "proc:python3", and an
+// evasive process could join or leave that group at will. The cgroup id cannot
+// be rewritten by the process it describes.
+//
+// Still absent, and named so nobody reads this as more than it is: resolving
+// either of these to a governed agent:// identity. Nothing in the stack records
+// that a process IS an agent, so this remains "real network activity was
+// observed here, attributable to a process name and a cgroup" -- which is what
+// unmanaged_egress exists to surface.
+func Identity(comm string, cgroupID uint64) string {
+	if cgroupID == 0 {
+		return IdentityPrefix + comm
+	}
+	return IdentityPrefix + comm + "@cg" + strconv.FormatUint(cgroupID, 10)
 }

@@ -18,6 +18,13 @@ type Flow struct {
 	Identity    string
 	Destination string
 	PID         uint32
+	// CgroupID is the kernel-assigned cgroup the connecting process was in,
+	// zero when the kernel did not provide one. It is already folded into
+	// Identity (see identity.go); it is kept separately here because a caller
+	// streaming flows live may want to group by it without parsing the
+	// identity string back apart, and because a string that has been parsed
+	// out of another string is the kind of thing that quietly stops matching.
+	CgroupID uint64
 }
 
 // EgressLog and EgressFlow are Flow's wire shape: exactly
