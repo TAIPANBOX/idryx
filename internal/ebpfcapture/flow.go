@@ -25,6 +25,17 @@ type Flow struct {
 	// identity string back apart, and because a string that has been parsed
 	// out of another string is the kind of thing that quietly stops matching.
 	CgroupID uint64
+	// Observed is what the sensor saw with its own eyes: always the
+	// `proc:<comm>[@cg<id>]` form, whatever Identity ended up being.
+	//
+	// The two differ exactly when the process named itself through
+	// AGENT_PASSPORT_ID (agent-passport SPEC 3.3) and Identity became the
+	// claimed agent:// URI. Keeping the observation is not redundancy: a claim
+	// is a statement by the subject, and the moment a consumer decides not to
+	// believe one, the only thing left is what was actually seen. Dropping it
+	// would mean a process could erase the sensor's own observation by writing
+	// a variable, which is a strange power to hand the thing being observed.
+	Observed string
 }
 
 // EgressLog and EgressFlow are Flow's wire shape: exactly
