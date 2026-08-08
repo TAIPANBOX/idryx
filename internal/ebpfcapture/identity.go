@@ -16,12 +16,35 @@
 // platform-specific.
 package ebpfcapture
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/TAIPANBOX/agent-stack-go/passport"
+)
 
 // IdentityPrefix marks a graph identity ID as sourced from raw eBPF
 // capture: a process observed making a real network connection, with no
 // attribution to any governed agent or service identity. See Identity.
 const IdentityPrefix = "proc:"
+
+// ClaimedPrefix marks a graph identity ID the connecting process named
+// ITSELF, by carrying an agent:// URI in AGENT_PASSPORT_ID (agent-passport
+// SPEC 3.3).
+//
+// The prefix exists because 3.3 requires it in substance: "a consumer MUST
+// record an identity learned this way as claimed", and "an observer that
+// reports it SHOULD make the distinction visible in what it reports". A bare
+// agent:// URI in the identity field would be indistinguishable from one a
+// Passport or an IAM connector established, and the difference is the whole
+// point: a process writes its own environment, so it can name another agent
+// or one that was never issued.
+//
+// So the two prefixes say different things and neither is stronger than it
+// sounds. `proc:` is "something ran here and I can only describe it".
+// `claimed:` is "something ran here and told me who it is". Only a governed
+// connector produces an identity with no prefix at all.
+const ClaimedPrefix = "claimed:"
 
 // Identity returns the graph identity ID a captured connection is recorded
 // under: the connecting process's comm (its short name, e.g. "curl",
@@ -68,4 +91,40 @@ func Identity(comm string, cgroupID uint64) string {
 		return IdentityPrefix + comm
 	}
 	return IdentityPrefix + comm + "@cg" + strconv.FormatUint(cgroupID, 10)
+}
+
+// ClaimedIdentity returns the graph identity ID for a process that named
+// itself through AGENT_PASSPORT_ID (agent-passport SPEC 3.3), or "" when the
+// claim is unusable and the caller should fall back to Identity.
+//
+//	ClaimedIdentity("agent://acme.example/support/bot")  == "claimed:agent://acme.example/support/bot"
+//	ClaimedIdentity("not-a-uri")                          == ""
+//	ClaimedIdentity("")                                   == ""
+//
+// Validation comes from agent-stack-go, never from a pattern written here.
+// AGENTS.md invariant 3 says the shared module is the only source of the wire
+// types, and an agent:// URI is one: a second regular expression in this
+// package would be the drift that invariant exists to prevent, and it would
+// drift in the direction of accepting more, because a local check is written
+// against the examples somebody had in front of them.
+//
+// An unusable claim is dropped rather than repaired, which SPEC 3.3 requires
+// in those words: "a value that does not parse MUST be treated as absent
+// rather than repaired or truncated". Repairing it would invent an identity,
+// and this is the one place in the sensor where inventing one is easy.
+func ClaimedIdentity(agentURI string) string {
+	if agentURI == "" {
+		return ""
+	}
+	if err := passport.ValidateAgentURI(agentURI); err != nil {
+		return ""
+	}
+	return ClaimedPrefix + agentURI
+}
+
+// IsClaimed reports whether a graph identity ID is one a process asserted
+// about itself. Consumers use it to keep a claimed identity out of any
+// control that requires an attested one, which SPEC 3.3 makes a MUST NOT.
+func IsClaimed(identityID string) bool {
+	return strings.HasPrefix(identityID, ClaimedPrefix)
 }

@@ -332,3 +332,70 @@ func TestDecodeReadsTheCgroupFromItsOwnOffset(t *testing.T) {
 		t.Errorf("comm = %q, want python3", got)
 	}
 }
+
+// SPEC 3.3: "a value that does not parse MUST be treated as absent rather than
+// repaired or truncated". Repairing is the tempting failure here, because the
+// sensor has a perfectly good identity to fall back on and inventing a better
+// looking one costs nothing at the keyboard.
+func TestAnUnusableClaimIsDroppedRatherThanRepaired(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"not-a-uri",
+		"http://acme.example/bot",
+		"agent://",
+		"AGENT://ACME.EXAMPLE/BOT", // uppercase: 3.1 says lowercase trust domain
+		"agent://acme.example",     // no path segment
+	} {
+		if got := ClaimedIdentity(bad); got != "" {
+			t.Errorf("ClaimedIdentity(%q) = %q, want \"\" so the caller falls back to what it observed", bad, got)
+		}
+	}
+}
+
+func TestAValidClaimIsMarkedAsClaimedRatherThanRecordedAsFact(t *testing.T) {
+	const uri = "agent://acme-bank.example/support/tier1-bot"
+	got := ClaimedIdentity(uri)
+
+	if got != "claimed:"+uri {
+		t.Fatalf("ClaimedIdentity = %q, want it prefixed", got)
+	}
+	// The prefix is what keeps a self-declared identity distinguishable from
+	// one a Passport or an IAM connector established. Without it, SPEC 3.3's
+	// "MUST record as claimed" has nowhere to live in this format.
+	if !IsClaimed(got) {
+		t.Error("IsClaimed says no about an identity this package just marked claimed")
+	}
+	if IsClaimed(Identity("python3", 8471)) {
+		t.Error("an observed identity must not read as claimed")
+	}
+	if IsClaimed(uri) {
+		t.Error("a bare agent:// URI must not read as claimed: that is what a governed connector produces")
+	}
+}
+
+// The match is on the whole variable name. A prefix or substring match would
+// let an unrelated variable name an agent, which is the same class of mistake
+// as repairing a malformed URI.
+func TestFindEnvMatchesTheWholeVariableName(t *testing.T) {
+	environ := []byte("PATH=/usr/bin\x00MY_AGENT_PASSPORT_ID=agent://evil.example/a\x00" +
+		"AGENT_PASSPORT_IDX=agent://evil.example/b\x00AGENT_PASSPORT_ID=agent://acme.example/bot\x00")
+
+	if got := findEnv(environ, envVar); got != "agent://acme.example/bot" {
+		t.Errorf("findEnv = %q, want the exact variable's value", got)
+	}
+	if got := findEnv([]byte("PATH=/usr/bin\x00"), envVar); got != "" {
+		t.Errorf("findEnv on an environment without it = %q, want empty", got)
+	}
+	if got := findEnv(nil, envVar); got != "" {
+		t.Errorf("findEnv(nil) = %q, want empty", got)
+	}
+}
+
+// An empty value is present-but-empty, which is not a claim. It must read the
+// same as absent rather than producing "claimed:".
+func TestAnEmptyClaimIsNotAClaim(t *testing.T) {
+	environ := []byte("AGENT_PASSPORT_ID=\x00PATH=/usr/bin\x00")
+	if got := ClaimedIdentity(findEnv(environ, envVar)); got != "" {
+		t.Errorf("an empty variable produced %q", got)
+	}
+}

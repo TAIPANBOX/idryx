@@ -138,12 +138,30 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 			continue // local chatter, not a model port
 		}
 		comm := strings.TrimRight(string(ev.comm[:]), "\x00")
+		// What the process says it is, if it says anything. agent-passport
+		// SPEC 3.3: read once, off a pid this sensor just observed connecting,
+		// never as a scan; every failure is "not declared".
+		//
+		// The read happens HERE, in the ring-buffer loop, and not later in a
+		// second pass over the collected flows, and that ordering is the whole
+		// of whether it works: /proc/<pid>/environ exists only while the
+		// process does. A pass afterwards would read the environment of
+		// whatever process had inherited that pid by then, which is worse than
+		// reading nothing, because it would be a plausible answer about the
+		// wrong subject.
+		identity := Identity(comm, ev.cgroupID)
+		claimed := ClaimedIdentity(claimedAgentURI(ev.pid))
+		if claimed != "" {
+			identity = claimed
+		}
+
 		f := Flow{
 			Time:        time.Now().UTC(),
-			Identity:    Identity(comm, ev.cgroupID),
+			Identity:    identity,
 			Destination: destination(ip, ev.dport, llmIPs),
 			PID:         ev.pid,
 			CgroupID:    ev.cgroupID,
+			Observed:    Identity(comm, ev.cgroupID),
 		}
 		flows = append(flows, f)
 		if opts.OnFlow != nil {
