@@ -16,6 +16,7 @@ go test ./...                     # all packages MUST be ok
 ./scripts/readme-numbers.sh       # every number the README states
 ./scripts/reproducible-build.sh   # the release asset names (invariant 6)
 ./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
+./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
 ```
 
@@ -220,6 +221,36 @@ an absent invariant.
    at that point a gate can assert radar's output is the shared envelope
    rather than a terminal table. Until then this paragraph is the whole of
    it, and it should be read as the weakest kind of rule)*
+
+8. **A diagram states no number about this repository that the repository does
+   not support.** The pictures are read by more people than the code is, they
+   are the first thing on the page, and until 2026-08-08 nothing had ever
+   looked at one. `docs/detectors.svg` said "17 deterministic detectors" from
+   10 July while the repository grew to 23, and `docs/architecture.svg` said 17
+   twice. It was found by somebody redrawing them for an unrelated reason.
+
+   The per-family breakdown is covered for a reason worth keeping: that same
+   picture carries "ITDR x4 . NHI x5 . agents/AI x7", which summed to 17 while
+   its own headline had just been corrected to 23. One image, two answers, and
+   a check on the headline alone goes green over it.
+
+   The PNG is covered for a different reason: the README embeds the PNG, not
+   the SVG, so an SVG corrected and never re-rendered leaves the picture a
+   reader sees exactly as wrong as before, with every other check passing.
+   *(gate: `scripts/diagrams-match-detectors.sh`, which reads the detector
+   names from their own `Name()` methods, the families from the README's table,
+   every count in `docs/*.svg`, and whether each PNG moved in the same commit
+   as its SVG. Verified by breaking it five ways, each of which fails it: a
+   stale headline, a stale breakdown with a correct headline, a diagram that
+   stops stating a count at all, a new detector with no README row, and an SVG
+   committed without its PNG.)*
+
+   **What it deliberately does not do**, so nobody mistakes it for more: it
+   never looks at a pixel. A PNG rendered from a stale SVG, at the wrong scale,
+   or half-written, passes it cleanly. And it does not read the card contents
+   (`excessive_agency . shadow_ai +5 more`), because "+5 more" is relative to
+   two names that are themselves a choice, and a script guessing at which
+   detector belongs on which card would cry wolf and get switched off.
 
 ## Decisions that have no gate yet
 
