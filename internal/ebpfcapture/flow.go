@@ -64,7 +64,18 @@ func ToEgressLog(flows []Flow) EgressLog {
 	out := EgressLog{Flows: make([]EgressFlow, 0, len(flows))}
 	for _, f := range flows {
 		out.Flows = append(out.Flows, EgressFlow{
-			Time:        f.Time.UTC().Format(time.RFC3339),
+			// RFC3339Nano, not RFC3339, and the difference is the whole point
+			// of taking the timestamp from the kernel at all: RFC3339 has no
+			// fractional part, so it rounds every flow to the second on the way
+			// out. Two connections 200ms apart become simultaneous, and a
+			// beacon's jitter becomes an artefact of this line rather than a
+			// property of the traffic.
+			//
+			// The reader is unaffected: internal/ingest/egress.go parses with
+			// time.Parse(time.RFC3339, ...), and Go accepts a fractional second
+			// against that layout whether or not the layout mentions one. An
+			// older log without the fraction still reads identically.
+			Time:        f.Time.UTC().Format(time.RFC3339Nano),
 			Identity:    f.Identity,
 			Destination: f.Destination,
 			Bytes:       0,
