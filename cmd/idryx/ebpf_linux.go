@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	ebpfCaptureFunc = func(ctx context.Context, duration time.Duration) ([]ebpfcapture.Flow, error) {
+	ebpfCaptureFunc = func(ctx context.Context, duration time.Duration) ([]ebpfcapture.Flow, ebpfcapture.SkippedCounts, error) {
 		return ebpfcapture.Run(ctx, ebpfcapture.Options{Duration: duration})
 	}
 }

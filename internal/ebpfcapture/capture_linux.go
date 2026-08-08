@@ -4,7 +4,6 @@ package ebpfcapture
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -24,7 +23,7 @@ import (
 // Without -g, bpf2go fails at generate time with "looking up type
 // conn_event: not found" -- the object still compiles, it just carries no
 // type information to reflect.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -cc clang bpf bpf/connect.c -- -g -O2 -I bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -type skipped_counts -cc clang bpf bpf/connect.c -- -g -O2 -I bpf
 //
 // AFTER REGENERATING, PUT THE `linux &&` BACK. bpf2go tags bpf_bpfel.go and
 // bpf_bpfeb.go by ARCHITECTURE only, with no OS constraint, and it has no flag
@@ -61,32 +60,41 @@ type Options struct {
 }
 
 // Run attaches to sys_enter_connect, captures until ctx is canceled or
-// Duration elapses (whichever first), and returns every captured flow.
+// Duration elapses (whichever first), and returns every captured flow together
+// with what it deliberately did not capture.
+//
+// The second return value is not diagnostics. AGENTS.md invariant 4 requires
+// idryx to say what it could not observe rather than present a partial graph as
+// a complete one, and an empty flow list has three meanings without it: nothing
+// connected, everything connected over a family this sensor ignores, or the
+// ring buffer filled and real evidence went on the floor.
+//
 // Requires root (or CAP_BPF+CAP_PERFMON); returns a clear error otherwise
 // rather than a confusing EPERM three calls deep into the kernel.
-func Run(ctx context.Context, opts Options) ([]Flow, error) {
+func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
+	var skipped SkippedCounts
 	if os.Geteuid() != 0 {
-		return nil, fmt.Errorf("ebpfcapture: requires root (or CAP_BPF+CAP_PERFMON); re-run with sudo")
+		return nil, skipped, fmt.Errorf("ebpfcapture: requires root (or CAP_BPF+CAP_PERFMON); re-run with sudo")
 	}
 	if err := rlimit.RemoveMemlock(); err != nil {
-		return nil, fmt.Errorf("ebpfcapture: remove memlock rlimit: %w", err)
+		return nil, skipped, fmt.Errorf("ebpfcapture: remove memlock rlimit: %w", err)
 	}
 
 	var objs bpfObjects
 	if err := loadBpfObjects(&objs, nil); err != nil {
-		return nil, fmt.Errorf("ebpfcapture: load eBPF objects (need root + a BTF-enabled kernel, see /sys/kernel/btf/vmlinux): %w", err)
+		return nil, skipped, fmt.Errorf("ebpfcapture: load eBPF objects (need root + a BTF-enabled kernel, see /sys/kernel/btf/vmlinux): %w", err)
 	}
 	defer objs.Close()
 
 	tp, err := link.Tracepoint("syscalls", "sys_enter_connect", objs.OnConnect, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ebpfcapture: attach sys_enter_connect: %w", err)
+		return nil, skipped, fmt.Errorf("ebpfcapture: attach sys_enter_connect: %w", err)
 	}
 	defer tp.Close()
 
 	reader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
-		return nil, fmt.Errorf("ebpfcapture: open ring buffer: %w", err)
+		return nil, skipped, fmt.Errorf("ebpfcapture: open ring buffer: %w", err)
 	}
 	defer reader.Close()
 
@@ -112,37 +120,65 @@ func Run(ctx context.Context, opts Options) ([]Flow, error) {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				break
 			}
-			return flows, fmt.Errorf("ebpfcapture: read ring buffer: %w", err)
+			return flows, readSkipped(&objs), fmt.Errorf("ebpfcapture: read ring buffer: %w", err)
 		}
 		ev, ok := decodeConnEvent(record.RawSample)
 		if !ok || ev.dport == 0 || ev.pid == selfPID {
 			continue
 		}
-		ip := net.IPv4(ev.daddr[0], ev.daddr[1], ev.daddr[2], ev.daddr[3])
-		if ip.IsLoopback() && ev.dport != 11434 && ev.dport != 8000 && ev.dport != 8001 {
-			continue // local chatter, not a model port -- skip, mirrors tokenfuse radar
+		ip := ev.IP()
+		if ip == nil {
+			// A family this decoder was not written against. connect.c only
+			// ever writes 4 or 6, so this is a connect.c/decode.go mismatch
+			// rather than traffic, and reporting an address from a layout we
+			// do not recognise would be worse than reporting nothing.
+			continue
+		}
+		if ip.IsLoopback() && !isLocalModelPort(ev.dport) {
+			continue // local chatter, not a model port
 		}
 		comm := strings.TrimRight(string(ev.comm[:]), "\x00")
-		dest := fmt.Sprintf("%s:%d", ip.String(), ev.dport)
-		if host, ok := llmIPs[ip.String()]; ok {
-			dest = fmt.Sprintf("%s:%d", host, ev.dport)
-		}
-		f := Flow{Time: time.Now().UTC(), Identity: Identity(comm), Destination: dest, PID: ev.pid}
+		f := Flow{Time: time.Now().UTC(), Identity: Identity(comm), Destination: destination(ip, ev.dport, llmIPs), PID: ev.pid}
 		flows = append(flows, f)
 		if opts.OnFlow != nil {
 			opts.OnFlow(f)
 		}
 	}
-	return flows, nil
+	return flows, readSkipped(&objs), nil
 }
 
-// resolveLLMHosts resolves each of hosts to its current A records, so a
+// readSkipped reads the per-reason counters connect.c maintained during the
+// capture. A failure here returns zeros rather than an error: the flows are
+// real either way, and losing the capture over an unreadable counter would
+// trade the thing this sensor exists for against the thing that describes it.
+// Zeros in that case are indistinguishable from a clean run, which is the one
+// dishonesty this function cannot avoid and is why it is named here.
+func readSkipped(objs *bpfObjects) SkippedCounts {
+	var raw bpfSkippedCounts
+	if err := objs.Skipped.Lookup(uint32(0), &raw); err != nil {
+		return SkippedCounts{}
+	}
+	return SkippedCounts{
+		OtherFamily: raw.OtherFamily,
+		Unreadable:  raw.Unreadable,
+		RingbufFull: raw.RingbufFull,
+	}
+}
+
+// resolveLLMHosts resolves each of hosts to its current addresses, so a
 // captured connection's raw destination IP can be matched back to the
 // hostname a higher-level connector (detectors.ShadowAI) already knows how
 // to reason about. Resolution failures are silently skipped: a captured
 // flow to that provider still gets reported, just under its raw IP instead
 // of a resolved hostname, which is strictly a display/matching
 // degradation, never a dropped flow.
+//
+// Both families, since the sensor observes both. It used to keep only the A
+// records (`ip.To4() != nil`), so a host reaching api.openai.com over IPv6 was
+// captured and then reported under a bare address that matched nothing: the
+// flow was there and the shadow_ai finding it should have produced was not.
+// The map is keyed on net.IP.String(), which is canonical for both families,
+// so no normalisation is needed on either side.
 func resolveLLMHosts(hosts []string) map[string]string {
 	out := make(map[string]string, len(hosts))
 	for _, h := range hosts {
@@ -151,7 +187,7 @@ func resolveLLMHosts(hosts []string) map[string]string {
 			continue
 		}
 		for _, a := range addrs {
-			if ip := net.ParseIP(a); ip != nil && ip.To4() != nil {
+			if ip := net.ParseIP(a); ip != nil {
 				out[ip.String()] = h
 			}
 		}
