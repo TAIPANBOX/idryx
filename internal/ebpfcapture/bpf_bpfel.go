@@ -16,6 +16,7 @@ import (
 type bpfConnEvent struct {
 	_        structs.HostLayout
 	CgroupId uint64
+	KtimeNs  uint64
 	Pid      uint32
 	Dport    [2]uint8
 	Family   uint8

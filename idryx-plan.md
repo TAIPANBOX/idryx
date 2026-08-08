@@ -226,7 +226,10 @@ and proof of the need for a cross-vendor correlation layer on top of them.
 
 ### Phase 4 — Behavioral network layer (#4) (1.5 months)
 - eBPF sensor (aya, Rust): flow, timing, TLS ClientHello.
-- Beaconing detection (periodogram/autocorrelation), JA3/JA4, DNS tunneling.
+- Beaconing detection (periodogram/autocorrelation), DNS tunneling.
+- ~~JA3/JA4~~ decided against 2026-08-09: it requires reading the ClientHello, and
+  SECURITY.md promises the sensor never reads payloads or inspects TLS. The
+  promise is worth more than the fingerprint. See SECURITY.md for the full reason.
 - Correlating the network signal with the identity in the graph.
 
 ### Phase 5 — Agent enforcement / MCP authz (when standards mature)

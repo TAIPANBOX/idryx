@@ -1,12 +1,16 @@
 // Package ebpfcapture is idryx's eBPF network-behavior sensor: a Go-native
 // (cilium/ebpf) port of tokenfuse's own eBPF sensor
-// (tokenfuse/crates/radar), scoped to what that sensor actually ships
-// today, not idryx-plan.md's original, larger Phase 4 spec. Beaconing/
-// periodogram detection, JA3/JA4 TLS fingerprinting, DNS-tunnel detection,
-// and full identity correlation (resolving a captured process to a real
-// governed agent/service identity, not just its process name) are all
-// explicitly deferred -- see SECURITY.md's "eBPF network sensor" section
-// and idryx-plan.md's own Phase 4 note.
+// (tokenfuse/crates/radar), and since grown past it: the sensor observes both
+// address families, counts what it did not report, carries the cgroup and the
+// kernel's own timestamp, and reads a process's self-declared agent identity
+// (agent-passport SPEC 3.3).
+//
+// Of idryx-plan.md's original Phase 4 spec, JA3/JA4 TLS fingerprinting is
+// **decided against** rather than deferred: it needs the ClientHello, and
+// SECURITY.md promises this sensor never reads payloads or inspects TLS.
+// Beaconing and DNS-tunnel detection are still deferred, and neither needs a
+// payload; beaconing works from the connection timing this sensor now takes
+// from the kernel clock. See SECURITY.md's "eBPF network sensor" section.
 //
 // This file has no build tag: it defines the identity-naming convention
 // capture_linux.go's Linux-only capture loop uses to label a flow, kept

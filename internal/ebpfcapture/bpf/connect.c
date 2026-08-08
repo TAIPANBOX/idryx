@@ -43,12 +43,21 @@ char LICENSE[] SEC("license") = "GPL";
 // a short IPv4 write would otherwise be indistinguishable. _pad0 keeps the
 // 16-byte address 4-aligned and the total unambiguously 40 rather than left to
 // the compiler's own rounding.
-// cgroup_id is first because it is the only 8-byte field: putting it anywhere
-// else would make the compiler insert padding the two sides then have to agree
-// about implicitly. With it leading, every offset below is its own size's
-// multiple and the total is 48 with nothing left to interpretation.
+// The two 8-byte fields lead, for alignment: anywhere else they make the
+// compiler insert padding the two sides then have to agree about implicitly.
+// With them first, every offset below is its own size's multiple and the total
+// is 56 with nothing left to interpretation.
+//
+// ktime_ns is the kernel's own monotonic clock at the moment of the syscall,
+// and it is here because the userspace timestamp is not the same measurement.
+// A Go reader stamps a flow when it drains the ring buffer, which is after
+// buffering, after scheduling, and after whatever else that process was doing.
+// For a report that is close enough; for measuring the INTERVAL between one
+// agent's connections, which is what beaconing detection is, the difference
+// between those two clocks is exactly the signal being looked for.
 struct conn_event {
 	__u64 cgroup_id;   // bpf_get_current_cgroup_id(), 0 when unavailable
+	__u64 ktime_ns;    // bpf_ktime_get_ns(): when the KERNEL saw this connect()
 	__u32 pid;        // native (host) byte order -- never crosses a network boundary
 	__u8 dport[2];     // raw sockaddr sin_port/sin6_port bytes, network byte order
 	__u8 family;       // 4 for AF_INET, 6 for AF_INET6; never anything else
@@ -199,6 +208,10 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 		__builtin_memcpy(ev->dport, sa6.sin6_port, sizeof(ev->dport));
 		__builtin_memcpy(ev->daddr, sa6.sin6_addr, sizeof(sa6.sin6_addr));
 	}
+
+	// Taken as late as possible but still in the syscall's own context, so it
+	// times the connect() rather than this program's bookkeeping.
+	ev->ktime_ns = bpf_ktime_get_ns();
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	ev->pid = pid_tgid >> 32;
