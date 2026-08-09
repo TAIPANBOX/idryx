@@ -3,7 +3,15 @@
 # catch, still PASS on what they must not catch, and REFUSE to report success
 # when they measured nothing at all.
 #
-# WHY THE THIRD ONE IS HERE AND IS NOT IN THE SIBLING VERSION OF THIS SCRIPT
+# WHY THE THIRD ONE IS HERE
+#
+# A correction first, because this header was wrong about its sibling. It said
+# tokenfuse's version of this script does not assert the third property. It
+# does, on four cases, and had before this one was written. What was true is
+# that tokenfuse's HEADER documents only two, which is how the claim survived a
+# reading: the prose there agreed with me and the code did not. Checked on
+# 2026-08-09 by reading that file rather than remembering it, and now covered
+# there on seven cases across all eight of its gates.
 #
 # Over 8-9 August 2026 one mistake was made nine times in this repository's
 # tooling, and never once in the product code: a check that cannot tell "did not
