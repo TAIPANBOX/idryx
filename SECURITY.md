@@ -102,20 +102,46 @@ rather than folding into the table above:
   it.
   This version mirrors what TokenFuse's own `crates/radar` sensor ships
   today, not the originally-specced full scope.
-- **CI builds it, never loads it.** The `ebpf (build)` CI job regenerates
-  `vmlinux.h` from the runner's own BTF and rebuilds the sensor on every
-  push, so `connect.c` drifting out of sync with the committed generated
-  bindings (`internal/ebpfcapture/bpf_bpfel.go`/`bpf_bpfeb.go`) fails CI. It
-  never attaches the program or reads real traffic -- that needs a
-  BTF-enabled kernel and root, which a hosted CI runner may not reliably
-  provide, and isn't this job's purpose. This sensor's real, live capture was
-  validated by hand against a disposable Linux VM instead (kernel 7.0,
-  Ubuntu 26.04, BTF present): a live 12-second capture during real outbound
-  connections to `api.openai.com`, `api.anthropic.com`, and a non-LLM host
-  correctly attributed each to a `proc:curl` identity, correctly resolved the
-  two LLM destinations to their hostnames, and fed through `idryx detect`
-  correctly triggered both `unmanaged_egress` (high, for the LLM-reaching
-  identity) and the existing `shadow_ai` detector for free.
+- **CI builds it, never loads it, and that gap is closed by hand.** The
+  `ebpf (build)` job regenerates `vmlinux.h` from the runner's own BTF and
+  rebuilds the sensor on every push, so `connect.c` drifting out of sync with
+  the committed bindings (`internal/ebpfcapture/bpf_bpfel.go`/`bpf_bpfeb.go`)
+  fails CI. It never attaches the program or reads a packet: that needs a
+  BTF-enabled kernel and root, which a hosted runner may not reliably provide.
+
+  So a green CI says the sensor COMPILES against a kernel's types. It says
+  nothing about whether the kernel accepts the program or whether the program
+  observes anything, and those are the claims this sensor is bought for.
+
+  **Live capture, 2026-08-09**, on a disposable AWS instance (Linux
+  6.17.0-1019-aws, BTF present, 7,005,299 bytes), 45 seconds, root:
+
+  | property | result |
+  |---|---|
+  | program loaded and observed | 28 flows captured |
+  | IPv6 | `[2606:4700:4700::1111]:443`, bracketed |
+  | cgroup | 25 of 28 flows carried `@cg`; a process started under `systemd-run --scope` landed in its own cgroup, distinct from its parent shell's |
+  | self-declared identity | `claimed:agent://acme.example/support/live-bot`, 3 flows, from `AGENT_PASSPORT_ID` on a live process |
+  | provider resolution | `api.openai.com:443` rather than a bare address |
+  | sub-second precision | all 28 timestamps carried a fraction |
+  | out-of-scope traffic | *"not reported -- 29 connect(s) over other address families (AF_UNIX, netlink, ...), 0 unreadable sockaddr(s)"* |
+
+  That last row is the one nothing but a live kernel can establish: 29 AF_UNIX
+  connections were counted and deliberately not reported, which is invariant 4
+  doing its job on real traffic rather than in a fixture.
+
+  Feeding the capture through `idryx detect` produced 7 alerts, including
+  `claimed_agent_unknown` (critical: a process declared an identity no Passport
+  in the graph names, and reached a model API), `shadow_ai`, four
+  `unmanaged_egress`, and `beaconing`:
+
+  > *5 connections to 93.184.216.34:80 on a regular cadence: every 5s, varying
+  > by 0%. A heartbeat, not work; identify what schedules it.*
+
+  Worth recording precisely because it disagreed with the operator: the beacon
+  was generated with `sleep 3`, and the detector measured 5s. Both are right.
+  `sleep 3` plus the connection itself is a five-second period, and the
+  detector reported the traffic rather than the intention behind it.
 
 ### What idryx deliberately does NOT defend against
 
