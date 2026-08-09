@@ -538,6 +538,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewUnmanagedEgress(),
 		detectors.NewBeaconing(),
 		detectors.NewClaimedAgentUnknown(),
+		detectors.NewClaimedAgentDrift(),
 		detectors.NewUndeclaredLLM(),
 	}
 	var alerts []model.Alert
