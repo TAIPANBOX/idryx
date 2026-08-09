@@ -18,6 +18,8 @@ go test ./...                     # all packages MUST be ok
 ./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
 ./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
+./scripts/gates-have-teeth.sh     # invariant 9, the five above can still fail
+                                  # (mutates tracked files; needs a clean tree)
 
 # CI runs these in a separate job called `security`, which is exactly why they
 # get forgotten: the list above matched the `build` job and stopped there, and
@@ -273,6 +275,43 @@ an absent invariant.
    (`excessive_agency . shadow_ai +5 more`), because "+5 more" is relative to
    two names that are themselves a choice, and a script guessing at which
    detector belongs on which card would cry wolf and get switched off.
+
+9. **A check must be able to tell "did not fail" from "did not run", and every
+   gate here has been made to fail on purpose to prove it can.** Over 8 and 9
+   August 2026 one mistake was made nine times in this repository's tooling and
+   never once in its product code. A mutation removed a branch, left an import
+   unused, the package stopped compiling, the test never ran, and a grep for
+   FAIL read that silence as a pass: three times. A mutation searched for text
+   the code did not contain, changed nothing, the tests passed against correct
+   code, and the harness announced the test proved nothing, accusing a test that
+   worked. A live run printed two "must be 0" lines that were empty rather than
+   zero, because they read a field name that does not exist, and empty and zero
+   look identical. And in the script written to fix exactly that, twenty lines
+   below the fix, two sections printed nothing because a helper taking one
+   argument was called with a flag.
+
+   The lesson is not to be careful. Being careful is what failed nine times.
+   What survived every one of those oversights was a step carrying an explicit
+   comparison and a non-zero exit; what broke every time was a line that only
+   printed. So the property is structural: a gate is not finished when it
+   passes on correct code, it is finished when somebody has watched it fail on
+   the fault it exists for.
+
+   This also puts a check under a claim invariant 6 has made since it was
+   written, that `reproducible-build.sh` refuses just as loudly when it finds
+   no asset name at all. That was true, and nothing had ever confirmed it.
+   *(gate: `scripts/gates-have-teeth.sh`, 13 cases over all five gates: six
+   real faults each must catch, two non-faults they must not, and five subjects
+   taken away entirely, where the gate must say it measured nothing instead of
+   reporting OK. Every mutation asserts it applied, because a mutation that
+   changed no file is the second failure above, and this harness must not
+   commit the error it exists to catch.)*
+
+   **What it does not cover.** It cannot test itself; nothing watches this one
+   fail. It proves each gate catches the faults named in it, not every fault of
+   that kind. And writing it found no hole in any of the five, which is the
+   result to expect from a ratchet: it is here so the next change to a gate
+   cannot quietly remove its teeth, not because they were missing.
 
 ## Decisions that have no gate yet
 
