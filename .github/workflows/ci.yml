@@ -61,6 +61,14 @@ jobs:
       - name: the diagrams count what exists
         run: ./scripts/diagrams-match-detectors.sh
 
+      # Last, because it mutates tracked files and restores them: anything
+      # after it would run against a tree it had just rewritten and put back.
+      #
+      # It needs a clean tree and says so plainly, so if a step above ever
+      # starts writing into the checkout, this is the step that reports it.
+      - name: the gates above can still fail
+        run: ./scripts/gates-have-teeth.sh
+
   security:
     runs-on: ubuntu-latest
     steps:
