@@ -93,13 +93,32 @@ rather than folding into the table above:
   the promise is not about encryption; it is about this sensor not looking
   inside data at all. Decided 2026-08-09: the promise stands and the
   fingerprint does not happen.
-- **Still deferred, and these are deferrals rather than decisions.**
-  Beaconing/periodogram detection and DNS-tunnel detection, neither of which
-  needs to read a payload: beaconing works from connection timing, which the
-  sensor now records from the kernel's own clock. Resolving a process to a
-  governed identity is partly built (agent-passport SPEC 3.3, read as a
-  *claim*), and what remains is corroborating a claim rather than believing
-  it.
+- **DNS-tunnel detection is also out of scope permanently**, decided
+  2026-08-09, and the reasoning corrects something this file said until that
+  day. It was listed as deferred "which does not need to read a payload", and
+  that was wrong. A DNS tunnel encodes its data in the QUERY NAME
+  (`k7fq2b3x.dGVzdA.tunnel.example.com`), which lives in the body of the DNS
+  request. This sensor sees that a process connected to a resolver and nothing
+  else: measured on the live capture above, every DNS flow rendered as
+  `172.31.0.2:53`. Distinguishing a tunnel from ordinary browsing needs the
+  name, the name is a payload, and that is the same wall JA3/JA4 met.
+
+  A second limit would remain even if the first were solved, and it is worth
+  recording because it is not obvious: most DNS goes over UDP with no
+  `connect()` at all. The live capture saw `systemd-resolve` only because
+  systemd connects its socket. A process resolving names any other way is
+  invisible to this sensor entirely, so a volume-based approximation would be
+  silent on an unknown share of real traffic while looking like coverage.
+
+- **Still deferred, and this one is a deferral rather than a decision.**
+  Corroborating a claimed identity: resolving a process to a governed identity
+  is partly built (agent-passport SPEC 3.3, read as a *claim*), and what
+  remains is checking a claim against the graph rather than believing it. That
+  needs no payload and no new hook.
+
+  Beaconing shipped on 2026-08-09 and is no longer on this list. It works from
+  connection timing alone, taken from the kernel's own clock, which is what
+  made it possible inside the promise above.
   This version mirrors what TokenFuse's own `crates/radar` sensor ships
   today, not the originally-specced full scope.
 - **CI builds it, never loads it, and that gap is closed by hand.** The
