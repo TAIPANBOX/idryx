@@ -133,10 +133,12 @@ idryx is a complete MVP for detection and remediation and has passed a security
 self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
 layer has shipped since (the `sys_enter_connect` sensor and its
 `unmanaged_egress` detector); what is still ahead in
-[`idryx-plan.md`](idryx-plan.md)'s Phase 4 is the rest of that layer, beaconing,
-DNS-tunnel detection and corroborating a claimed identity. JA3/JA4 is decided
-against rather than pending: it needs the ClientHello, and this sensor promises
-never to read a payload. Blocking,
+[`idryx-plan.md`](idryx-plan.md)'s Phase 4 is one thing: corroborating a
+claimed identity against the graph. Beaconing shipped. JA3/JA4 and DNS-tunnel
+detection are decided against rather than pending, for the same reason: each
+needs to read what the application wrote into its socket, the ClientHello in
+one case and the DNS query name in the other, and this sensor promises never
+to read a payload. Blocking,
 `apply`-style enforcement is intentionally out of scope: idryx proposes, it
 never mutates.
 
@@ -639,9 +641,9 @@ does and deliberately does not do.
 
 ## Status
 
-**Phases 0-3 plus a first eBPF network-behavior layer shipped** (beaconing,
-DNS-tunnel detection and corroborating a claimed identity remain; JA3/JA4 is
-decided against, see
+**Phases 0-3 plus the eBPF network-behavior layer shipped** (corroborating a
+claimed identity is what remains; JA3/JA4 and DNS-tunnel detection are decided
+against, both because they would need to read a payload, see
 [`idryx-plan.md`](idryx-plan.md)'s Phase 4):
 
 - [x] Phase 0 - ITDR core, in-memory graph, CLI, CI
@@ -655,8 +657,9 @@ decided against, see
       `sys_enter_connect` (`idryx ebpf-capture`), its `unmanaged_egress`
       detector, live-validated against real traffic on a disposable VM (see
       [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
-      original larger spec's beaconing/JA3-JA4/DNS-tunneling/identity
-      correlation stays Phase 4
+      original larger spec's beaconing shipped 2026-08-09; JA3/JA4 and
+      DNS-tunneling are decided against, and identity correlation is partly
+      built (a claim is read and marked as one)
 - [x] Post-campaign hardening from live infrastructure (2026-07-21): `idryx serve`
       keeps the served graph live against a growing source instead of freezing it
       at boot, and the generic webhook sink can carry credentials

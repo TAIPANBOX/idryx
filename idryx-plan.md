@@ -225,8 +225,18 @@ and proof of the need for a cross-vendor correlation layer on top of them.
   `agent↔MCP-tool/scope` relationship; trimming excessive agency (OWASP LLM06).
 
 ### Phase 4 — Behavioral network layer (#4) (1.5 months)
-- eBPF sensor (aya, Rust): flow, timing, TLS ClientHello.
-- Beaconing detection (periodogram/autocorrelation), DNS tunneling.
+- ~~eBPF sensor (aya, Rust): flow, timing, TLS ClientHello.~~ Built in Go
+  (cilium/ebpf, `internal/ebpfcapture`) rather than aya/Rust, per AGENTS.md
+  invariant 7; flow and timing shipped, TLS ClientHello decided against with
+  JA3/JA4 below.
+- ~~Beaconing detection~~ shipped 2026-08-09 (`beaconing`), from connection timing;
+  the coefficient of variation of the intervals rather than a periodogram, argued
+  in the detector's own doc comment.
+- ~~DNS tunneling~~ decided against 2026-08-09: a tunnel encodes its data in the
+  query NAME, which is a payload, and this sensor sees only that something
+  connected to a resolver. Same wall as JA3/JA4. Separately, most DNS uses UDP
+  with no connect() at all, so even a volume-based approximation would be blind
+  to an unknown share of it. See SECURITY.md.
 - ~~JA3/JA4~~ decided against 2026-08-09: it requires reading the ClientHello, and
   SECURITY.md promises the sensor never reads payloads or inspects TLS. The
   promise is worth more than the fingerprint. See SECURITY.md for the full reason.

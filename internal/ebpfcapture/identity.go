@@ -5,12 +5,13 @@
 // kernel's own timestamp, and reads a process's self-declared agent identity
 // (agent-passport SPEC 3.3).
 //
-// Of idryx-plan.md's original Phase 4 spec, JA3/JA4 TLS fingerprinting is
-// **decided against** rather than deferred: it needs the ClientHello, and
-// SECURITY.md promises this sensor never reads payloads or inspects TLS.
-// Beaconing and DNS-tunnel detection are still deferred, and neither needs a
-// payload; beaconing works from the connection timing this sensor now takes
-// from the kernel clock. See SECURITY.md's "eBPF network sensor" section.
+// idryx-plan.md's original Phase 4 spec is now closed rather than outstanding.
+// Beaconing shipped, from the connection timing this sensor takes off the
+// kernel clock. JA3/JA4 and DNS-tunnel detection are both **decided against**
+// rather than deferred, for one reason: each needs to read what the
+// application wrote into its socket, the ClientHello in one case and the DNS
+// query name in the other, and SECURITY.md promises this sensor never reads a
+// payload. See SECURITY.md's "eBPF network sensor" section for both.
 //
 // This file has no build tag: it defines the identity-naming convention
 // capture_linux.go's Linux-only capture loop uses to label a flow, kept

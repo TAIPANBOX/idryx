@@ -206,8 +206,10 @@ an absent invariant.
    cilium/ebpf) and tokenfuse's `crates/radar` (Rust, aya), which this one was
    ported from. Every capability the sensor gains from now on is built in idryx:
    IPv6, the skipped counters, the cgroup, the kernel timestamp and the
-   self-declared identity already are, and beaconing, DNS tunnelling and
-   corroborating a claim are what remain. Radar's role narrows to emitting what
+   self-declared identity already are, beaconing shipped on 2026-08-09, and
+   corroborating a claim is what remains. DNS tunnelling joined JA3/JA4 as
+   decided against the same day: both need to read what the application wrote
+   into its socket. Radar's role narrows to emitting what
    it observes into the shared agent-event stream; it does not grow new
    observation of its own.
    *(@yurii 2026-08-08, "Idryx основний, radar зводимо до відправника подій")*
