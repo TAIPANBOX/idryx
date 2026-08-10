@@ -92,7 +92,7 @@ func TestAFindingAboutANonAgentIsSkippedAndCountedNeverInvented(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	skipped, failed := s.Counts()
+	skipped, _, failed := s.Counts()
 	if skipped != len(notAgents) {
 		t.Errorf("skipped = %d, want %d: a skip nobody counts is a skip nobody knows about",
 			skipped, len(notAgents))
@@ -163,8 +163,8 @@ func TestAnUnconfiguredSinkIsNilAndSafeToUse(t *testing.T) {
 	if err := s.Send([]model.Alert{alert("shadow_ai", "agent:a", model.SeverityHigh)}); err != nil {
 		t.Errorf("a nil sink must accept a send: %v", err)
 	}
-	if skipped, failed := s.Counts(); skipped != 0 || failed != 0 {
-		t.Errorf("a nil sink counts nothing, got %d/%d", skipped, failed)
+	if skipped, claimed, failed := s.Counts(); skipped != 0 || claimed != 0 || failed != 0 {
+		t.Errorf("a nil sink counts nothing, got %d/%d/%d", skipped, claimed, failed)
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("a nil sink must close: %v", err)
@@ -209,11 +209,117 @@ func TestWithNoTrustDomainNothingIsWrittenAndTheCountSaysSo(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if skipped, _ := s.Counts(); skipped != 1 {
+	if skipped, _, _ := s.Counts(); skipped != 1 {
 		t.Errorf("skipped = %d, want 1", skipped)
 	}
 	if raw, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(raw)) != "" {
 		t.Errorf("nothing may be written without a configured domain, got:\n%s", raw)
+	}
+}
+
+// An identity that ALREADY is a canonical agent URI must travel as itself.
+//
+// This is the namespace the bus connector produces: every event idryx ingests
+// from tokenfuse, wardryx, mockryx, verdryx or scopyx creates an identity whose
+// id is the envelope's own `agent_id`, i.e. `agent://<domain>/<name>`. Those
+// ids also begin with "agent:", so cutting that prefix and prepending the
+// operator's domain builds a second scheme onto a string that already had one.
+//
+// Measured before this test existed, on a real run against
+// testdata/tokenfuse.ndjson with IDRYX_TRUST_DOMAIN=acme.example: the journal
+// received `agent://acme.example///acme-bank.example/support/tier1-bot`, and
+// passport.ValidateAgentURI accepts that shape, so it was written rather than
+// refused. The finding was not lost; it was published about an agent that does
+// not exist.
+func TestAnIdentityThatIsAlreadyACanonicalURITravelsAsItself(t *testing.T) {
+	s, path := open(t)
+	if err := s.Send([]model.Alert{
+		alert("bom_incomplete", "agent://acme.example/planner", model.SeverityMedium),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want one event, got %d", len(evs))
+	}
+	if evs[0].AgentID != "agent://acme.example/planner" {
+		t.Errorf("agent_id = %q, want the identity unchanged: it was already canonical", evs[0].AgentID)
+	}
+}
+
+// The operator's own trust domain is never stamped onto an identity that
+// carried a different one.
+//
+// Deliberately weaker than naming one expected string, because it holds under
+// both answers to "what should a foreign domain do": pass the true subject
+// through, or skip and count it. What it refuses is the third answer, the one
+// that shipped: re-stamping another organisation's agent as ours. trustedID's
+// own comment cites trailryx invariant 35 for why, and the run that produced
+// `agent://acme.example///acme-bank.example/support/tier1-bot` was doing
+// exactly what that comment says must never happen.
+func TestAForeignTrustDomainIsNeverRestampedAsTheOperatorsOwn(t *testing.T) {
+	s, path := open(t) // the operator's domain is acme.example
+	if err := s.Send([]model.Alert{
+		alert("orphaned_nhi", "agent://acme-bank.example/support/tier1-bot", model.SeverityLow),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		if strings.HasPrefix(e.AgentID, "agent://acme.example/") {
+			t.Errorf("agent_id = %q: an agent of acme-bank.example was published under the operator's own domain", e.AgentID)
+		}
+	}
+}
+
+// A self-declared subject is held back, and counted apart from the identities
+// that are simply not agents.
+//
+// Both halves matter and they fail differently. Writing it would deliver a
+// claim as a fact to every conforming consumer, which SPEC 3.3 forbids and no
+// `data` key can undo, since 6.1 obliges a consumer to ignore keys it does not
+// know. Counting it as "no agent subject" would file a gap under a property:
+// a person will never have a subject and this agent might, once the envelope
+// can say a subject was asserted rather than established.
+func TestAClaimedSubjectIsHeldBackAndCountedApartFromANonAgent(t *testing.T) {
+	s, path := open(t)
+	if err := s.Send([]model.Alert{
+		alert("claimed_agent_drift", "claimed:agent://acme.example/planner", model.SeverityHigh),
+		alert("unmanaged_egress", "proc:python3@cg8471", model.SeverityMedium),
+		alert("bom_incomplete", "agent:ops-helper", model.SeverityMedium),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, claimed, failed := s.Counts()
+	if claimed != 1 {
+		t.Errorf("claimed = %d, want 1: a self-declared subject is its own story, not a missing one", claimed)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1 (the proc: identity, which is not an agent under any envelope)", skipped)
+	}
+	if failed != 0 {
+		t.Errorf("failed = %d, want 0", failed)
+	}
+
+	evs, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want exactly the one established subject on the bus, got %d", len(evs))
+	}
+	if evs[0].AgentID != "agent://acme.example/ops-helper" {
+		t.Errorf("agent_id = %q, want the established identity", evs[0].AgentID)
+	}
+	if strings.Contains(evs[0].AgentID, "planner") {
+		t.Error("a claim a process made about itself reached the bus as an established subject")
 	}
 }
 
