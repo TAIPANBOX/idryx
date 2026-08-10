@@ -278,6 +278,87 @@ func TestAForeignTrustDomainIsNeverRestampedAsTheOperatorsOwn(t *testing.T) {
 	}
 }
 
+// A canonical subject from another trust domain is WRITTEN, unchanged.
+//
+// The sibling test above forbids the one answer that is always wrong. This one
+// pins the answer that was chosen, because it is the headline decision of this
+// change and nothing else asserts it: tenancy is the receiver's rule, so idryx
+// relays the true subject and trailryx's invariant 35 decides at the boundary
+// that owns the policy. Without this test, somebody later "fixing" foreign
+// domains to skip-and-count reverts that decision with every test still green.
+func TestAForeignTrustDomainIsRelayedRatherThanSuppressed(t *testing.T) {
+	s, path := open(t) // the operator's domain is acme.example
+	if err := s.Send([]model.Alert{
+		alert("orphaned_nhi", "agent://acme-bank.example/support/tier1-bot", model.SeverityLow),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want the finding relayed, got %d event(s): suppressing it hides the mismatch from the boundary that owns the tenant rule", len(evs))
+	}
+	if evs[0].AgentID != "agent://acme-bank.example/support/tier1-bot" {
+		t.Errorf("agent_id = %q, want the true subject, unchanged", evs[0].AgentID)
+	}
+}
+
+// A trust domain that cannot form a valid subject is refused at startup, not
+// half-applied at write time.
+//
+// One capital letter is enough: `Acme.Example` builds
+// `agent://Acme.Example/ops-helper`, which the envelope's grammar rejects, so
+// every INVENTORY finding is silently skipped while every already-canonical one
+// is still written. That is the partial journal this package refuses to
+// produce, and it reads as a whole one. The empty-domain gate never covered it,
+// because the domain is not empty.
+func TestATrustDomainThatCannotFormASubjectIsRefusedAtStartup(t *testing.T) {
+	for _, domain := range []string{"Acme.Example", "acme example", "acme_example", "/"} {
+		path := filepath.Join(t.TempDir(), "idryx.ndjson")
+		s, err := New(path, "run-1", domain)
+		if err == nil {
+			if s != nil {
+				_ = s.Close()
+			}
+			t.Errorf("New accepted trust domain %q, which cannot form a valid subject: "+
+				"the inventory's own findings would be dropped while canonical ones were written", domain)
+		}
+	}
+}
+
+// The husk of a broken URI is not an inventory name, and a subject is never
+// built from one.
+//
+// `agent://` and `agent:///bot` both fail the canonical test and then fall into
+// the build branch, where cutting `agent:` leaves `//` and `///bot`. Prepending
+// the operator's domain produced `agent://acme.example///`, which the shared
+// validator accepts because its path class allows empty segments. That is the
+// same fabrication this change exists to end, one namespace narrower, and it is
+// reachable: agents.json is taken verbatim and the envelope only checks that
+// `agent_id` is non-empty.
+func TestAMalformedAgentIdIsSkippedRatherThanBuiltIntoASubject(t *testing.T) {
+	s, path := open(t)
+	if err := s.Send([]model.Alert{
+		alert("bom_incomplete", "agent://", model.SeverityMedium),
+		alert("bom_incomplete", "agent:///bot", model.SeverityMedium),
+		alert("bom_incomplete", "agent://///", model.SeverityMedium),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		t.Errorf("a malformed id produced the subject %q; nothing may be built from the husk of a broken URI", e.AgentID)
+	}
+	if skipped, _, _ := s.Counts(); skipped != 3 {
+		t.Errorf("skipped = %d, want 3: each malformed id is counted, never invented", skipped)
+	}
+}
+
 // A self-declared subject is held back, and counted apart from the identities
 // that are simply not agents.
 //

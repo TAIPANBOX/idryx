@@ -138,15 +138,35 @@ type Sink struct {
 //
 // `trustDomain` is the operator's own, and it is REQUIRED for anything to be
 // written. See trustedID.
+//
+// It is also checked HERE rather than at write time, and the reason is the
+// failure that check exists to prevent. One capital letter is enough:
+// `Acme.Example` builds `agent://Acme.Example/ops-helper`, which the envelope's
+// grammar rejects, so every finding about the operator's own inventory would be
+// silently skipped while every already-canonical subject was still written.
+// That is a journal that reads as whole while missing half the estate, and the
+// empty-domain gate below never covered it, because the domain is not empty.
+//
+// The check is a probe against the shared validator rather than a pattern
+// written here: a second grammar in this repository is the drift AGENTS.md
+// invariant 3 exists to prevent, and it would drift toward accepting more.
 func New(path, runID, trustDomain string) (*Sink, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
+	}
+	domain := strings.TrimSpace(trustDomain)
+	if domain != "" {
+		if err := passport.ValidateAgentURI("agent://" + domain + "/probe"); err != nil {
+			return nil, fmt.Errorf("IDRYX_TRUST_DOMAIN=%q cannot form a subject the event envelope accepts "+
+				"(agent://%s/<name> is not a valid agent id: %v). It is a DNS name your organisation controls, "+
+				"lowercase, e.g. acme.example", trustDomain, domain, err)
+		}
 	}
 	w, err := event.NewWriter(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening the idryx event journal at %s: %w", path, err)
 	}
-	return &Sink{w: w, runID: runID, trustDomain: strings.TrimSpace(trustDomain)}, nil
+	return &Sink{w: w, runID: runID, trustDomain: domain}, nil
 }
 
 // trustedID turns idryx's own identity id into an envelope subject, or reports
@@ -218,6 +238,17 @@ func (s *Sink) trustedID(identityID string) (string, bool) {
 	}
 	name, ok := strings.CutPrefix(identityID, "agent:")
 	if !ok || name == "" {
+		return "", false
+	}
+	if strings.HasPrefix(name, "/") {
+		// `agent://`, `agent:///bot`: a canonical URI that failed the test
+		// above, so what is left after the cut is the husk of a broken one and
+		// not an inventory name. Building from it gives
+		// `agent://<domain>///bot`, which the shared validator accepts because
+		// its path class allows empty segments, so this would be the same
+		// fabrication one namespace narrower. It is reachable: agents.json is
+		// taken verbatim, and the envelope only checks that `agent_id` is
+		// non-empty.
 		return "", false
 	}
 	// Built rather than parsed, then validated, so a name idryx accepted but
