@@ -23,6 +23,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
 	"github.com/TAIPANBOX/idryx/internal/ebpfcapture"
 	"github.com/TAIPANBOX/idryx/internal/enforce"
+	"github.com/TAIPANBOX/idryx/internal/events"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/ingest/passport"
@@ -622,6 +623,15 @@ func runDetect(args []string) error {
 	if !ok {
 		return fmt.Errorf("invalid --min-severity %q", *minSev)
 	}
+	// One run identifier per invocation, minted here so every destination
+	// labels the same scan the same way.
+	//
+	// Required rather than optional: trailryx refuses an event with no run_id
+	// rather than inventing one, because a fabricated run puts unrelated
+	// events together and a reconstruction of that run reports them as
+	// related. A scan is the unit an operator repeats, so it is the unit.
+	runID := fmt.Sprintf("idryx-%d", time.Now().UTC().Unix())
+
 	var sinks []sink.Sink
 	if *slackURL != "" {
 		sinks = append(sinks, sink.NewSlack(*slackURL, threshold))
@@ -636,6 +646,55 @@ func runDetect(args []string) error {
 	// --webhook being empty: zero behavior change for anyone not using it.
 	if endpoint := os.Getenv("IDRYX_OTLP_ENDPOINT"); endpoint != "" {
 		sinks = append(sinks, sink.NewOTLP(endpoint, threshold))
+	}
+	// The shared agent-event bus, which is what heraldyx and trailryx read.
+	//
+	// No flag, for the reason OTLP has none: a deployment that runs this stack
+	// already has one events directory that every plane writes into, so the
+	// path is environment configuration rather than a per-invocation choice.
+	// Unset means disabled, exactly like the other three being empty.
+	//
+	// It takes NO severity threshold, unlike the three above. They page a
+	// person and filter for that reason; this is a record, and a record
+	// filtered by severity answers "what happened" with "the parts somebody
+	// thought were interesting". heraldyx applies the threshold at the other
+	// end, where the reader is.
+	if path := os.Getenv("IDRYX_EVENTS"); path != "" {
+		// The operator's own trust domain. Required WITH the path rather than
+		// optional beside it: idryx inventories identities under its own ids
+		// (`agent:ops-helper`), the envelope wants
+		// `agent://<trust-domain>/<name>`, and only the operator can say the
+		// domain. Configuring the path and not the domain would produce a
+		// journal that is created, opened, and forever empty, which reads as "no
+		// findings" and is "not finished being configured".
+		domain := os.Getenv("IDRYX_TRUST_DOMAIN")
+		if domain == "" {
+			return fmt.Errorf("IDRYX_EVENTS is set and IDRYX_TRUST_DOMAIN is not. " +
+				"The event envelope needs agent://<trust-domain>/<name> and only you can say " +
+				"the domain; inventing one would put every agent here under a name nobody chose. " +
+				"Set IDRYX_TRUST_DOMAIN=acme.example, or unset IDRYX_EVENTS")
+		}
+		bus, err := events.New(path, runID, domain)
+		if err != nil {
+			return err
+		}
+		if bus != nil {
+			defer func() {
+				if skipped, failed := bus.Counts(); skipped > 0 || failed > 0 {
+					// Said out loud rather than kept inside. On an estate whose
+					// identities are mostly service accounts the skip count will
+					// be most of them, which is correct and is exactly the number
+					// somebody reading "12 findings, 2 events" needs to see.
+					fmt.Fprintf(os.Stderr,
+						"idryx: agent-event journal: %d finding(s) had no agent subject and were not written, %d failed\n",
+						skipped, failed)
+				}
+				if err := bus.Close(); err != nil {
+					fmt.Fprintf(os.Stderr, "idryx: closing the agent-event journal: %v\n", err)
+				}
+			}()
+			sinks = append(sinks, bus)
+		}
 	}
 	var failedSinks int
 	for _, s := range sinks {
