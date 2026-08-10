@@ -6,11 +6,11 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-286-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-293-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
-<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx, scopyx) and Agent Passports feed the idryx core (graph store, baseline engine, 26 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
+<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx, scopyx) and Agent Passports feed the idryx core (graph store, baseline engine, 27 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
 
 </div>
 
@@ -18,7 +18,7 @@ idryx is a security layer on top of an organization's existing IdPs, clouds, and
 gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
-identity / access graph. Twenty-six deterministic detectors then surface excessive
+identity / access graph. Twenty-seven deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open source, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
@@ -234,7 +234,7 @@ LLM egress, flagging an agent that reaches a provider it never declared).
 ## Detectors
 
 <div align="center">
-<img src="docs/detectors.png" alt="idryx's 26 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
+<img src="docs/detectors.png" alt="idryx's 27 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
 </div>
 
 Detection is **deterministic** (statistics + rules over the graph); the LLM is
@@ -260,6 +260,7 @@ suppresses scoring during a learning period to avoid false positives.
 | `beaconing` | Agents / AI | medium, high if the destination is a known LLM API | connections to one destination on a regular cadence, measured as the coefficient of variation of their intervals: the shape of a process checking in on a timer rather than doing work. Cron and metrics agents beacon too, so the finding names the cadence for an operator to match against their own schedules |
 | `claimed_agent_unknown` | Agents / AI | high, critical if it also reached a known LLM API | a process that declared itself an `agent://` identity via `AGENT_PASSPORT_ID` (agent-passport SPEC 3.3) which no Passport, IAM record or agent-event in the graph names: an undeclared agent, or a wrong value. A self-declaration, never proof of identity |
 | `claimed_agent_drift` | Agents / AI | high | a process that declared itself an `agent://` identity (SPEC 3.3) reached an LLM provider that agent's Passport does not declare. The finding keeps both readings open: the agent drifted from its own declaration, or something else is using its name |
+| `claimed_agent_unattested` | Agents / AI | medium, high if the claimed agent is privileged or holds admin | an agent whose Passport declares its identity is bound to a workload (SPEC §4.3) and whose only runtime carrier in the graph is a process that named itself. The binding is never verified and cannot be: idryx has no connector to an attestation plane and reading a handshake is a payload the sensor promises never to read. What it compares is two facts already in the graph, and it judges nothing unless some agent-event producer feeds that graph, so "nothing established this agent" cannot quietly mean "no bus file was loaded" |
 | `unrouted_egress` | Agents / AI | medium, high if the plane had already refused that agent, info for a coverage gap | an agent whose web egress is governed by an enforcement point (`scopyx`, from its own journal) which the eBPF sensor nevertheless saw opening its own connections to public addresses. A governed fetch is performed by the enforcement point's process, so those connections cannot have passed it. Private, loopback and carrier-NAT destinations are not judged (the plane's own address rules refuse those ranges) and model APIs are left to the shadow-AI detectors; both are counted in the finding rather than dropped |
 | `shadow_mcp` | Agents / AI | high, critical if high-risk tools exposed | an MCP server in use but absent from the sanctioned registry (OWASP MCP Top 10: Shadow MCP Servers) |
 | `agent_shadow_tool` | Agents / AI | high, critical if the shared tool is high-risk | an AI agent whose declared tools are exposed by a shadow MCP server, the path a poisoned tool takes to reach a model |
@@ -545,7 +546,7 @@ runs deterministic detectors.
 | `tokenfuse` / `wardryx` / `mockryx` / `verdryx` / `scopyx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:`/`scopyx:path/*.ndjson`), one connector shared by every bus producer |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
-**Detectors** - see the [Detectors](#detectors) table above: 26 detectors across
+**Detectors** - see the [Detectors](#detectors) table above: 27 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
 
 **Baseline engine** (`internal/baseline`) - learns what is normal per identity
@@ -651,19 +652,30 @@ does and deliberately does not do.
 
 ## Status
 
-**Phases 0-3 plus the eBPF network-behavior layer shipped.** Corroborating a
-claimed identity, the last item on that layer's list, is under way rather than
-outstanding: `unrouted_egress` checks a claim against what an enforcement point
-says it governs. Comparing the rest of a Passport (owner, attestation, parent)
-is still nobody's. JA3/JA4 and DNS-tunnel detection are decided against, both
-because they would need to read a payload, see
+**Phases 0-3 plus the eBPF network-behavior layer shipped, and corroborating a
+claimed identity is closed rather than outstanding.** Every comparison the graph
+supports now exists: models both ways (`undeclared_llm`, `claimed_agent_drift`),
+governance (`unrouted_egress`), and attestation in its one graph-visible form
+(`claimed_agent_unattested`).
+
+The other two fields of a Passport are decided AGAINST rather than pending, and
+saying which is the point. **Owner** has no observed counterpart at all: no
+event, packet or syscall carries ownership, so the only comparison available is
+one declaration against another, and even that is merged away before detection.
+**Parent** has one, and the spec allows it to differ: SPEC 4.2 is an org chart
+and SPEC 5 is a per-request chain, so their inequality is not evidence and a
+detector on it would cry wolf by construction.
+
+None of this makes a claim attested, which stays permanently out of scope at
+this layer (SPEC 3.3). JA3/JA4 and DNS-tunnel detection are likewise decided
+against, both because they would need to read a payload, see
 [`idryx-plan.md`](idryx-plan.md)'s Phase 4:
 
 - [x] Phase 0 - ITDR core, in-memory graph, CLI, CI
 - [x] Phase 1 - baseline engine, Entra/CloudTrail connectors, Slack/SIEM delivery, web dashboard, Postgres graph
 - [x] Phase 2 - NHI (AWS/GCP/Azure), agents + delegation graph, shadow AI/MCP, least-privilege
 - [x] Phase 3 - remediation: right-sizing + rotation Terraform, PR enforcement (read-only)
-- [x] 26 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
+- [x] 27 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [x] eBPF network-behavior layer (descoped first version): Linux sensor on

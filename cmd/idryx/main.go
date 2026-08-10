@@ -543,6 +543,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewClaimedAgentDrift(),
 		detectors.NewUndeclaredLLM(),
 		detectors.NewUnroutedEgress(),
+		detectors.NewClaimedAgentUnattested(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {

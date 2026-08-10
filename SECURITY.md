@@ -120,12 +120,27 @@ rather than folding into the table above:
   against the fact that a governed fetch is made by the enforcement point's
   process and never by the agent's.
 
-  Two things it does NOT establish, said here because "corroborated" would
-  overstate both. It does not make the claim true: a journal entry proves the
+  **Attestation joined it the same day**, `claimed_agent_unattested`, and it is
+  the last comparison the graph supports. The binding itself is never checked
+  and cannot be: there is no connector to any attestation plane, and reading a
+  handshake is reading what the application wrote into its socket, which the
+  promise above forbids for the same reason JA3/JA4 was decided against. What it
+  compares is two facts already here: an organisation declaring a strong binding
+  for an agent, and a graph in which the only runtime carrier of that name is a
+  process that named itself.
+
+  **Owner and parent are decided against rather than pending**, and the
+  difference matters to anyone reading this as a roadmap. Owner has no observed
+  counterpart: no packet, event or syscall carries ownership, so it can be
+  checked for presence and never against behaviour. Parent has one the spec
+  allows to differ, since SPEC 4.2 is an org chart and SPEC 5 is a per-request
+  chain, so their disagreement is not evidence.
+
+  Two things none of this establishes, said here because "corroborated" would
+  overstate both. It does not make the claim true: a journal entry proves a
   plane served an agent of that name through an authenticated credential, and
-  the process on the host still only says it is that agent. And it compares one
-  property. A Passport also carries the owner, the attestation and the parent,
-  and none of those is checked against anything by any detector.
+  the process on the host still only says it is that agent. And making a claim
+  ATTESTED is permanently out of scope at this layer.
 
   Beaconing shipped on 2026-08-09 and is no longer on this list. It works from
   connection timing alone, taken from the kernel's own clock, which is what
