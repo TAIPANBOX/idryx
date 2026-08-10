@@ -688,14 +688,16 @@ func runDetect(args []string) error {
 					// be most of them, which is correct and is exactly the number
 					// somebody reading "12 findings, 2 events" needs to see.
 					//
-					// The claimed count is separated because it is the one that
-					// is a gap rather than a property: those findings ARE about
-					// agents, and what holds them back is that the envelope has
-					// no way to say a subject was self-declared rather than
-					// established. See events.SkippedClaimedSubject.
+					// The claimed count is separated because it is a different
+					// fact about the estate, not a smaller version of the same
+					// one: those findings rest on what a process said about
+					// itself. It was a count of what could NOT be written until
+					// 2026-08-10, when the envelope grew a way to carry the
+					// distinction; it is now a count of what WAS, under v0.3.
+					// See events.WrittenClaimed.
 					fmt.Fprintf(os.Stderr,
 						"idryx: agent-event journal: %d finding(s) had no agent subject and were not written, "+
-							"%d were about a self-declared (claimed:) identity the envelope cannot carry, %d failed\n",
+							"%d were written about a self-declared (claimed:) identity under schema v0.3, %d failed\n",
 						skipped, claimed, failed)
 				}
 				if err := bus.Close(); err != nil {

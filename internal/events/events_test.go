@@ -359,16 +359,15 @@ func TestAMalformedAgentIdIsSkippedRatherThanBuiltIntoASubject(t *testing.T) {
 	}
 }
 
-// A self-declared subject is held back, and counted apart from the identities
-// that are simply not agents.
+// A self-declared subject travels, under the version that exists for it, and is
+// counted apart from the subjects nothing can name.
 //
-// Both halves matter and they fail differently. Writing it would deliver a
-// claim as a fact to every conforming consumer, which SPEC 3.3 forbids and no
-// `data` key can undo, since 6.1 obliges a consumer to ignore keys it does not
-// know. Counting it as "no agent subject" would file a gap under a property:
-// a person will never have a subject and this agent might, once the envelope
-// can say a subject was asserted rather than established.
-func TestAClaimedSubjectIsHeldBackAndCountedApartFromANonAgent(t *testing.T) {
+// It used to be held back, and this test used to assert that. What changed is
+// not idryx's caution: the envelope grew a way to carry the distinction
+// (agent-passport SPEC 3.3, 6.4), and the marker lives INSIDE the subject, so
+// no consumer can read the id without meeting it. Holding it back now would
+// keep an entire detector family off the record for a reason that has gone.
+func TestAClaimedSubjectTravelsUnderItsOwnVersionAndIsCountedApart(t *testing.T) {
 	s, path := open(t)
 	if err := s.Send([]model.Alert{
 		alert("claimed_agent_drift", "claimed:agent://acme.example/planner", model.SeverityHigh),
@@ -380,7 +379,7 @@ func TestAClaimedSubjectIsHeldBackAndCountedApartFromANonAgent(t *testing.T) {
 
 	skipped, claimed, failed := s.Counts()
 	if claimed != 1 {
-		t.Errorf("claimed = %d, want 1: a self-declared subject is its own story, not a missing one", claimed)
+		t.Errorf("claimed = %d, want 1", claimed)
 	}
 	if skipped != 1 {
 		t.Errorf("skipped = %d, want 1 (the proc: identity, which is not an agent under any envelope)", skipped)
@@ -393,14 +392,35 @@ func TestAClaimedSubjectIsHeldBackAndCountedApartFromANonAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 {
-		t.Fatalf("want exactly the one established subject on the bus, got %d", len(evs))
+	if len(evs) != 2 {
+		t.Fatalf("want both the established and the claimed subject on the bus, got %d", len(evs))
 	}
-	if evs[0].AgentID != "agent://acme.example/ops-helper" {
-		t.Errorf("agent_id = %q, want the established identity", evs[0].AgentID)
+
+	byID := map[string]event.Event{}
+	for _, e := range evs {
+		byID[e.AgentID] = e
 	}
-	if strings.Contains(evs[0].AgentID, "planner") {
-		t.Error("a claim a process made about itself reached the bus as an established subject")
+
+	established, ok := byID["agent://acme.example/ops-helper"]
+	if !ok {
+		t.Fatalf("the established subject is missing: %v", byID)
+	}
+	if established.Schema != Schema {
+		t.Errorf("an established subject was stamped %q, want %q: v0.3 tells a reader a claim is possible, and here it is not",
+			established.Schema, Schema)
+	}
+
+	claimedEvent, ok := byID["claimed:agent://acme.example/planner"]
+	if !ok {
+		t.Fatalf("the claimed subject did not travel, or travelled under a different id: %v", byID)
+	}
+	if claimedEvent.Schema != SchemaClaimed {
+		t.Errorf("a claimed subject was stamped %q, want %q", claimedEvent.Schema, SchemaClaimed)
+	}
+	// The whole point of the wire form: the marker is not separable from the
+	// subject, so a consumer meets it whether or not it was told to look.
+	if _, bare := byID["agent://acme.example/planner"]; bare {
+		t.Error("a claim reached the bus as an established subject")
 	}
 }
 

@@ -217,7 +217,22 @@ an absent invariant.
    corroborating a claim has begun: `unrouted_egress` (2026-08-10) checks a
    claim against an enforcement point's own journal. What remains of it is the
    rest of the Passport: owner, attestation and parent are still compared
-   against nothing. DNS tunnelling joined JA3/JA4 as
+   against nothing.
+
+   **A finding about a claim now leaves this repository, and the form it leaves
+   in is a contract rather than a detail.** agent-passport SPEC 3.3 makes
+   `claimed:agent://<domain>/<path>` the wire spelling, and the envelope's v0.3
+   stamp is what tells a consumer a claim is possible at all. So the sensor's
+   on-host convention and the wire form are the same bytes, and
+   `internal/events` translates nothing.
+
+   Two rules follow, and both are easy to break by accident. A claimed subject
+   is stamped v0.3 and an established one never is: stamping v0.3 on ordinary
+   traffic would tell every consumer a claim is possible in a stream where it
+   is not. And the trust domain of a claim is never re-stamped with the
+   operator's own, because a process writes its own environment and can name
+   another organisation's agent; that comparison belongs to the receiver.
+   *(test: `TestAClaimedSubjectTravelsUnderItsOwnVersionAndIsCountedApart`)* DNS tunnelling joined JA3/JA4 as
    decided against the same day: both need to read what the application wrote
    into its socket. Radar's role narrows to emitting what
    it observes into the shared agent-event stream; it does not grow new
