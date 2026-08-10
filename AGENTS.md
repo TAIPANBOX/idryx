@@ -214,10 +214,26 @@ an absent invariant.
    ported from. Every capability the sensor gains from now on is built in idryx:
    IPv6, the skipped counters, the cgroup, the kernel timestamp and the
    self-declared identity already are, beaconing shipped on 2026-08-09, and
-   corroborating a claim has begun: `unrouted_egress` (2026-08-10) checks a
-   claim against an enforcement point's own journal. What remains of it is the
-   rest of the Passport: owner, attestation and parent are still compared
-   against nothing.
+   corroborating a claim is CLOSED as of 2026-08-10, and closed means two
+   detectors and two decisions not to build, which is worth writing out because
+   the alternative reading is that somebody forgot.
+
+   `unrouted_egress` checks a claim against an enforcement point's own journal.
+   `claimed_agent_unattested` checks it against the Passport's declared binding,
+   in the only form a graph can see: an agent the organisation says is bound to
+   a workload, whose sole runtime carrier is a process that named itself.
+
+   **Owner and parent are decided against, not deferred.** Owner has no observed
+   counterpart at all, so the only available comparison is one declaration
+   against another, and `AddIdentity`'s last-non-empty-wins merge erases even
+   that before a detector runs. Parent has a counterpart the spec says may
+   legitimately differ: SPEC 4.2 is an org chart, SPEC 5 is a per-request chain,
+   and this repository's own model doc says they are "usually, but not
+   necessarily" the same, so a detector on their inequality cries wolf by
+   construction.
+
+   And nothing here makes a claim ATTESTED. That is permanently out of scope at
+   this layer, SPEC 3.3, and it is said once here rather than implied.
 
    **A finding about a claim now leaves this repository, and the form it leaves
    in is a contract rather than a detail.** agent-passport SPEC 3.3 makes
