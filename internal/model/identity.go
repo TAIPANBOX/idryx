@@ -23,6 +23,16 @@ const (
 	EventDLPBlock        EventType = "dlp_block"
 	EventTaintBlock      EventType = "taint_block"
 	EventMCPDrift        EventType = "mcp_drift"
+
+	// The web-egress plane's own two types (agent-passport SPEC §6.2, source
+	// "scopyx"). One per fetch that happened and one per fetch that was
+	// refused, and the pair is the whole record of what an agent was routed
+	// through an enforcement point to reach.
+	//
+	// Values match the wire `type` field verbatim, like the tokenfuse block
+	// above, so the bus connector passes them through unchanged.
+	EventWebFetch   EventType = "web_fetch"
+	EventWebBlocked EventType = "web_blocked"
 )
 
 // Event is a single normalized observation about an identity, produced by a
