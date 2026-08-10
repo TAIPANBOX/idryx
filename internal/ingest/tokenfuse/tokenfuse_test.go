@@ -304,3 +304,51 @@ func TestParseBusFixtures(t *testing.T) {
 		})
 	}
 }
+
+// A claimed subject arriving over the bus is the same fact as one the sensor
+// read off a process, and must become the same kind of node.
+//
+// agent-passport SPEC 3.3 gave `claimed:agent://...` a wire form on 2026-08-10,
+// so this connector started meeting the string. It typed every `agent_id` as an
+// established agent without looking at it, which made the SAME id two different
+// things depending on which door it came through: the sensor creates it through
+// AddEvent, where the type stays unset, and the bus created it as a governed
+// agent.
+//
+// The consequence was not academic. `bom_incomplete` selects on IsAgent(), so
+// feeding idryx its own journal back reported a missing owner, runtime and
+// attestation for a name nobody ever issued, and `orphaned_nhi` reported that
+// nobody owns it. An Agent-BOM cannot be incomplete for something that was never
+// issued, and a self-declaration has no owner to be missing.
+func TestAClaimedSubjectFromTheBusIsNotTypedAsAnEstablishedAgent(t *testing.T) {
+	const stream = `{"schema":"taipanbox.dev/agent-event/v0.3","ts":"2026-08-10T09:30:00.000Z","source":"idryx","type":"identity_finding","agent_id":"claimed:agent://acme.example/planner","severity":"high","data":{"detector":"unrouted_egress"}}
+{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-10T09:31:00.000Z","source":"idryx","type":"identity_finding","agent_id":"agent://acme.example/auditor","severity":"medium","data":{"detector":"bom_incomplete"}}`
+
+	ids, _, rep := Parse([]byte(stream))
+	if rep.Malformed != 0 {
+		t.Fatalf("malformed = %d, want 0", rep.Malformed)
+	}
+
+	byID := map[string]model.Identity{}
+	for _, id := range ids {
+		byID[id.ID] = id
+	}
+
+	claimed, ok := byID["claimed:agent://acme.example/planner"]
+	if !ok {
+		t.Fatalf("the claimed subject did not become an identity at all: %v", byID)
+	}
+	if claimed.Type == model.IdentityAgent {
+		t.Error("a claim was typed as an established agent; the posture detectors would then " +
+			"report an incomplete Agent-BOM for a name the organisation never issued")
+	}
+
+	// And the established one is untouched: this is a branch, not a new default.
+	established, ok := byID["agent://acme.example/auditor"]
+	if !ok {
+		t.Fatalf("the established subject is missing: %v", byID)
+	}
+	if established.Type != model.IdentityAgent {
+		t.Errorf("an established subject came out as %q, want an agent", established.Type)
+	}
+}
