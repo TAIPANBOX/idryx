@@ -14,16 +14,21 @@
 // `@yurii 2026-08-10`, asked with both shapes measured and costed: "перший,
 // один тип".
 //
-// idryx ships 25 detectors and the registry reserved seven names, two of which
-// had no producer at all. Registering 25 types would put 25 rows in SPEC 6.2,
-// 25 severities beside them, 25 entries in heraldyx's render catalogue, and
+// idryx ships 26 detectors and the registry reserved seven names, two of which
+// had no producer at all. Registering 26 types would put 26 rows in SPEC 6.2,
+// 26 severities beside them, 26 entries in heraldyx's render catalogue, and
 // would make every new detector a nine-repository spec change, which is the
 // tax that stops detectors being written.
 //
 // So the bus carries `identity_finding` and the detector name travels in
-// `data.detector`. The 25 names stay idryx's own vocabulary, where they can
+// `data.detector`. The 26 names stay idryx's own vocabulary, where they can
 // change without anybody else editing anything, and a consumer needs one
-// handler rather than 25.
+// handler rather than 26.
+//
+// The number in this paragraph is the argument's own weight and it moves with
+// the detector set: it said 25 for the few hours between unrouted_egress
+// landing and this line being read. `scripts/detectors-complete.sh` is what
+// knows, and it reads the Name() methods.
 //
 // It also settles a collision by construction: `mcp_drift` is a registered
 // tokenfuse type AND an idryx detector name. Under one type, tokenfuse keeps
