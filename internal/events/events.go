@@ -50,6 +50,7 @@ import (
 	"github.com/TAIPANBOX/agent-stack-go/event"
 	"github.com/TAIPANBOX/agent-stack-go/passport"
 
+	"github.com/TAIPANBOX/idryx/internal/ebpfcapture"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -83,6 +84,26 @@ const (
 	// Those findings still reach OTLP and Slack, which is where they went
 	// before this package existed.
 	SkippedNoAgentSubject
+	// SkippedClaimedSubject: the finding is about an identity a PROCESS
+	// asserted about itself, read from AGENT_PASSPORT_ID by the eBPF sensor
+	// (agent-passport SPEC 3.3) and recorded under the `claimed:` prefix.
+	//
+	// Counted apart from SkippedNoAgentSubject because the two are different
+	// stories and only one of them is permanent. "Not an agent" is a person or
+	// a service account, and no envelope change would ever give it a subject.
+	// This one IS an agent, or says it is, and idryx is the only party that
+	// knows the difference: the envelope has one subject field and no way to
+	// qualify it, and SPEC 6.1 obliges a consumer to ignore `data` keys it does
+	// not know, so writing the claim into `agent_id` would deliver a
+	// self-declaration to every conforming consumer as an established fact.
+	// SPEC 3.3 forbids exactly that, and growing the envelope a subject basis
+	// is a change every consumer makes together.
+	//
+	// So the finding is held back, and the number is the honest form of the
+	// gap: an operator can see how much the bus is not being told. It still
+	// reaches OTLP and Slack, where the `claimed:` prefix travels with it and
+	// 3.3's "make the distinction visible" is satisfied.
+	SkippedClaimedSubject
 	// WriteFailed: the journal could not be appended to.
 	WriteFailed
 )
@@ -106,6 +127,7 @@ type Sink struct {
 	trustDomain string
 
 	skipped int
+	claimed int
 	failed  int
 }
 
@@ -116,47 +138,117 @@ type Sink struct {
 //
 // `trustDomain` is the operator's own, and it is REQUIRED for anything to be
 // written. See trustedID.
+//
+// It is also checked HERE rather than at write time, and the reason is the
+// failure that check exists to prevent. One capital letter is enough:
+// `Acme.Example` builds `agent://Acme.Example/ops-helper`, which the envelope's
+// grammar rejects, so every finding about the operator's own inventory would be
+// silently skipped while every already-canonical subject was still written.
+// That is a journal that reads as whole while missing half the estate, and the
+// empty-domain gate below never covered it, because the domain is not empty.
+//
+// The check is a probe against the shared validator rather than a pattern
+// written here: a second grammar in this repository is the drift AGENTS.md
+// invariant 3 exists to prevent, and it would drift toward accepting more.
 func New(path, runID, trustDomain string) (*Sink, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
+	}
+	domain := strings.TrimSpace(trustDomain)
+	if domain != "" {
+		if err := passport.ValidateAgentURI("agent://" + domain + "/probe"); err != nil {
+			return nil, fmt.Errorf("IDRYX_TRUST_DOMAIN=%q cannot form a subject the event envelope accepts "+
+				"(agent://%s/<name> is not a valid agent id: %v). It is a DNS name your organisation controls, "+
+				"lowercase, e.g. acme.example", trustDomain, domain, err)
+		}
 	}
 	w, err := event.NewWriter(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening the idryx event journal at %s: %w", path, err)
 	}
-	return &Sink{w: w, runID: runID, trustDomain: strings.TrimSpace(trustDomain)}, nil
+	return &Sink{w: w, runID: runID, trustDomain: domain}, nil
 }
 
 // trustedID turns idryx's own identity id into an envelope subject, or reports
 // that it cannot.
 //
-// # THE TWO NAMESPACES, WHICH IS THE WHOLE OF THIS FUNCTION
+// # THE THREE NAMESPACES, WHICH IS THE WHOLE OF THIS FUNCTION
 //
-// idryx inventories identities under its own ids: `agent:ops-helper`,
-// `bob@example.com`, an AWS role ARN. The envelope wants
-// `agent://<trust-domain>/<name>`. They are different namespaces and only one
-// of them says which organisation an agent belongs to.
+// idryx inventories identities under ids from three different places, and the
+// first version of this function knew about one of them.
 //
-// The NAME comes from the inventory. The DOMAIN can only come from the
-// operator, and this is the field trailryx refuses events on at the other end:
-// its invariant 35 exists because, without the comparison, one valid producer
-// could write records about every agent in the estate under one receiver's
-// tenant. Inventing a domain here would be manufacturing exactly that.
+//  1. Its own short form, `agent:ops-helper`, from the `agents` inventory
+//     connector. A NAME and nothing else. The envelope wants
+//     `agent://<trust-domain>/<name>`, and only the operator can say the
+//     domain, so the subject is BUILT here and then validated.
+//  2. A canonical `agent://<domain>/<name>` that arrived already complete: from
+//     a Passport document (`internal/ingest/passport`, which takes the
+//     document's own id), and from every agent-event producer on the bus
+//     (tokenfuse, wardryx, mockryx, verdryx, scopyx), whose envelopes carry it.
+//     Nothing is built. It travels as itself.
+//  3. Everything else: a person, a service account, an ARN, a `proc:` identity
+//     the eBPF sensor could only describe, a `claimed:` one a process asserted
+//     about itself. SPEC 6.1 has no subject kind for any of these and requires
+//     a producer to skip rather than fabricate one.
 //
-// So with no configured domain nothing is written at all, and the count says
-// so. That is a deployment that has not finished being configured, not a
-// deployment with no findings, and the difference is the one this estate keeps
-// paying for.
+// # WHY 2 IS ITS OWN BRANCH AND NOT A SPECIAL CASE OF 1
+//
+// A canonical URI also begins with `agent:`. Cutting that prefix and prepending
+// the operator's domain therefore built a second scheme onto a string that
+// already had one, and the shared validator accepted the result because its
+// pattern lets the path hold empty segments.
+//
+// @measured 2026-08-10, `IDRYX_TRUST_DOMAIN=acme-bank.example idryx detect
+// --load egress:testdata/egress.json --passports 'testdata/passports/*.json'`:
+// the journal received
+// `agent://acme-bank.example///acme-bank.example/eng/standalone`. The finding
+// was not lost, it was published about an agent that does not exist, and the
+// subject was the operator's OWN registered agent, read from its own Passport.
+//
+// The bus case is worse in kind rather than in number. An agent of
+// `acme-bank.example` observed by a deployment configured for `acme.example`
+// came out as `agent://acme.example///acme-bank.example/...`: a foreign
+// tenant's agent carrying OUR trust domain. trailryx's invariant 35 compares
+// exactly that field to decide whether it may record an event at all, so the
+// mangle did not merely corrupt the subject, it walked it past the one check in
+// the estate that exists to stop it.
+//
+// # SO A CANONICAL SUBJECT TRAVELS UNCHANGED, INCLUDING A FOREIGN DOMAIN
+//
+// Not compared against the operator's own, and not suppressed. Tenancy is the
+// RECEIVER's rule: trailryx invariant 35 is a boundary check, and a producer
+// that pre-enforced it would only hide the mismatch from the boundary that owns
+// it. Passing the true subject through restores that check's input and leaves
+// the finding in idryx's own journal either way, which is the part designed to
+// be kept. A foreign domain here is usually a misconfigured
+// IDRYX_TRUST_DOMAIN, and under this rule it is visible instead of silent.
+//
+// With no configured domain nothing is written at all, and the count says so.
+// That stays all-or-nothing on purpose even though branch 2 needs no domain:
+// letting canonical subjects through while the inventory's own are silently
+// dropped would produce a partial journal that reads as a whole one.
 func (s *Sink) trustedID(identityID string) (string, bool) {
 	if s.trustDomain == "" {
 		return "", false
 	}
+	// Namespace 2 first, and the order is the fix: this test has to run before
+	// anything cuts an `agent:` prefix, because a canonical URI carries one.
+	if passport.ValidateAgentURI(identityID) == nil {
+		return identityID, true
+	}
 	name, ok := strings.CutPrefix(identityID, "agent:")
 	if !ok || name == "" {
-		// Not an agent in idryx's own inventory: a person, a service account,
-		// a machine identity. SPEC 6.1 has no subject kind for those, and a
-		// fabricated one would put a name on an alert that did not do the
-		// thing.
+		return "", false
+	}
+	if strings.HasPrefix(name, "/") {
+		// `agent://`, `agent:///bot`: a canonical URI that failed the test
+		// above, so what is left after the cut is the husk of a broken one and
+		// not an inventory name. Building from it gives
+		// `agent://<domain>///bot`, which the shared validator accepts because
+		// its path class allows empty segments, so this would be the same
+		// fabrication one namespace narrower. It is reachable: agents.json is
+		// taken verbatim, and the envelope only checks that `agent_id` is
+		// non-empty.
 		return "", false
 	}
 	// Built rather than parsed, then validated, so a name idryx accepted but
@@ -209,6 +301,10 @@ func (s *Sink) Send(alerts []model.Alert) error {
 func (s *Sink) write(a model.Alert) Outcome {
 	agentID, ok := s.trustedID(a.IdentityID)
 	if !ok {
+		if ebpfcapture.IsClaimed(a.IdentityID) {
+			s.claimed++
+			return SkippedClaimedSubject
+		}
 		s.skipped++
 		return SkippedNoAgentSubject
 	}
@@ -235,21 +331,26 @@ func (s *Sink) write(a model.Alert) Outcome {
 	return Written
 }
 
-// Counts reports how many alerts were skipped for want of an agent subject and
-// how many failed to write.
+// Counts reports how many alerts were held back and why, and how many failed to
+// write.
 //
-// Both are reported rather than kept private, because each is a number that
+// All three are reported rather than kept private, because each is a number that
 // means "this journal is not the whole story", and a reader who cannot see it
-// has no way to know. The skip count is the interesting one: on an estate whose
-// identities are mostly service accounts it will be most of them, and that is
-// correct rather than broken.
-func (s *Sink) Counts() (skipped, failed int) {
+// has no way to know.
+//
+// `skipped` is the expected one: on an estate whose identities are mostly
+// service accounts and people it will be most of them, and that is correct
+// rather than broken. `claimed` is the one worth acting on, because it is a gap
+// rather than a property: those findings are about agents, and what stops them
+// is that the envelope cannot yet say a subject was self-declared. See
+// SkippedClaimedSubject.
+func (s *Sink) Counts() (skipped, claimed, failed int) {
 	if s == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.skipped, s.failed
+	return s.skipped, s.claimed, s.failed
 }
 
 // severityWire maps idryx's bands onto the envelope's five.

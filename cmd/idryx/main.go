@@ -680,14 +680,21 @@ func runDetect(args []string) error {
 		}
 		if bus != nil {
 			defer func() {
-				if skipped, failed := bus.Counts(); skipped > 0 || failed > 0 {
+				if skipped, claimed, failed := bus.Counts(); skipped > 0 || claimed > 0 || failed > 0 {
 					// Said out loud rather than kept inside. On an estate whose
 					// identities are mostly service accounts the skip count will
 					// be most of them, which is correct and is exactly the number
 					// somebody reading "12 findings, 2 events" needs to see.
+					//
+					// The claimed count is separated because it is the one that
+					// is a gap rather than a property: those findings ARE about
+					// agents, and what holds them back is that the envelope has
+					// no way to say a subject was self-declared rather than
+					// established. See events.SkippedClaimedSubject.
 					fmt.Fprintf(os.Stderr,
-						"idryx: agent-event journal: %d finding(s) had no agent subject and were not written, %d failed\n",
-						skipped, failed)
+						"idryx: agent-event journal: %d finding(s) had no agent subject and were not written, "+
+							"%d were about a self-declared (claimed:) identity the envelope cannot carry, %d failed\n",
+						skipped, claimed, failed)
 				}
 				if err := bus.Close(); err != nil {
 					fmt.Fprintf(os.Stderr, "idryx: closing the agent-event journal: %v\n", err)
