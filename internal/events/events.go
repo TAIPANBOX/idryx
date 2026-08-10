@@ -56,7 +56,21 @@ import (
 
 // The envelope's fixed fields, per agent-passport SPEC 6.
 const (
+	// Schema is stamped on a finding whose subject is ESTABLISHED: an identity
+	// a connector, an inventory or a Passport document put in the graph.
 	Schema = "taipanbox.dev/agent-event/v0.2"
+
+	// SchemaClaimed is stamped on a finding whose subject is a CLAIM, and only
+	// then. SPEC 6.4 makes that a MUST NOT in the other direction: stamping it
+	// on ordinary traffic would tell every consumer at once that a claim is
+	// possible in a stream where it is not, and take the signal away from the
+	// readers it exists for.
+	//
+	// It is also why accepting v0.3 is not a MUST for a consumer. A reader that
+	// has not decided what a self-declaration means to it refuses the event,
+	// and refusing is the right answer. trailryx does exactly that today.
+	SchemaClaimed = "taipanbox.dev/agent-event/v0.3"
+
 	Source = "idryx"
 
 	// TypeIdentityFinding is the one type this product emits.
@@ -68,8 +82,16 @@ const (
 type Outcome int
 
 const (
-	// Written: the alert reached the bus.
+	// Written: the alert reached the bus under an ESTABLISHED subject.
 	Written Outcome = iota
+	// WrittenClaimed: the alert reached the bus under a CLAIMED subject
+	// (`claimed:agent://...`, SPEC 3.3), stamped v0.3.
+	//
+	// Counted apart from Written because the two are different facts about the
+	// estate and an operator reading one number would be reading a blend. It
+	// is also the number that says how much of the record rests on what a
+	// process said about itself.
+	WrittenClaimed
 	// SkippedNoAgentSubject: the finding is about an identity that is not an
 	// agent, so it has no subject this envelope can carry.
 	//
@@ -99,10 +121,17 @@ const (
 	// SPEC 3.3 forbids exactly that, and growing the envelope a subject basis
 	// is a change every consumer makes together.
 	//
-	// So the finding is held back, and the number is the honest form of the
-	// gap: an operator can see how much the bus is not being told. It still
-	// reaches OTLP and Slack, where the `claimed:` prefix travels with it and
-	// 3.3's "make the distinction visible" is satisfied.
+	// It is now written rather than held back, and the wire form is what makes
+	// that safe: the marker is part of the SUBJECT, so no consumer can present
+	// the claim as established without deliberately stripping a prefix nothing
+	// told it to strip. See claimedID.
+	//
+	// Kept as a named outcome, unused by this package, because deleting it
+	// would erase the only record that this was ever the answer. A reader
+	// finding SkippedClaimedSubject in a git log learns why the shape changed;
+	// a reader finding nothing learns nothing.
+	//
+	// Deprecated: nothing returns this. A claimed subject is WrittenClaimed.
 	SkippedClaimedSubject
 	// WriteFailed: the journal could not be appended to.
 	WriteFailed
@@ -300,17 +329,20 @@ func (s *Sink) Send(alerts []model.Alert) error {
 
 func (s *Sink) write(a model.Alert) Outcome {
 	agentID, ok := s.trustedID(a.IdentityID)
+	schema := Schema
+	outcome := Written
 	if !ok {
-		if ebpfcapture.IsClaimed(a.IdentityID) {
-			s.claimed++
-			return SkippedClaimedSubject
+		claimedID, isClaimed := s.claimedID(a.IdentityID)
+		if !isClaimed {
+			s.skipped++
+			return SkippedNoAgentSubject
 		}
-		s.skipped++
-		return SkippedNoAgentSubject
+		agentID, schema, outcome = claimedID, SchemaClaimed, WrittenClaimed
+		s.claimed++
 	}
 
 	e := event.Event{
-		Schema:   Schema,
+		Schema:   schema,
 		TS:       a.Time.UTC().Format("2006-01-02T15:04:05.000Z"),
 		Source:   Source,
 		Type:     TypeIdentityFinding,
@@ -328,7 +360,50 @@ func (s *Sink) write(a model.Alert) Outcome {
 		s.failed++
 		return WriteFailed
 	}
-	return Written
+	return outcome
+}
+
+// claimedID turns idryx's `claimed:` graph identity into the envelope's claimed
+// subject, or reports that it cannot.
+//
+// # THE TWO SIDES ARE THE SAME BYTES, AND THAT IS THE DESIGN RATHER THAN LUCK
+//
+// The sensor has recorded a self-declared identity as `claimed:agent://...`
+// since it was written, because a bare agent:// URI in the identity field would
+// be indistinguishable from one a Passport established. agent-passport SPEC 3.3
+// made that spelling the WIRE form too, so nothing is translated here: the
+// string the graph carries is the string the envelope carries.
+//
+// # WHY THIS IS NOT trustedID WITH A FLAG
+//
+// trustedID answers "may this subject be presented as established". This one
+// answers a different question, and the two must never collapse into one
+// function with a boolean, because the day they do, a caller passes the wrong
+// boolean and a self-declaration becomes an established identity in a record
+// designed to be kept.
+//
+// The trust domain is NOT consulted. A claim carries whatever domain the
+// process wrote, and re-stamping it with the operator's own would be the
+// fabrication the sibling function exists to prevent, made worse: with an
+// established subject a foreign domain is a misconfiguration, and with a
+// claimed one it can be a process naming another organisation's agent. It
+// travels as written and the receiver's tenant check decides, which is where
+// that rule lives.
+func (s *Sink) claimedID(identityID string) (string, bool) {
+	if s.trustDomain == "" {
+		return "", false
+	}
+	if !ebpfcapture.IsClaimed(identityID) {
+		return "", false
+	}
+	// Validated through the shared module, never a pattern written here: a
+	// claim whose inner id is not a well-formed agent URI is not made valid by
+	// being claimed, and AGENTS.md invariant 3 makes agent-stack-go the only
+	// source of that grammar.
+	if passport.ValidateSubject(identityID) != nil {
+		return "", false
+	}
+	return identityID, true
 }
 
 // Counts reports how many alerts were held back and why, and how many failed to
