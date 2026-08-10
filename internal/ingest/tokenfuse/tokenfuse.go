@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/agent-stack-go/passport"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -264,9 +265,34 @@ func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
 
 		if !seenAgents[env.AgentID] {
 			seenAgents[env.AgentID] = true
+			// A CLAIMED subject is not typed as an established agent, and the
+			// same string arriving by two doors is why this branch exists.
+			//
+			// agent-passport SPEC 3.3 made `claimed:agent://...` a wire form on
+			// 2026-08-10, so this connector started meeting it. The sensor
+			// creates the same id through graph.AddEvent, where the type stays
+			// unset; this loop was creating it as a governed agent. One id, two
+			// kinds of node, decided by which door it came through.
+			//
+			// What that cost: `bom_incomplete` and `orphaned_nhi` select on the
+			// type, so idryx reading its OWN journal back reported a missing
+			// owner, runtime and attestation for a name nobody issued, and no
+			// mapped owner for a name a process wrote about itself. An
+			// Agent-BOM cannot be incomplete for something that was never
+			// issued.
+			//
+			// It is still INGESTED, on purpose. A claim on the bus is a real
+			// observation somebody made, and the id is byte-identical to the
+			// sensor's, so the two merge into one node and the claim-family
+			// detectors reason over it. What it must not do is arrive dressed
+			// as an identity the organisation established.
+			kind := model.IdentityAgent
+			if passport.IsClaimedSubject(env.AgentID) {
+				kind = model.IdentityType("")
+			}
 			identities = append(identities, model.Identity{
 				ID:   env.AgentID,
-				Type: model.IdentityAgent,
+				Type: kind,
 				// From the envelope's own field, never a hardcoded literal
 				// (review finding L3): a wardryx/mockryx/verdryx file must
 				// not come out mislabeled "tokenfuse".
