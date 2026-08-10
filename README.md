@@ -6,11 +6,11 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-274-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-285-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
-<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx) and Agent Passports feed the idryx core (graph store, baseline engine, 25 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
+<img src="docs/architecture.png" alt="idryx architecture: the whole agent-event bus (TokenFuse, Wardryx, Mockryx, Verdryx, scopyx) and Agent Passports feed the idryx core (graph store, baseline engine, 26 detectors), which builds an identity / access graph and emits detector findings plus an Agent-BOM" width="960">
 
 </div>
 
@@ -18,7 +18,7 @@ idryx is a security layer on top of an organization's existing IdPs, clouds, and
 gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
-identity / access graph. Twenty-five deterministic detectors then surface excessive
+identity / access graph. Twenty-six deterministic detectors then surface excessive
 privilege and anomalous behavior across that graph. Open source, dev-first, built
 for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
@@ -76,9 +76,9 @@ flowchart TB
 ```
 
 - **Consumes**: agent-event NDJSON from every bus producer (**TokenFuse**, **Wardryx**,
-  **Mockryx**, **Verdryx**) and Agent Passports, both via **agent-stack-go**.
+  **Mockryx**, **Verdryx**, **scopyx**) and Agent Passports, both via **agent-stack-go**.
 - **Produces**: the identity graph, detector findings (`runaway_agent`, `attestation_missing`, `bom_incomplete`), and an Agent-BOM (CycloneDX).
-- **Talks to**: **TokenFuse**, **Wardryx**, **Mockryx**, **Verdryx** (event sources), **agent-passport** (identity schema it validates against); imports **agent-stack-go**.
+- **Talks to**: **TokenFuse**, **Wardryx**, **Mockryx**, **Verdryx**, **scopyx** (event sources), **agent-passport** (identity schema it validates against); imports **agent-stack-go**.
 
 The full stack is TokenFuse (spend), Wardryx (policy), Engram (memory), Idryx (access), Qryx (crypto), Verdryx (quality), Mockryx (pre-prod), heraldyx (the mail out) and scopyx (governed web egress), on the shared Agent Passport + agent-event contract (agent-stack-go / agent-passport), configured via terraform-provider-taipan and driven from Genaryx, the console over all of it. Trailryx, the record plane, is built and not wired into this yet.
 
@@ -132,9 +132,10 @@ this file is still the one to read.
 idryx is a complete MVP for detection and remediation and has passed a security
 self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
 layer has shipped since (the `sys_enter_connect` sensor and its
-`unmanaged_egress` detector); what is still ahead in
-[`idryx-plan.md`](idryx-plan.md)'s Phase 4 is one thing: corroborating a
-claimed identity against the graph. Beaconing shipped. JA3/JA4 and DNS-tunnel
+`unmanaged_egress` detector). Beaconing shipped, and corroborating a claimed
+identity against the graph has begun: `unrouted_egress` reads the web-egress
+plane's own journal to decide whether a claim names an agent that plane
+governs, and judges its direct connections against that. JA3/JA4 and DNS-tunnel
 detection are decided against rather than pending, for the same reason: each
 needs to read what the application wrote into its socket, the ClientHello in
 one case and the DNS query name in the other, and this sensor promises never
@@ -197,18 +198,20 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   providers/models it declares using (`models`, SPEC §4.5, mapped to
   `Identity.DeclaredModels`). Capture-only metadata, layered onto whichever
   graph a `--source`, `--load`, or `--db` already built.
-- **Agent-event bus behavioral events** (`--source tokenfuse|wardryx|mockryx|verdryx`
-  / `--load tokenfuse:` / `wardryx:` / `mockryx:` / `verdryx:<path|glob>`): NDJSON
+- **Agent-event bus behavioral events** (`--source tokenfuse|wardryx|mockryx|verdryx|scopyx`
+  / `--load tokenfuse:` / `wardryx:` / `mockryx:` / `verdryx:` / `scopyx:<path|glob>`): NDJSON
   `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2), the shared wire
   format every producer on the bus writes: **TokenFuse** (spend), **Wardryx**
-  (policy), **Mockryx** (pre-prod rehearsal), **Verdryx** (quality/drift), and
-  any future emitter. Agent/human identities come from `agent_id`/`on_behalf_of`;
+  (policy), **Mockryx** (pre-prod rehearsal), **Verdryx** (quality/drift),
+  **scopyx** (web egress: one event per fetch and one per refusal), and any
+  future emitter. Agent/human identities come from `agent_id`/`on_behalf_of`;
   each event carries its producer's own `source` field verbatim, so a Wardryx
   policy event and a TokenFuse spend event on the same agent are never confused
   with one another. Known TokenFuse event types (`budget_exhausted`,
   `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`,
-  `dlp_block`, `taint_block`, `mcp_drift`) map to named constants; any other
-  type, from TokenFuse or another producer, is tolerated generically.
+  `dlp_block`, `taint_block`, `mcp_drift`) and scopyx's two (`web_fetch`,
+  `web_blocked`, which `unrouted_egress` reads) map to named constants; any
+  other type, from any producer, is tolerated generically.
   Every such stream is checked against the SPEC 6.5 `prev_hash` integrity
   chain on ingest, through `agent-stack-go`'s own `event.VerifyChain`, and
   the verdict goes to stderr: chain intact, chain broken at these lines, or
@@ -231,7 +234,7 @@ LLM egress, flagging an agent that reaches a provider it never declared).
 ## Detectors
 
 <div align="center">
-<img src="docs/detectors.png" alt="idryx's 25 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
+<img src="docs/detectors.png" alt="idryx's 26 deterministic detectors grouped into six colored risk cards: ITDR, stale and orphaned NHI, over-privileged and escalation, excessive agency and shadow AI/MCP, agent governance posture, and least-privilege" width="900">
 </div>
 
 Detection is **deterministic** (statistics + rules over the graph); the LLM is
@@ -257,6 +260,7 @@ suppresses scoring during a learning period to avoid false positives.
 | `beaconing` | Agents / AI | medium, high if the destination is a known LLM API | connections to one destination on a regular cadence, measured as the coefficient of variation of their intervals: the shape of a process checking in on a timer rather than doing work. Cron and metrics agents beacon too, so the finding names the cadence for an operator to match against their own schedules |
 | `claimed_agent_unknown` | Agents / AI | high, critical if it also reached a known LLM API | a process that declared itself an `agent://` identity via `AGENT_PASSPORT_ID` (agent-passport SPEC 3.3) which no Passport, IAM record or agent-event in the graph names: an undeclared agent, or a wrong value. A self-declaration, never proof of identity |
 | `claimed_agent_drift` | Agents / AI | high | a process that declared itself an `agent://` identity (SPEC 3.3) reached an LLM provider that agent's Passport does not declare. The finding keeps both readings open: the agent drifted from its own declaration, or something else is using its name |
+| `unrouted_egress` | Agents / AI | medium, high if the plane had already refused that agent, info for a coverage gap | an agent whose web egress is governed by an enforcement point (`scopyx`, from its own journal) which the eBPF sensor nevertheless saw opening its own connections to public addresses. A governed fetch is performed by the enforcement point's process, so those connections cannot have passed it. Private, loopback and carrier-NAT destinations are not judged (the plane's own address rules refuse those ranges) and model APIs are left to the shadow-AI detectors; both are counted in the finding rather than dropped |
 | `shadow_mcp` | Agents / AI | high, critical if high-risk tools exposed | an MCP server in use but absent from the sanctioned registry (OWASP MCP Top 10: Shadow MCP Servers) |
 | `agent_shadow_tool` | Agents / AI | high, critical if the shared tool is high-risk | an AI agent whose declared tools are exposed by a shadow MCP server, the path a poisoned tool takes to reach a model |
 | `runaway_agent` | Agents / AI | medium base, high at 2 corroborating facts, critical at 3+ | a TokenFuse spend/runaway incident correlated with the agent's privilege, delegation depth, attestation, and blast radius |
@@ -459,7 +463,7 @@ make build
 # detect: run detectors, print or deliver alerts
 ./bin/idryx detect <log.json>                       # human-readable report
 ./bin/idryx detect --format json <log.json>         # JSON alerts
-./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx
+./bin/idryx detect --source aws_iam <log.json>      # okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx
 ./bin/idryx detect --privileged alice@x.com ...     # mark privileged accounts (also applies with --db)
 ./bin/idryx detect --slack <url> <log.json>         # deliver alerts to Slack
 ./bin/idryx detect --webhook <url> <log.json>       # deliver alerts to a SIEM/SOAR
@@ -477,9 +481,12 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 ./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson
 ./bin/idryx detect --load tokenfuse:events.ndjson --passports "passports/*.json"
 
-# whole agent-event bus: stitch TokenFuse + Wardryx + Mockryx + Verdryx into one graph
+# whole agent-event bus: stitch every producer into one graph
 ./bin/idryx detect --load tokenfuse:tf.ndjson --load wardryx:wx.ndjson \
-  --load mockryx:mx.ndjson --load verdryx:vx.ndjson
+  --load mockryx:mx.ndjson --load verdryx:vx.ndjson --load scopyx:sx.ndjson
+
+# unrouted_egress: the web-egress plane's journal beside what the sensor saw
+./bin/idryx detect --load scopyx:events.ndjson --load egress:captured.json
 
 # bom: Agent-BOM, a CycloneDX-shaped inventory of every agent identity
 ./bin/idryx bom <log.json>                          # JSON (CycloneDX-shaped), the default
@@ -535,10 +542,10 @@ runs deterministic detectors.
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners, credential expiry, and the escalation actions each built-in role definition contains |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
-| `tokenfuse` / `wardryx` / `mockryx` / `verdryx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:path/*.ndjson`), one connector shared by every bus producer |
+| `tokenfuse` / `wardryx` / `mockryx` / `verdryx` / `scopyx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:`/`scopyx:path/*.ndjson`), one connector shared by every bus producer |
 | `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
-**Detectors** - see the [Detectors](#detectors) table above: 25 detectors across
+**Detectors** - see the [Detectors](#detectors) table above: 26 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
 
 **Baseline engine** (`internal/baseline`) - learns what is normal per identity
@@ -634,7 +641,9 @@ same `--load egress:` pipeline every other source uses. Known LLM API
 destinations are resolved to their hostname so the existing `shadow_ai`
 detector reasons over eBPF-captured traffic for free; its own
 `unmanaged_egress` detector flags any identity this sensor is the *only*
-evidence for. See
+evidence for, and `unrouted_egress` asks the next question of a governed one:
+whether it opened its own connections to the public internet while an
+enforcement point was supposed to be doing that for it. See
 [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture) for what it
 does and deliberately does not do.
 
@@ -642,16 +651,19 @@ does and deliberately does not do.
 
 ## Status
 
-**Phases 0-3 plus the eBPF network-behavior layer shipped** (corroborating a
-claimed identity is what remains; JA3/JA4 and DNS-tunnel detection are decided
-against, both because they would need to read a payload, see
-[`idryx-plan.md`](idryx-plan.md)'s Phase 4):
+**Phases 0-3 plus the eBPF network-behavior layer shipped.** Corroborating a
+claimed identity, the last item on that layer's list, is under way rather than
+outstanding: `unrouted_egress` checks a claim against what an enforcement point
+says it governs. Comparing the rest of a Passport (owner, attestation, parent)
+is still nobody's. JA3/JA4 and DNS-tunnel detection are decided against, both
+because they would need to read a payload, see
+[`idryx-plan.md`](idryx-plan.md)'s Phase 4:
 
 - [x] Phase 0 - ITDR core, in-memory graph, CLI, CI
 - [x] Phase 1 - baseline engine, Entra/CloudTrail connectors, Slack/SIEM delivery, web dashboard, Postgres graph
 - [x] Phase 2 - NHI (AWS/GCP/Azure), agents + delegation graph, shadow AI/MCP, least-privilege
 - [x] Phase 3 - remediation: right-sizing + rotation Terraform, PR enforcement (read-only)
-- [x] 25 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
+- [x] 26 deterministic detectors across ITDR, NHI, agents/AI, and least-privilege
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [x] eBPF network-behavior layer (descoped first version): Linux sensor on
@@ -660,7 +672,8 @@ against, both because they would need to read a payload, see
       [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
       original larger spec's beaconing shipped 2026-08-09; JA3/JA4 and
       DNS-tunneling are decided against, and identity correlation is partly
-      built (a claim is read and marked as one)
+      built: a claim is read and marked as one, and `unrouted_egress` checks it
+      against an enforcement point's own journal
 - [x] Post-campaign hardening from live infrastructure (2026-07-21): `idryx serve`
       keeps the served graph live against a growing source instead of freezing it
       at boot, and the generic webhook sink can carry credentials

@@ -37,17 +37,22 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
-// knownTypes is the v0.1 tokenfuse event-type registry (SPEC §6.2), for
-// tokenfuse's own event types specifically, not the bus as a whole. The map
-// values equal their keys by construction (model.EventType is a string type
-// whose tokenfuse constants match the wire values verbatim); the map exists
-// so callers can name these types (e.g. in future detectors) without
-// stringly-typed literals scattered around, and so Report can tell a known
-// type from one outside the v0.1 registry. A type from a different bus
-// producer (e.g. wardryx's policy_deny, mockryx's sim_finding, verdryx's
+// knownTypes is the subset of the SPEC §6.2 registry that idryx names in code,
+// rather than the bus as a whole. The map values equal their keys by
+// construction (model.EventType is a string type whose constants match the wire
+// values verbatim); the map exists so callers can name these types without
+// stringly-typed literals scattered around, and so Report can tell a type idryx
+// reasons about from one it merely carries. A type from a producer nothing here
+// reasons about (wardryx's policy_deny, mockryx's sim_finding, verdryx's
 // quality_drift) is never in this map by design: it falls through the same
-// generic, tolerant path as an unrecognized tokenfuse type below, carried
-// through as a model.EventType(string), never dropped and never an error.
+// generic, tolerant path as an unrecognized type below, carried through as a
+// model.EventType(string), never dropped and never an error.
+//
+// scopyx's two joined the map when a detector started reading them
+// (unrouted_egress, which needs to tell a refusal from a fetch). Before that
+// they were carried through correctly and counted as unknown on every load,
+// which is what this map is for: the count means "outside what idryx names",
+// and a type a detector reads is inside it.
 var knownTypes = map[string]model.EventType{
 	"budget_exhausted": model.EventBudgetExhausted,
 	"sustained_loop":   model.EventSustainedLoop,
@@ -57,6 +62,8 @@ var knownTypes = map[string]model.EventType{
 	"dlp_block":        model.EventDLPBlock,
 	"taint_block":      model.EventTaintBlock,
 	"mcp_drift":        model.EventMCPDrift,
+	"web_fetch":        model.EventWebFetch,
+	"web_blocked":      model.EventWebBlocked,
 }
 
 // Report summarizes one Parse or Load call: how many lines were read, how

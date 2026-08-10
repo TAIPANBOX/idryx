@@ -1,0 +1,10 @@
+{
+  "flows": [
+    {"time": "2026-08-10T09:00:00.114Z", "identity": "claimed:agent://acme.example/planner", "destination": "10.96.0.10:53", "bytes": 0},
+    {"time": "2026-08-10T09:00:01.882Z", "identity": "claimed:agent://acme.example/planner", "destination": "api.anthropic.com:443", "bytes": 0},
+    {"time": "2026-08-10T09:00:04.271Z", "identity": "claimed:agent://acme.example/planner", "destination": "185.199.108.153:443", "bytes": 0},
+    {"time": "2026-08-10T09:00:04.933Z", "identity": "claimed:agent://acme.example/planner", "destination": "151.101.1.63:443", "bytes": 0},
+    {"time": "2026-08-10T09:00:12.006Z", "identity": "claimed:agent://acme.example/auditor", "destination": "10.96.0.10:53", "bytes": 0},
+    {"time": "2026-08-10T09:00:19.540Z", "identity": "proc:curl@cg8471", "destination": "203.0.113.42:443", "bytes": 0}
+  ]
+}

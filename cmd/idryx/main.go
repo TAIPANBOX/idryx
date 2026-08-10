@@ -349,6 +349,7 @@ var agentBusSources = map[string]bool{
 	"wardryx":   true,
 	"mockryx":   true,
 	"verdryx":   true,
+	"scopyx":    true,
 }
 
 // populate ingests one source spec into g. Inventory sources add identities;
@@ -541,6 +542,7 @@ func runDetectors(g graph.Reader) []model.Alert {
 		detectors.NewClaimedAgentUnknown(),
 		detectors.NewClaimedAgentDrift(),
 		detectors.NewUndeclaredLLM(),
+		detectors.NewUnroutedEgress(),
 	}
 	var alerts []model.Alert
 	for _, d := range ds {
@@ -576,7 +578,7 @@ func runDetect(args []string) error {
 	var (
 		format     = fs.String("format", "human", "output format: human|json")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx")
 		slackURL   = fs.String("slack", "", "Slack incoming-webhook URL to send alerts to")
 		webhookURL = fs.String("webhook", "", "generic JSON webhook URL to send alerts to (SIEM/SOAR)")
 		webhookHdr = headerList{}
@@ -732,7 +734,7 @@ func runBom(args []string) error {
 	var (
 		format     = fs.String("format", "json", "output format: json|human")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "agents", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
+		source     = fs.String("source", "agents", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)
 	var loads loadList
@@ -828,7 +830,7 @@ func runServe(args []string) error {
 	var (
 		addr       = fs.String("addr", defaultServeAddr, "address to listen on")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx")
 		ctPath     = fs.String("cloudtrail", "", "CloudTrail log to enrich aws_iam permission usage (with --source aws_iam or --load aws_iam:<path>; an error when the run reads neither)")
 		auditPath  = fs.String("gcp-audit", "", "Cloud Audit Log to enrich gcp_iam permission usage (with --source gcp_iam or --load gcp_iam:<path>; an error when the run reads neither)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
@@ -921,7 +923,7 @@ func runLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	var (
 		db         = fs.String("db", "", "Postgres DSN (required)")
-		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx")
+		source     = fs.String("source", "okta", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx")
 		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
 		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
 	)

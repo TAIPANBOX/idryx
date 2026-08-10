@@ -66,7 +66,8 @@ One core, many connectors. Data flows: **source → graph → detectors → outp
 cmd/idryx/main.go        CLI: detect | bom | serve | load | remediate | version
 internal/model           Identity, Event, Permission, Alert, Severity (the shared types)
 internal/ingest          source connectors -> []model.Event OR []model.Identity
-internal/ingest/tokenfuse  TokenFuse/Wardryx/Mockryx/Verdryx agent-event NDJSON connector
+internal/ingest/tokenfuse  agent-event NDJSON connector, shared by every bus producer
+                           (TokenFuse, Wardryx, Mockryx, Verdryx, scopyx)
 internal/ingest/passport   Agent Passport JSON ingestion
 internal/graph           Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
 internal/baseline        per-identity behavioral baseline (Build / NewProfile+Observe / Score)
@@ -122,7 +123,11 @@ Steps:
 2. Normalize vendor fields into the shared model, do not leak vendor shapes past
    the connector.
 3. Wire into `parseSource` **or** `parseInventory` (not both), and add the source
-   name to the `--source` help strings (there are three; keep them identical).
+   name to the `--source` help strings (there are FOUR: detect, bom, serve and
+   load each declare their own; keep them identical). This file said three
+   until 2026-08-10, which is the same shape as the gate list above: a count in
+   an instruction file is trusted and ages separately from what it counts.
+   `grep -c 'source: okta' cmd/idryx/main.go` settles it.
 4. Add `<source>_test.go` and a fixture under `testdata/`. Update the connectors
    table in `README.md` and the `make nhi`/`make detect` target if relevant.
 
@@ -209,7 +214,10 @@ an absent invariant.
    ported from. Every capability the sensor gains from now on is built in idryx:
    IPv6, the skipped counters, the cgroup, the kernel timestamp and the
    self-declared identity already are, beaconing shipped on 2026-08-09, and
-   corroborating a claim is what remains. DNS tunnelling joined JA3/JA4 as
+   corroborating a claim has begun: `unrouted_egress` (2026-08-10) checks a
+   claim against an enforcement point's own journal. What remains of it is the
+   rest of the Passport: owner, attestation and parent are still compared
+   against nothing. DNS tunnelling joined JA3/JA4 as
    decided against the same day: both need to read what the application wrote
    into its socket. Radar's role narrows to emitting what
    it observes into the shared agent-event stream; it does not grow new

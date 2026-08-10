@@ -110,11 +110,22 @@ rather than folding into the table above:
   invisible to this sensor entirely, so a volume-based approximation would be
   silent on an unknown share of real traffic while looking like coverage.
 
-- **Still deferred, and this one is a deferral rather than a decision.**
-  Corroborating a claimed identity: resolving a process to a governed identity
-  is partly built (agent-passport SPEC 3.3, read as a *claim*), and what
-  remains is checking a claim against the graph rather than believing it. That
-  needs no payload and no new hook.
+- **Corroborating a claimed identity: begun 2026-08-10, and narrower than it
+  sounds.** Resolving a process to a governed identity was already partly built
+  (agent-passport SPEC 3.3, read as a *claim*), and what was missing was
+  checking a claim against the graph rather than believing it. The
+  `unrouted_egress` detector does one form of that: it takes the web-egress
+  enforcement point's own journal as proof that a claim names an agent that
+  plane governs, and then judges that agent's directly-observed connections
+  against the fact that a governed fetch is made by the enforcement point's
+  process and never by the agent's.
+
+  Two things it does NOT establish, said here because "corroborated" would
+  overstate both. It does not make the claim true: a journal entry proves the
+  plane served an agent of that name through an authenticated credential, and
+  the process on the host still only says it is that agent. And it compares one
+  property. A Passport also carries the owner, the attestation and the parent,
+  and none of those is checked against anything by any detector.
 
   Beaconing shipped on 2026-08-09 and is no longer on this list. It works from
   connection timing alone, taken from the kernel's own clock, which is what
