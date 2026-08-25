@@ -138,7 +138,14 @@ Steps:
 - End every commit body with:
   `Co-Authored-By: Claude <noreply@anthropic.com>`
 - Never `--no-verify`, never force-push.
-- After committing, push to `origin main` and confirm `HEAD == origin/main`.
+- After committing, push the BRANCH and open a PR. `main` is protected and
+  refuses a direct push: `build`, `security`, `integration` and `ebpf (build)`
+  are required checks, and the rule applies to admins too, so there is no
+  account here that can put an unverified commit on `main`.
+- `gh pr merge <n> --squash --auto` queues the merge and GitHub performs it
+  when every check passes. The flag only queues where the repository allows
+  auto-merge; with that setting off it falls through and merges immediately,
+  which is how #50 landed 15 seconds before its `build` finished.
 - Everything in GitHub is **English** and the repo is **public**.
 
 ## Known false signals
