@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-304-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-309-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -255,7 +255,7 @@ suppresses scoring during a learning period to avoid false positives.
 | `privilege_escalation` | NHI | high | an NHI holding a stealthy escalation permission (AWS `iam:PassRole`/`PutRolePolicy`, GCP `actAs`/`getAccessToken`, Azure `roleAssignments/write`) that grants a path to admin without holding admin, matched against what the grant allows (an AWS policy document, a GCP predefined role, an Azure built-in role) rather than what it is called |
 | `shared_credential` | NHI | high | an NHI whose credential is used across many distinct IPs, countries, or devices, the signature of a leaked or shared key |
 | `excessive_agency` | Agents / AI | high, critical at deeper delegation | an AI agent that reaches admin-equivalent permissions through its delegation chain (OWASP LLM06) |
-| `shadow_ai` | Agents / AI | medium, high for NHIs/agents | an identity whose egress reaches a known external LLM API (OpenAI, Anthropic, Gemini) |
+| `shadow_ai` | Agents / AI | medium, high for NHIs/agents | an identity whose egress reaches a known external LLM API (OpenAI, Anthropic, Gemini, Azure OpenAI, Azure AI Foundry and Vertex AI among them). The cloud model surfaces are providers in their own right rather than spellings of OpenAI and Gemini: the provider id names where the bytes go, and through Azure that is Microsoft, through Vertex it is Google Cloud. Azure resources and Vertex regions are matched in the forms a deployment actually uses, `<resource>.openai.azure.com` and `<region>-aiplatform.googleapis.com` |
 | `unmanaged_egress` | Agents / AI | medium, high if the destination is a known LLM API | a real outbound connection observed only via the eBPF sensor (`idryx ebpf-capture`), attributable to a process name and nothing else: no IAM, agent-event, or Passport record for it |
 | `beaconing` | Agents / AI | medium, high if the destination is a known LLM API | connections to one destination on a regular cadence, measured as the coefficient of variation of their intervals: the shape of a process checking in on a timer rather than doing work. Cron and metrics agents beacon too, so the finding names the cadence for an operator to match against their own schedules |
 | `claimed_agent_unknown` | Agents / AI | high, critical if it also reached a known LLM API | a process that declared itself an `agent://` identity via `AGENT_PASSPORT_ID` (agent-passport SPEC 3.3) which no Passport, IAM record or agent-event in the graph names: an undeclared agent, or a wrong value. A self-declaration, never proof of identity |
