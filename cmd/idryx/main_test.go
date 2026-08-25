@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/idryx/internal/aiusage"
 	"github.com/TAIPANBOX/idryx/internal/bom"
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
@@ -1035,4 +1036,64 @@ func detectorAlerts(t *testing.T, g graph.Reader, name string) []model.Alert {
 		}
 	}
 	return out
+}
+
+// TestAIInventoryWiresTheObservedVocabulary is the wiring this command exists
+// to do, and the one thing a unit test of internal/aiusage cannot cover: that
+// package takes its host matcher as a parameter on purpose, so nothing inside
+// it can prove the REAL vocabulary reached it.
+//
+// If the wiring passed a matcher that recognises nothing, every unit test in
+// aiusage would still pass and the observed column would be empty forever,
+// which reads exactly like an estate whose agents reach no model.
+func TestAIInventoryWiresTheObservedVocabulary(t *testing.T) {
+	g := graph.New(nil)
+	for i, host := range []string{
+		"api.anthropic.com",
+		"contoso.openai.azure.com",
+		"us-central1-aiplatform.googleapis.com",
+	} {
+		id := fmt.Sprintf("agent:a%d", i)
+		g.AddIdentity(model.Identity{ID: id, Type: model.IdentityAgent})
+		g.AddEvent(model.Event{IdentityID: id, Type: model.EventEgress, Resource: host})
+	}
+
+	observed := map[string]bool{}
+	for _, row := range aiInventoryReport(g, nil).Rows {
+		if len(row.ObservedBy) > 0 {
+			observed[row.Provider] = true
+		}
+	}
+	for _, want := range []string{"anthropic", "azure-openai", "vertex"} {
+		if !observed[want] {
+			t.Errorf("the observed column has no %s: the real vocabulary did not reach the report, and every test in internal/aiusage would still pass", want)
+		}
+	}
+}
+
+// TestAIInventoryReadsAQryxDocument holds the seam between two repositories.
+// qryx writes this document and idryx reads it, and nothing but this test
+// compares the two shapes: a field renamed on either side would leave the CODE
+// column empty and nothing would be red.
+func TestAIInventoryReadsAQryxDocument(t *testing.T) {
+	doc := `{
+	  "schema": "qryx.ai-inventory/v1",
+	  "tool": { "name": "qryx", "version": "v0.4.0" },
+	  "root": "/src",
+	  "entries": [
+	    { "provider": "azure-openai", "role": "provider", "label": "Azure OpenAI SDK (python)",
+	      "occurrences": [ { "file": "app.py", "line": 1 } ] }
+	  ],
+	  "limits": [ "An empty result is not proof that a tree uses no AI." ]
+	}`
+	scan, err := aiusage.ParseCodeScan([]byte(doc))
+	if err != nil {
+		t.Fatalf("ParseCodeScan on a real qryx document: %v", err)
+	}
+	if got := scan.Providers["azure-openai"].Sites; got != 1 {
+		t.Errorf("azure-openai sites = %d, want 1", got)
+	}
+	if scan.Root != "/src" {
+		t.Errorf("root = %q, want /src", scan.Root)
+	}
 }

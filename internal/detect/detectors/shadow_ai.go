@@ -157,3 +157,22 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// MatchLLMHost is matchLLM for a caller outside this package, reduced to the
+// registered provider id from agent-passport SPEC 4.7.
+//
+// The estate's AI inventory needs the observed leg, and the vocabulary that
+// answers it lives here, with the sensor that watches the wire. Copying that
+// map into a report package would be a second copy of a list that grows, kept
+// by hand, in a file nobody edits when a host is added: the same shape as the
+// second copies this estate has already been bitten by.
+//
+// It hands back the id rather than the pair on purpose. The display name is
+// for an alert summary a person reads; a report that joins three sources
+// against a Passport's declaration compares ids and must never see the other
+// string, because "Google Gemini" is not "google" and a comparison that met it
+// would report drift that is spelling.
+func MatchLLMHost(dest string) (string, bool) {
+	p, ok := matchLLM(dest)
+	return p.id, ok
+}

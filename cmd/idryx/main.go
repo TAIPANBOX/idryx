@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/TAIPANBOX/idryx/internal/aiusage"
 	"github.com/TAIPANBOX/idryx/internal/bom"
 	"github.com/TAIPANBOX/idryx/internal/detect"
 	"github.com/TAIPANBOX/idryx/internal/detect/detectors"
@@ -87,6 +88,8 @@ func run(args []string) error {
 		return runDetect(args[1:])
 	case "bom":
 		return runBom(args[1:])
+	case "ai-inventory":
+		return runAIInventory(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "load":
@@ -775,6 +778,94 @@ func runBom(args []string) error {
 	default:
 		return fmt.Errorf("unknown format %q", *format)
 	}
+}
+
+// runAIInventory answers "where does this estate use AI models, and do the
+// three places that know disagree".
+//
+// It is its own command rather than a section of `bom`, and the reason is in
+// two doctrines that both point the same way. `internal/bom` says of itself
+// that it "only inventories the graph; it never scores or flags anything", and
+// `bom.JSON` writes CycloneDX, whose component model has no place for a
+// three-way reconciliation: putting one there would mislabel the document the
+// way an AI finding in a CBOM would.
+//
+// The coded leg is optional, and its absence is REPORTED rather than shown as
+// zeros. A source scan has no subject, so nothing binds one to an identity in
+// this graph, and a reader who took an empty third column for a measurement
+// would conclude the estate's code reaches no model at all.
+func runAIInventory(args []string) error {
+	fs := flag.NewFlagSet("ai-inventory", flag.ContinueOnError)
+	var (
+		format     = fs.String("format", "human", "output format: human|json")
+		privileged = fs.String("privileged", "", "comma-separated privileged identities (emails)")
+		source     = fs.String("source", "agents", "source: okta|entra|cloudtrail|egress|aws_iam|gcp_iam|azure|agents|mcp|tokenfuse|wardryx|mockryx|verdryx|scopyx")
+		passports  = fs.String("passports", "", "directory or glob of agent-passport JSON documents to enrich agent identities (owner/runtime/parent/attestation)")
+		codeScan   = fs.String("code-scan", "", "a qryx ai-inventory document (`qryx scan --format ai-inventory <path>`) to fill the CODE column; without it that column is not a measurement and the report says so")
+	)
+	var loads loadList
+	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load egress:e.json)")
+	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: idryx ai-inventory [flags] <log.json>\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path, err := inputArg(fs, *db, loads)
+	if err != nil {
+		return err
+	}
+
+	var scan *aiusage.CodeScan
+	if *codeScan != "" {
+		data, err := os.ReadFile(*codeScan)
+		if err != nil {
+			return fmt.Errorf("read --code-scan: %w", err)
+		}
+		scan, err = aiusage.ParseCodeScan(data)
+		if err != nil {
+			return err
+		}
+	}
+
+	g, err := buildGraph(*source, *privileged, path, *db, "", "", *passports, loads)
+	if err != nil {
+		return err
+	}
+
+	report := aiInventoryReport(g, scan)
+
+	switch *format {
+	case "json":
+		return aiusage.JSON(os.Stdout, report, version, time.Now().UTC().Format(time.RFC3339))
+	case "human":
+		aiusage.Human(os.Stdout, report)
+		return nil
+	default:
+		return fmt.Errorf("unknown format %q", *format)
+	}
+}
+
+// aiInventoryReport is the wiring, in a function so it can be tested.
+//
+// The observed vocabulary comes from the sensor that owns it. Passing it here
+// rather than importing it inside internal/aiusage keeps that package free of
+// the detectors, so a report never depends on a detector's internals for the
+// sake of one map.
+//
+// That parameter is also why this function exists rather than a line inside
+// runAIInventory. internal/aiusage takes its matcher from the caller, so every
+// test in that package supplies a fake, and NONE of them can tell whether the
+// real vocabulary ever reaches it. A matcher that recognises nothing would
+// leave the observed column empty in production while the whole suite stayed
+// green, and an empty observed column reads exactly like an estate whose
+// agents reach no model. Measured: replacing the argument below with a
+// matcher that always returns false left both packages green until this seam
+// had a test of its own.
+func aiInventoryReport(g graph.Reader, scan *aiusage.CodeScan) aiusage.Report {
+	return aiusage.Build(g, detectors.MatchLLMHost, scan)
 }
 
 // defaultServeAddr is the default bind address for `idryx serve`: loopback
