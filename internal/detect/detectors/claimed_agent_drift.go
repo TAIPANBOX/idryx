@@ -90,10 +90,12 @@ func (d *ClaimedAgentDrift) Detect(g graph.Reader) []model.Alert {
 			if !isLLM {
 				continue
 			}
-			if allowedProviders[strings.ToLower(provider)] || allowedHosts[normalizeHost(e.Resource)] {
+			// The comparison is on the registered id; what gets reported is
+			// the display name.
+			if allowedProviders[provider.id] || allowedHosts[normalizeHost(e.Resource)] {
 				continue
 			}
-			undeclared[provider] = true
+			undeclared[provider.display] = true
 		}
 		if len(undeclared) == 0 {
 			continue

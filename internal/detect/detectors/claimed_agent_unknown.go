@@ -82,7 +82,7 @@ func (d *ClaimedAgentUnknown) Detect(g graph.Reader) []model.Alert {
 				continue
 			}
 			if provider, ok := matchLLM(e.Resource); ok {
-				llmProviders[provider] = true
+				llmProviders[provider.display] = true
 			}
 		}
 
