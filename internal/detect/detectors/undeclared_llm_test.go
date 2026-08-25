@@ -213,17 +213,71 @@ func TestUndeclaredLLMGoogleDeclarationIsHonoured(t *testing.T) {
 	}
 }
 
+// TestUndeclaredLLMAzureAndVertexAreTheirOwnProviders exercises SPEC 4.7's
+// rule on the two ids the registry just gained: an id names the API surface the
+// bytes leave for, not the model family behind it. The same model reached
+// through Azure is a request to Microsoft, and through Vertex a request to
+// Google Cloud rather than to the generative language API, so `azure-openai` is
+// not `openai` and `vertex` is not `google`.
+//
+// Every case is asserted in both directions, because only the pair says
+// anything. A suppression that is too wide reports nothing at all, and an
+// estate with no findings looks exactly like a clean one.
+func TestUndeclaredLLMAzureAndVertexAreTheirOwnProviders(t *testing.T) {
+	withFixedNow(t)
+
+	cases := []struct {
+		name      string
+		declared  string
+		reached   string
+		wantDrift bool
+		names     string // what the summary must name when it does fire
+	}{
+		{"azure declared, azure reached", "azure-openai", "contoso.openai.azure.com", false, ""},
+		{"azure declared, foundry reached", "azure-openai", "contoso.services.ai.azure.com", false, ""},
+		{"openai declared, azure reached", "openai", "contoso.openai.azure.com", true, "Azure OpenAI"},
+		{"vertex declared, regional vertex reached", "vertex", "us-central1-aiplatform.googleapis.com", false, ""},
+		{"google declared, vertex reached", "google", "us-central1-aiplatform.googleapis.com", true, "Google Vertex AI"},
+		{"vertex declared, gemini reached", "vertex", "generativelanguage.googleapis.com", true, "Google Gemini"},
+		{"anthropic declared, azure reached", "anthropic", "contoso.openai.azure.com", true, "Azure OpenAI"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := graph.New(nil)
+			g.AddIdentity(model.Identity{
+				ID: "agent:x", Type: model.IdentityAgent,
+				DeclaredModels: []model.DeclaredModel{{Provider: c.declared}},
+			})
+			g.AddEvent(egress("agent:x", c.reached))
+
+			a, ok := detect(NewUndeclaredLLM(), g)["agent:x"]
+			if ok != c.wantDrift {
+				t.Fatalf("declared %q, reached %q: drift reported = %v, want %v (summary %q)",
+					c.declared, c.reached, ok, c.wantDrift, a.Summary)
+			}
+			if c.wantDrift && !strings.Contains(a.Summary, c.names) {
+				t.Errorf("summary %q does not name %q", a.Summary, c.names)
+			}
+		})
+	}
+}
+
 // TestObservedProviderIdsAreTheRegisteredOnes pins the observed-side
 // vocabulary the same way the declared side is pinned, and for the same
 // reason: these ids are a join key across three repositories, and a
 // misspelling here reports drift that does not exist.
 func TestObservedProviderIdsAreTheRegisteredOnes(t *testing.T) {
-	// agent-passport SPEC 4.7, as of 2026-08-25.
+	// agent-passport SPEC 4.7, as of 2026-08-25. `azure-openai` and `vertex`
+	// joined it that day (agent-passport PR #39) and are ids of their own
+	// rather than spellings of `openai` and `google`, because 4.7's id names
+	// the API surface the bytes leave for: Azure is Microsoft, and Vertex is
+	// Google Cloud rather than the generative language API.
 	registered := map[string]bool{
 		"anthropic": true, "openai": true, "google": true, "bedrock": true,
 		"mistral": true, "cohere": true, "groq": true, "together": true,
 		"perplexity": true, "replicate": true, "openrouter": true,
 		"huggingface": true, "ollama": true,
+		"azure-openai": true, "vertex": true,
 	}
 	if len(llmHosts) == 0 {
 		t.Fatal("no LLM hosts at all: this test measured nothing")

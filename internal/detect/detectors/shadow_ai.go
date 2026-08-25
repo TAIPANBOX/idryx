@@ -44,6 +44,44 @@ var llmHosts = map[string]llmProvider{
 	"api.together.xyz":                  {"together", "Together"},
 	"openrouter.ai":                     {"openrouter", "OpenRouter"},
 	"api.replicate.com":                 {"replicate", "Replicate"},
+
+	// Azure and Vertex carry ids of their own because 4.7's id names the API
+	// surface the bytes leave for, not the model family behind it. The same
+	// model reached through Azure is a request to Microsoft, and through Vertex
+	// a request to Google Cloud rather than to the generative language API. So
+	// an agent that declared `openai` and is observed on `*.openai.azure.com`
+	// has drifted, and folding these onto `openai` and `google` would hide
+	// exactly that.
+	//
+	// Every Azure resource gets its own subdomain, `<resource>.openai.azure.com`,
+	// so nothing ever connects to the registered host itself; the "." + host
+	// pass in matchLLM is what carries these. Vertex needs one more rule, and
+	// regionalPrefixHosts below is it.
+	"openai.azure.com":            {"azure-openai", "Azure OpenAI"},
+	"cognitiveservices.azure.com": {"azure-openai", "Azure OpenAI"},
+	"services.ai.azure.com":       {"azure-openai", "Azure AI Foundry"},
+	"aiplatform.googleapis.com":   {"vertex", "Google Vertex AI"},
+}
+
+// regionalPrefixHosts names the registered hosts whose regional endpoints put
+// the region in FRONT of the host, joined with a hyphen rather than a dot:
+// `us-central1-aiplatform.googleapis.com` is Vertex in us-central1, and it is
+// not a subdomain of `aiplatform.googleapis.com`, so no dot rule will ever see
+// it. Nearly every real Vertex call goes to a regional endpoint, which would
+// leave that entry registered and still blind.
+//
+// It is opt-in per host, and that is the whole of the safety argument. A dot is
+// a boundary somebody else already owns: anything ending in `.openrouter.ai`
+// was handed out by OpenRouter. A hyphen is not, and the same rule applied to
+// every entry would read `fake-openrouter.ai` as OpenRouter, a name anyone can
+// register for the price of a domain. Naming the wrong company in an alert is
+// the visible half of that; the silent half is that undeclared_llm SUPPRESSES a
+// finding when the observed provider is one the Passport declared, so an agent
+// declaring openrouter would have its egress to a lookalike domain filed as
+// expected traffic. What precedes the hyphen here is a label under
+// googleapis.com, which Google allocates, so no third party can occupy one.
+var regionalPrefixHosts = map[string]bool{
+	"aiplatform.googleapis.com": true,
 }
 
 // ShadowAI flags identities whose egress reaches a known external LLM API. A
@@ -89,7 +127,8 @@ func (d *ShadowAI) Detect(g graph.Reader) []model.Alert {
 }
 
 // matchLLM returns the provider for a destination host, stripping any port and
-// matching the registered LLM hosts (exact or subdomain).
+// matching the registered LLM hosts (exact, subdomain, or - for the hosts that
+// opt in - a region glued on with a hyphen).
 func matchLLM(dest string) (llmProvider, bool) {
 	host := dest
 	if i := strings.LastIndex(host, ":"); i >= 0 {
@@ -101,6 +140,9 @@ func matchLLM(dest string) (llmProvider, bool) {
 	}
 	for h, p := range llmHosts {
 		if strings.HasSuffix(host, "."+h) {
+			return p, true
+		}
+		if regionalPrefixHosts[h] && strings.HasSuffix(host, "-"+h) {
 			return p, true
 		}
 	}
