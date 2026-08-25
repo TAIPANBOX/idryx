@@ -71,17 +71,24 @@ func (d *UndeclaredLLM) Detect(g graph.Reader) []model.Alert {
 			if !ok {
 				continue
 			}
-			if declaredProviders[strings.ToLower(provider)] {
+			// Compared on the registered id, never on the display name.
+			// The declared side is already lowercased above, and 4.7's ids
+			// are lowercase by grammar, so the two meet without either
+			// being reshaped further, which is the whole of what 4.7 asks
+			// a consumer to do.
+			if declaredProviders[provider.id] {
 				continue // declared by provider: not a discrepancy
 			}
 			host := normalizeHost(e.Resource)
 			if declaredHosts[host] {
 				continue // declared by exact endpoint: not a discrepancy
 			}
-			if undeclared[provider] == nil {
-				undeclared[provider] = map[string]bool{}
+			// Grouped under the display name, because this map's keys are
+			// what the summary prints.
+			if undeclared[provider.display] == nil {
+				undeclared[provider.display] = map[string]bool{}
 			}
-			undeclared[provider][host] = true
+			undeclared[provider.display][host] = true
 		}
 		if len(undeclared) == 0 {
 			continue

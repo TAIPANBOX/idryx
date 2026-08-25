@@ -47,7 +47,7 @@ func (d *UnmanagedEgress) Detect(g graph.Reader) []model.Alert {
 			}
 			destinations = append(destinations, e.Resource)
 			if provider, ok := matchLLM(e.Resource); ok {
-				llmProviders[provider] = true
+				llmProviders[provider.display] = true
 			}
 		}
 		if len(destinations) == 0 {

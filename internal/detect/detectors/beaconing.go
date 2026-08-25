@@ -111,7 +111,7 @@ func (d *Beaconing) Detect(g graph.Reader) []model.Alert {
 			if provider, ok := matchLLM(dest); ok {
 				sev = model.SeverityHigh
 				summary = fmt.Sprintf("%d connections to %s (%s) on a regular cadence: every %s, varying by %.0f%%. A fixed cadence to a model API is a poll, not a conversation",
-					len(times), dest, provider, roundedInterval(mean), cv*100)
+					len(times), dest, provider.display, roundedInterval(mean), cv*100)
 			}
 
 			alerts = append(alerts, model.Alert{

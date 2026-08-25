@@ -183,3 +183,57 @@ func TestUndeclaredLLMDeterministic(t *testing.T) {
 		t.Errorf("non-deterministic output:\nfirst:  %+v\nsecond: %+v", first, second)
 	}
 }
+
+// TestUndeclaredLLMGoogleDeclarationIsHonoured is the whole reason the
+// observed side carries a registered id rather than a display name.
+//
+// agent-passport SPEC 4.7 registers `google` as the id naming Google's
+// generative language API. This detector lowercases both sides before
+// comparing, which 4.7 requires and which is enough for every other provider
+// here: "OpenAI" lowercases onto `openai`, "Groq" onto `groq`. It is not
+// enough for one, because the observed side used to call it "Google Gemini",
+// and "google gemini" is not "google".
+//
+// The consequence was not cosmetic. An agent that declares Google and reaches
+// Google was reported as reaching an undeclared provider, which is the one
+// thing an inventory must never do: the reader cannot tell it from real drift,
+// and the fix they would reach for is editing a passport that was already
+// right.
+func TestUndeclaredLLMGoogleDeclarationIsHonoured(t *testing.T) {
+	withFixedNow(t)
+	g := graph.New(nil)
+	g.AddIdentity(model.Identity{
+		ID: "agent:declares-google", Type: model.IdentityAgent,
+		DeclaredModels: []model.DeclaredModel{{Provider: "google"}},
+	})
+	g.AddEvent(egress("agent:declares-google", "generativelanguage.googleapis.com"))
+
+	if a, ok := detect(NewUndeclaredLLM(), g)["agent:declares-google"]; ok {
+		t.Errorf("an agent declaring google and reaching google was reported as drift: %q", a.Summary)
+	}
+}
+
+// TestObservedProviderIdsAreTheRegisteredOnes pins the observed-side
+// vocabulary the same way the declared side is pinned, and for the same
+// reason: these ids are a join key across three repositories, and a
+// misspelling here reports drift that does not exist.
+func TestObservedProviderIdsAreTheRegisteredOnes(t *testing.T) {
+	// agent-passport SPEC 4.7, as of 2026-08-25.
+	registered := map[string]bool{
+		"anthropic": true, "openai": true, "google": true, "bedrock": true,
+		"mistral": true, "cohere": true, "groq": true, "together": true,
+		"perplexity": true, "replicate": true, "openrouter": true,
+		"huggingface": true, "ollama": true,
+	}
+	if len(llmHosts) == 0 {
+		t.Fatal("no LLM hosts at all: this test measured nothing")
+	}
+	for host, p := range llmHosts {
+		if !registered[p.id] {
+			t.Errorf("%s: provider id %q is not registered in agent-passport SPEC 4.7", host, p.id)
+		}
+		if p.display == "" {
+			t.Errorf("%s: provider id %q has no display name, so an alert would read as a slug", host, p.id)
+		}
+	}
+}
