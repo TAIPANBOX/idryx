@@ -359,6 +359,59 @@ an absent invariant.
    result to expect from a ratchet: it is here so the next change to a gate
    cannot quietly remove its teeth, not because they were missing.
 
+10. **A report reports; a detector judges. The AI inventory is a report, and
+    the reason is structural rather than stylistic.**
+
+    `internal/aiusage` shows what three sources say about each provider and
+    names the shape of any disagreement. It never scores, never ranks and never
+    emits an alert. The judgement about ONE agent already exists and stays
+    where it is: `undeclared_llm` compares that agent's declaration against that
+    agent's own egress, which it can do because both sides carry the identity.
+
+    The coded side does not. A source scan finds a file and a line, and no
+    Passport field binds a repository to an identity, so the third leg cannot
+    produce a finding about an agent even in principle. A severity column here
+    would be a detector with no subject.
+
+    Two things follow and both are load-bearing. Providers are compared on the
+    id agent-passport SPEC 4.7 registers, **lowercased on both sides and not
+    reshaped further**, which is what 4.7 obliges a consumer to do and the most
+    one may do: stripping punctuation or folding an unregistered value onto a
+    registered one turns a spelling into a claim about which model an agent
+    uses. And an absent code scan is REPORTED rather than shown as zeros,
+    because an empty third column otherwise reads as an estate whose code
+    reaches no model at all.
+    *(test: `TestHumanNamesTheDisagreementRatherThanRankingIt` fails on any of
+    critical/high/severity/violation/fix appearing in the output;
+    `TestSpellingIsNotDrift`, verified red against a Build that does not
+    lowercase, where `Anthropic` and `anthropic` split into one row declared and
+    never reached and another reached and never declared;
+    `TestHumanSaysWhenThereIsNoCodeScan` and `TestCodeScanAbsenceIsVisible` hold
+    the absence half. No gate: what a script could grep for is whether the word
+    "severity" appears, which is the test above, and the rest is a property of a
+    call graph.)*
+
+11. **The wiring between `internal/aiusage` and the vocabulary it reports on has
+    its own test, because no test inside that package can reach it.**
+
+    `aiusage.Build` takes its host matcher as a parameter, deliberately, so the
+    report never depends on a detector's internals. The cost is that every test
+    in that package supplies a fake and none of them can tell whether the real
+    vocabulary ever arrives. A matcher recognising nothing would leave the
+    observed column empty in production while the entire suite stayed green,
+    and an empty observed column reads exactly like an estate whose agents reach
+    no model.
+
+    Measured rather than argued: replacing the argument in `aiInventoryReport`
+    with a matcher that always returns false left both `internal/aiusage` and
+    `cmd/idryx` green, until that seam had a test of its own.
+    *(test: `TestAIInventoryWiresTheObservedVocabulary` in
+    `cmd/idryx/main_test.go`, which builds a graph reaching a real Anthropic,
+    Azure and regional Vertex host and requires all three in the observed
+    column; verified red against exactly the mutation above.
+    `TestAIInventoryReadsAQryxDocument` holds the other seam, the document
+    shape qryx writes and this reads, which nothing else compares.)*
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**

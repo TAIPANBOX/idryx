@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-309-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-326-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -493,6 +493,11 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 ./bin/idryx bom <log.json>                          # JSON (CycloneDX-shaped), the default
 ./bin/idryx bom --format human <log.json>           # human-readable
 
+# where this estate uses AI models, and where the three sources disagree
+./bin/idryx ai-inventory --load agents:a.json --load egress:e.json \
+  --passports ./passports --code-scan qryx-ai-inventory.json
+./bin/idryx ai-inventory --format json ...           # for another program
+
 ./bin/idryx remediate --source aws_iam iam.json     # right-size + rotate stale credentials
 ./bin/idryx remediate --source agents agents.json   # right-size tools + rotate agent tokens
 ./bin/idryx remediate --source aws_iam --out ./tf iam.json  # write .tf artifacts + manifest.json (read-only)
@@ -557,6 +562,35 @@ the path.
 **Delegation graph** (`internal/graph`) - resolves `on_behalf_of` edges (agent
 -> sub-agent -> service account -> human) with cycle protection, computing each
 identity's effective permissions and blast radius.
+
+**AI inventory across three sources** (`internal/aiusage`, `idryx ai-inventory`)
+answers one question about an operator's own estate: where does it use AI
+models, and do the three places that know disagree?
+
+- **Declared**: what an agent's Passport says it is meant to use, agent-passport
+  SPEC 4.5's `models`.
+- **Observed**: what an identity was seen reaching, from the same egress the
+  `shadow_ai` and `undeclared_llm` detectors read.
+- **In code**: what a source scan found the code can reach, read from a qryx
+  document (`qryx scan --format ai-inventory <path>`) passed with `--code-scan`.
+
+The three are compared on the provider id SPEC 4.7 registers, lowercased on
+both sides and not reshaped further, which is what 4.7 obliges a consumer to do
+and the most one may do. Before that registry existed the same provider was
+`google` in one source and `Google Gemini` in another, and set arithmetic over
+the three reported drift that was spelling.
+
+It reports and does not rank. A provider found only in code is often correct, a
+provider reached and declared by nobody is often not, and which is which is a
+judgement about an estate this tool does not have; the per-identity judgement
+belongs to `undeclared_llm`, which can make it because both its sides carry the
+identity. **The coded column has no agent at all**: a source scan finds a file
+and a line, and nothing binds a repository to an identity, so its counts are
+estate-wide and it can never produce a finding about one agent.
+
+Every report carries what none of the three can see, including the scan's own
+limits, and says plainly when no scan was supplied, because an empty third
+column otherwise reads as an estate whose code reaches no model.
 
 **Agent-BOM** (`internal/bom`, `idryx bom`) - a defensive governance inventory
 of an operator's own AI agent identities: owner, runtime, attestation,
