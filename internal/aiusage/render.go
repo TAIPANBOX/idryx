@@ -79,7 +79,12 @@ func Human(w io.Writer, r Report) {
 				disagreement(row),
 			)
 		}
-		tw.Flush()
+		// Dropped deliberately, and consistently: every Fprintln above writes
+		// to the same w and discards its error too, the way bom.Human does. A
+		// writer that has failed has failed for all of them, and a report that
+		// returned an error only from its last flush would say the table broke
+		// when the whole output did.
+		_ = tw.Flush()
 	}
 
 	fmt.Fprintln(w)
