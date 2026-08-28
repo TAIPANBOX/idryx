@@ -5,7 +5,7 @@
 **Read-only connectors stitch humans, service accounts, keys, and AI agents into one identity / access graph, then flag excessive privilege and anomalous behavior.**
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
-![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)
+![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
 ![tests](https://img.shields.io/badge/tests-333-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
@@ -338,7 +338,7 @@ Design principles, held as hard rules:
 
 One language and three direct dependencies. `make build` produces a single binary that carries the dashboard, the detectors and the eBPF program inside it.
 
-- **Core, ingest, baseline, detection, remediation:** Go 1.26. Detection is Go rather than a separate analytics runtime on purpose: it is statistics and rules over the graph, it has to stay deterministic, and somebody eventually has to defend a finding by reading the code that made it.
+- **Core, ingest, baseline, detection, remediation:** Go 1.27. Detection is Go rather than a separate analytics runtime on purpose: it is statistics and rules over the graph, it has to stay deterministic, and somebody eventually has to defend a finding by reading the code that made it.
 - **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`) on the `sys_enter_connect` tracepoint, compiled with `bpf2go` and embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, and the only non-Go source in the repository.
 - **Graph:** in-memory by default, Postgres (`pgx/v5`, embedded `schema.sql`, additive `IF NOT EXISTS` migrations) as the alternative. Both satisfy the same `graph.Reader`, so detectors run unchanged against either. Delegation chains are walked in Go (`graph.WalkDelegationChain`, cycle-safe), not in SQL.
 - **API and dashboard:** Go `net/http`, a JSON API and one self-contained `html/template` page. No frontend build step, no CDN, no framework.
@@ -373,7 +373,7 @@ The version is still there, in the binary rather than in the filename:
 `idryx version` prints the tag it was built from. That is the harder of the two
 places to fake, since anything between us and you can rename a file.
 
-Or build from source (Go 1.26+):
+Or build from source (Go 1.27+):
 
 ```sh
 make build   # -> ./bin/idryx

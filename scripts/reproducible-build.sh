@@ -20,6 +20,11 @@
 #   published  idryx_v0.3.0_darwin_arm64 from the release page, built on an
 #              ubuntu runner cross-compiling to darwin/arm64
 #   local      the same tag, checked out and built on macOS
+#   toolchain  go1.26.5, which is what `go.mod` pinned at that tag
+# This repository has since moved to go1.27.0, so a rebuild today gives other
+# bytes without anything being wrong. The gate below compares two fresh builds
+# of the same source to each other, never to the digest above, so it is
+# unaffected.
 #   sha256     8c968574341f48775e898770e98cb586b620101668b86edec24428612e979a80
 # Different machine, different host OS, identical bytes.
 #
