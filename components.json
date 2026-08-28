@@ -1,0 +1,86 @@
+{
+  "$comment": [
+    "What this repository contributes to a running stack, and what a check may",
+    "believe about it. `checked` is proved against this repository by",
+    "internal/manifest/manifest_test.go in this repository's own CI; `declared` is",
+    "a statement nobody can verify and carries its own `why`.",
+    "",
+    "TWO COMPONENTS, ONE BINARY. estate.json says this repository runs `idryx` and",
+    "`idryx-detect`, and there is one package: they are two SUBCOMMANDS of it.",
+    "That is the fourth shape this schema has had to carry, after service, tool",
+    "and daemon, and it is why `subcommand` exists as a checked field. A manifest",
+    "that gave each component its own package would have had to invent one.",
+    "",
+    "THE PAIR IS THE FIFTH. `IDRYX_TRUST_DOMAIN` is not optional and not required:",
+    "it is required IF AND ONLY IF `IDRYX_EVENTS` is set, because the envelope",
+    "wants agent://<trust-domain>/<name> and only the operator can say the domain.",
+    "A `required: true/false` field cannot express that, so it is a checked fact of",
+    "its own, proved by running the binary three ways.",
+    "",
+    "AND ONE FACT WORTH READING BEFORE ANYBODY EXPOSES THIS. Nothing here",
+    "authenticates. /healthz and /api/identities both answer 200 with no",
+    "credential, which is correct for a read-only dashboard whose default bind is",
+    "loopback, and is the OPPOSITE of wardryx, where every /v1 route answers 401",
+    "without a key. Containment is the deployment's job and both server",
+    "deployments do it: stack-single publishes no port for it and stack-k8s gives",
+    "it a ClusterIP Service with no type. Declared here so that the day somebody",
+    "adds an ingress, the property they are changing is written down rather than",
+    "assumed."
+  ],
+  "schema": "taipanbox.dev/components/v1",
+  "repo": "TAIPANBOX/idryx",
+  "components": [
+    {
+      "name": "idryx",
+      "class": "service",
+      "checked": {
+        "package": "github.com/TAIPANBOX/idryx/cmd/idryx",
+        "subcommand": "serve",
+        "listen_default": "127.0.0.1:8080",
+        "health_path": "/healthz",
+        "env": {
+          "IDRYX_EVENTS": {
+            "required": false
+          },
+          "IDRYX_OTLP_ENDPOINT": {
+            "required": false
+          },
+          "IDRYX_TRUST_DOMAIN": {
+            "required": false
+          }
+        },
+        "unauthenticated_read": true,
+        "refuses_without_an_event_source": 1
+      },
+      "declared": {
+        "the_deployments_bind_it_wider_on_purpose": {
+          "value": "0.0.0.0:8081",
+          "why": "The declared default is loopback, and both server deployments pass --addr 0.0.0.0:8081 because a container or pod reaches its peers on no other interface. Neither publishes it outward: stack-single gives the service no `ports:` key at all and stack-k8s's Service has no `type`, so it is ClusterIP. The bind is wider and the reach is not."
+        }
+      }
+    },
+    {
+      "name": "idryx-detect",
+      "class": "tool",
+      "checked": {
+        "package": "github.com/TAIPANBOX/idryx/cmd/idryx",
+        "subcommand": "detect",
+        "exits_zero_with_nothing_configured": true
+      },
+      "declared": {
+        "it_is_the_scheduled_half": {
+          "value": "idryx-detect",
+          "why": "stack-up runs it at :37 past and stack-k8s as a CronJob, both as a fresh pass over the same event log the serving idryx reads. The name in estate.json's `runs` is the ROUTINE's name, not a binary's, which is why it maps to a subcommand here."
+        }
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "if_set": "IDRYX_EVENTS",
+      "then_required": "IDRYX_TRUST_DOMAIN",
+      "exit_code": 1,
+      "why": "idryx inventories identities under its own short ids and the envelope wants agent://<trust-domain>/<name>. Only the operator can say the domain, so it refuses rather than inventing one."
+    }
+  ]
+}
