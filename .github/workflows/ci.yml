@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -79,11 +82,11 @@ jobs:
           cache: true
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
       - name: gosec
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.8
           gosec -quiet ./...
 
   ebpf:
@@ -109,9 +112,14 @@ jobs:
       # kernel doesn't match one, e.g. Azure-hosted runners' own
       # backported kernel flavor.
       - name: install bpftool
+        # Digest fetched and verified 2026-09-06 against the release's own
+        # published .sha256sum sibling asset:
+        #   https://github.com/libbpf/bpftool/releases/download/v7.7.0/bpftool-v7.7.0-amd64.tar.gz.sha256sum
+        # which names this same digest for this same file.
         run: |
           curl -fsSL -o /tmp/bpftool.tar.gz \
             https://github.com/libbpf/bpftool/releases/download/v7.7.0/bpftool-v7.7.0-amd64.tar.gz
+          echo "09150596f09356b0ff632dd7f9856e0ea86bf96b269e9bc94278d9a9432a268c  /tmp/bpftool.tar.gz" | sha256sum -c -
           sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin bpftool
           sudo chmod +x /usr/local/bin/bpftool
       # Absolute path, not "sudo bpftool": sudo's secure_path can put a
