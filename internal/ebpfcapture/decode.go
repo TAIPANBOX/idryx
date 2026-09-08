@@ -113,8 +113,17 @@ func isLocalModelPort(port uint16) bool {
 // colon. JoinHostPort brackets it.
 func destination(ip net.IP, port uint16, llmIPs map[string]string) string {
 	host := ip.String()
-	if resolved, ok := llmIPs[host]; ok {
-		host = resolved
+	// Port 53 is name resolution, whichever address it went to. Go's resolver
+	// connect()s a UDP socket to every candidate address of a multi-address
+	// name on 53 while choosing a source address (RFC 6724, net/addrselect.go,
+	// srcAddrs) and sends nothing. Rendered under the hostname, that flow is an
+	// API call to every detector downstream, and on 2026-09-08 it graded a bare
+	// net.LookupHost HIGH, and the sensor itself HIGH for resolving its own host
+	// list. The flow is kept, under its raw address; only the label is refused.
+	if port != 53 {
+		if resolved, ok := llmIPs[host]; ok {
+			host = resolved
+		}
 	}
 	return net.JoinHostPort(host, itoa(port))
 }
