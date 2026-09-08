@@ -414,17 +414,21 @@ an absent invariant.
     `TestAIInventoryReadsAQryxDocument` holds the other seam, the document
     shape qryx writes and this reads, which nothing else compares.)*
 
-12. **A connect on port 53 is name resolution, not egress, whichever address it
-    went to.** Go's resolver `connect()`s a UDP socket to every candidate
-    address of a multi-address name on port 53 while choosing a source address
-    (RFC 6724, `net/addrselect.go`), and sends nothing. Rendered under the LLM
-    hostname it resolved to, such a flow is an API call to every detector
-    downstream, and `unmanaged_egress` grades it HIGH: measured 2026-09-08, a
-    20-line `net.LookupHost` program drew that grade, and so did the sensor
-    itself for resolving its own host list. So `destination()` never consults
-    the LLM map for port 53. The flow is kept, under its raw address.
-    *(test: `TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname`,
-    red on the unfixed `destination()`)*
+12. **A provider address wears its hostname only on port 443, the one port
+    those providers serve.** Resolvers choosing a source address per RFC 6724
+    `connect()` a UDP socket to every candidate address of a multi-address
+    name and send nothing: Go on 53, musl on 65535 when the results span both
+    families, both measured 2026-09-08, glibc not at all. Rendered under the
+    provider hostname, such a flow is an API call to every detector downstream
+    and `unmanaged_egress` grades it HIGH; a bare `net.LookupHost` drew that
+    grade, so did the sensor itself for resolving its own host list, and so
+    would any Alpine process on a dual-stack host. So `destination()` consults
+    the provider map only on 443. The flow is kept, under its raw address. The
+    rule first excluded port 53 alone (#68); #70 measured musl and generalised
+    it, because naming resolver ports one by one chases libcs.
+    *(test: `TestAProviderAddressWearsItsHostnameOnlyOn443`, red on the port-53
+    rule, and `TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname`,
+    red on the rule before that)*
 
 13. **The sensor decides "self" by the tgid its own PID namespace assigns,
     never by the kernel's pid, and addresses `/proc` by the pid that namespace

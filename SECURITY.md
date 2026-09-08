@@ -65,17 +65,21 @@ rather than folding into the table above:
   address/port. It never reads packet payloads, never terminates or inspects
   TLS, and captures no data after the connection is established (`Bytes` is
   always `0` in its output -- see `internal/ebpfcapture/flow.go`).
-- **A connect on port 53 is name resolution, not egress, whichever address it
-  went to.** Go's resolver, choosing a source address per RFC 6724, `connect()`s
-  a UDP socket to every candidate address of a multi-address name on port 53
-  and sends nothing (`net/addrselect.go`, `srcAddrs`). So a process that merely
-  looked up `api.openai.com` produces one such connect per A record, and
-  rendered under the hostname those read as API calls: measured 2026-09-08,
-  `unmanaged_egress` graded a 20-line `net.LookupHost` program HIGH, and graded
-  the sensor itself HIGH for resolving its own LLM host list. The sensor keeps
-  such a flow in the log under its raw address and never under an LLM
-  hostname, so it is graded like any other unattributed connect. A rendering
-  rule, not a filter: nothing the kernel reported is dropped.
+- **A provider address wears its hostname only on port 443, the one port
+  those providers serve.** Resolvers choosing a source address per RFC 6724
+  `connect()` a UDP socket to every candidate address of a multi-address name
+  and send nothing: Go on port 53 (`net/addrselect.go`, `srcAddrs`), musl on
+  port 65535 whenever the results span both families. Both were measured on
+  2026-09-08 under this sensor; glibc showed no such probe. Rendered under the
+  hostname, such a flow reads as an API call to every detector downstream:
+  `unmanaged_egress` graded a 20-line `net.LookupHost` program HIGH, graded the
+  sensor itself HIGH for resolving its own host list, and would grade any
+  Alpine process on a dual-stack host the same way. The sensor keeps such a
+  flow in the log under its raw address and never under a provider hostname,
+  so it is graded like any other unattributed connect. A rendering rule, not a
+  filter: nothing the kernel reported is dropped. It first excluded port 53
+  alone; naming resolver ports one by one chases libcs, naming the port the
+  API is served on does not.
 - **Self is decided by the tgid the sensor's own PID namespace assigns, never
   by the kernel's pid.** `bpf_get_current_pid_tgid()` numbers a task in the
   initial namespace and `os.Getpid()` in the sensor's own, so inside a
