@@ -117,14 +117,18 @@ func isLocalModelPort(port uint16) bool {
 // colon. JoinHostPort brackets it.
 func destination(ip net.IP, port uint16, llmIPs map[string]string) string {
 	host := ip.String()
-	// Port 53 is name resolution, whichever address it went to. Go's resolver
-	// connect()s a UDP socket to every candidate address of a multi-address
-	// name on 53 while choosing a source address (RFC 6724, net/addrselect.go,
-	// srcAddrs) and sends nothing. Rendered under the hostname, that flow is an
-	// API call to every detector downstream, and on 2026-09-08 it graded a bare
-	// net.LookupHost HIGH, and the sensor itself HIGH for resolving its own host
-	// list. The flow is kept, under its raw address; only the label is refused.
-	if port != 53 {
+	// A provider address wears its hostname only on 443, the one port those
+	// providers serve. Resolvers choosing a source address per RFC 6724
+	// connect() a UDP socket to every candidate address of a multi-address name
+	// and send nothing: Go on port 53 (net/addrselect.go, srcAddrs), musl on
+	// 65535 whenever the results span both families, both measured 2026-09-08.
+	// Rendered under the hostname, such a flow is an API call to every detector
+	// downstream, and it graded a bare net.LookupHost HIGH, the sensor itself
+	// HIGH for resolving its own host list, and would grade any Alpine process
+	// on a dual-stack host the same way. Naming resolver ports one by one chases
+	// libcs; naming the port the API is served on does not. The flow is kept,
+	// under its raw address; only the label is refused.
+	if port == 443 {
 		if resolved, ok := llmIPs[host]; ok {
 			host = resolved
 		}

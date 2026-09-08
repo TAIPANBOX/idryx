@@ -223,6 +223,30 @@ func TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname(t *testing.T
 	}
 }
 
+// A provider address wears its hostname only on 443, the one port those
+// providers serve. Port 53 was Go's resolver probing every candidate address
+// while choosing a source address (#67); measured 2026-09-08, musl does the
+// same on port 65535 whenever a name returns more than one family (#70), so
+// an Alpine process that merely resolved api.openai.com on a dual-stack host
+// would still have read as an API call under a rule that only knew 53.
+// Naming resolver ports one by one chases libcs; naming the one port the API
+// is actually served on does not.
+func TestAProviderAddressWearsItsHostnameOnlyOn443(t *testing.T) {
+	llm := map[string]string{"1.2.3.4": "api.openai.com", "2606:4700:4700::1111": "api.anthropic.com"}
+
+	if got := destination(net.ParseIP("1.2.3.4"), 443, llm); got != "api.openai.com:443" {
+		t.Errorf("443 = %q, want api.openai.com:443", got)
+	}
+	for _, port := range []uint16{53, 65535, 8080, 80} {
+		if got := destination(net.ParseIP("1.2.3.4"), port, llm); got != net.JoinHostPort("1.2.3.4", itoa(port)) {
+			t.Errorf("IPv4 on %d = %q, want the raw address", port, got)
+		}
+		if got := destination(net.ParseIP("2606:4700:4700::1111"), port, llm); got != net.JoinHostPort("2606:4700:4700::1111", itoa(port)) {
+			t.Errorf("IPv6 on %d = %q, want the raw address", port, got)
+		}
+	}
+}
+
 func TestLocalModelPortsAreOneListForFilterAndClassifier(t *testing.T) {
 	for _, p := range []uint16{11434, 8000, 8001} {
 		if !isLocalModelPort(p) {
