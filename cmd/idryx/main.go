@@ -1334,7 +1334,7 @@ func runEBPFCapture(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx ebpf-capture [flags]\n\nflags:\n")
 		fs.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nrequires Linux, root (or CAP_BPF+CAP_PERFMON), and a BTF-enabled kernel; see SECURITY.md.\n")
+		fmt.Fprintf(os.Stderr, "\nrequires Linux 5.7 or later, root (or CAP_BPF+CAP_PERFMON), and a BTF-enabled kernel; see SECURITY.md.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err

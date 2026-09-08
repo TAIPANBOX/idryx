@@ -23,15 +23,17 @@ import (
 
 // connEventSize is sizeof(struct conn_event) in connect.c: 8 (cgroup_id) +
 // 8 (ktime_ns) + 4 (pid) + 2 (dport) + 1 (family) + 1 (pad) + 16 (daddr) +
-// 16 (comm) = 56 bytes. decodeConnEvent refuses anything shorter, so a future connect.c
-// change that isn't mirrored here fails loudly (a skipped record, counted by
-// the caller) rather than silently misreading a shifted layout.
+// 16 (comm) + 4 (ns_tgid) + 4 (pad) = 64 bytes. decodeConnEvent refuses
+// anything shorter, so a future connect.c change that isn't mirrored here fails
+// loudly (a skipped record, counted by the caller) rather than silently
+// misreading a shifted layout.
 //
 // It was 28 while the sensor was AF_INET-only, 40 when the address field became
-// 16 bytes for both families, 48 with the cgroup id, and 56 with the kernel
-// timestamp. The two 8-byte fields lead the struct because anywhere else they
-// force padding the two sides have to agree about implicitly.
-const connEventSize = 56
+// 16 bytes for both families, 48 with the cgroup id, 56 with the kernel
+// timestamp, and 64 with the namespaced tgid, which joined at the end so that
+// no earlier offset moved. The two 8-byte fields lead the struct because
+// anywhere else they force padding the two sides have to agree about implicitly.
+const connEventSize = 64
 
 // decodedConnEvent is conn_event's already-byte-order-resolved form: dport and
 // daddr converted out of connect.c's deliberately-raw wire bytes (see
@@ -46,6 +48,7 @@ type decodedConnEvent struct {
 	cgroupID uint64
 	ktimeNS  uint64
 	pid      uint32
+	nsTgid   uint32
 	dport    uint16
 	family   uint8
 	daddr    [16]byte
@@ -86,6 +89,7 @@ func decodeConnEvent(raw []byte) (decodedConnEvent, bool) {
 	ev.family = raw[22]                                // 4 or 6, written by connect.c; raw[23] is declared padding
 	copy(ev.daddr[:], raw[24:40])                      // raw address bytes, read octet-by-octet, no numeric byte-order question at all
 	copy(ev.comm[:], raw[40:56])
+	ev.nsTgid = binary.LittleEndian.Uint32(raw[56:60]) // tgid as the sensor's own PID namespace numbers it; 0 outside it. raw[60:64] is declared padding
 	return ev, true
 }
 

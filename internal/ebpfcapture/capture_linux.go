@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf/link"
@@ -80,9 +81,38 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 		return nil, skipped, fmt.Errorf("ebpfcapture: remove memlock rlimit: %w", err)
 	}
 
+	// The sensor's own PID namespace, handed to the program before it loads.
+	// bpf_get_current_pid_tgid() numbers tasks in the INITIAL namespace and
+	// os.Getpid() in this one; inside a container they never agree, and a
+	// self-filter that compared them silently did nothing (2026-09-08: 16 of
+	// the 21 flows it reported were its own, TAIPANBOX/idryx#66). So the
+	// program is told which namespace "self" means, reports every task's tgid
+	// as that namespace sees it (0 for a task it cannot see), and self is
+	// decided on that field alone. A kernel without bpf_get_ns_current_pid_tgid
+	// (before 5.7) refuses to load the program: the loud failure this sensor
+	// promises everywhere else, rather than a filter that quietly matches nothing.
+	var nsStat syscall.Stat_t
+	if err := syscall.Stat("/proc/self/ns/pid", &nsStat); err != nil {
+		return nil, skipped, fmt.Errorf("ebpfcapture: identify own PID namespace (/proc/self/ns/pid): %w", err)
+	}
+	inInitPidNS := nsStat.Ino == procPidInitIno
+
+	spec, err := loadBpf()
+	if err != nil {
+		return nil, skipped, fmt.Errorf("ebpfcapture: load eBPF spec: %w", err)
+	}
+	for name, val := range map[string]uint64{"self_pidns_dev": uint64(nsStat.Dev), "self_pidns_ino": nsStat.Ino} { // #nosec G115 -- Dev is a dev_t, well inside uint64
+		v, ok := spec.Variables[name]
+		if !ok {
+			return nil, skipped, fmt.Errorf("ebpfcapture: the eBPF object has no %s: connect.c and the committed object disagree, regenerate", name)
+		}
+		if err := v.Set(val); err != nil {
+			return nil, skipped, fmt.Errorf("ebpfcapture: set %s: %w", name, err)
+		}
+	}
 	var objs bpfObjects
-	if err := loadBpfObjects(&objs, nil); err != nil {
-		return nil, skipped, fmt.Errorf("ebpfcapture: load eBPF objects (need root + a BTF-enabled kernel, see /sys/kernel/btf/vmlinux): %w", err)
+	if err := spec.LoadAndAssign(&objs, nil); err != nil {
+		return nil, skipped, fmt.Errorf("ebpfcapture: load eBPF objects (need root, a BTF-enabled kernel with /sys/kernel/btf/vmlinux, and bpf_get_ns_current_pid_tgid, Linux 5.7 or later): %w", err)
 	}
 	defer objs.Close()
 
@@ -102,7 +132,7 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 	// Taken once for the whole capture, so every flow lands on one consistent
 	// mapping from the kernel's clock to the wall clock. See clock.go.
 	clock := newClockOffset()
-	selfPID := uint32(os.Getpid()) // #nosec G115 -- os.Getpid() is bounded by the kernel's pid_max (never remotely near uint32 range); ev.pid (below) is the same uint32 PID representation the kernel itself hands the eBPF program
+	selfPID := uint32(os.Getpid()) // #nosec G115 -- os.Getpid() is bounded by the kernel's pid_max (never remotely near uint32 range); compared with ev.nsTgid, the same number as the kernel reports it for this namespace
 
 	stop := make(chan struct{})
 	var stopOnce sync.Once
@@ -126,7 +156,7 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 			return flows, readSkipped(&objs), fmt.Errorf("ebpfcapture: read ring buffer: %w", err)
 		}
 		ev, ok := decodeConnEvent(record.RawSample)
-		if !ok || ev.dport == 0 || ev.pid == selfPID {
+		if !ok || ev.dport == 0 || isSelf(ev, selfPID) {
 			continue
 		}
 		ip := ev.IP()
@@ -153,7 +183,7 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 		// reading nothing, because it would be a plausible answer about the
 		// wrong subject.
 		identity := Identity(comm, ev.cgroupID)
-		claimed := ClaimedIdentity(claimedAgentURI(ev.pid))
+		claimed := ClaimedIdentity(claimedAgentURI(procPIDFor(ev, inInitPidNS)))
 		if claimed != "" {
 			identity = claimed
 		}

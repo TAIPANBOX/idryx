@@ -46,7 +46,8 @@ char LICENSE[] SEC("license") = "GPL";
 // The two 8-byte fields lead, for alignment: anywhere else they make the
 // compiler insert padding the two sides then have to agree about implicitly.
 // With them first, every offset below is its own size's multiple and the total
-// is 56 with nothing left to interpretation.
+// is 64 with nothing left to interpretation (56 until ns_tgid joined at the end,
+// where it moved no earlier offset).
 //
 // ktime_ns is the kernel's own monotonic clock at the moment of the syscall,
 // and it is here because the userspace timestamp is not the same measurement.
@@ -64,6 +65,8 @@ struct conn_event {
 	__u8 _pad0;        // explicit, see above
 	__u8 daddr[16];    // raw address bytes; IPv4 in [0..4), zero-filled after
 	char comm[16];     // NUL-padded process name (bpf_get_current_comm's own format)
+	__u32 ns_tgid;     // tgid as the sensor's own PID namespace numbers it; 0 for a task outside it
+	__u32 _pad1;       // explicit: keeps the total at 64, a multiple of 8, with nothing left to the compiler
 };
 
 // skipped counts what the program saw and did NOT put on the ring buffer, per
@@ -112,6 +115,21 @@ struct sockaddr_in6_local {
 
 #define AF_INET 2
 #define AF_INET6 10
+
+// The sensor's own PID namespace, as the (dev, inode) of /proc/self/ns/pid,
+// written by userspace before the program is loaded. bpf_get_current_pid_tgid()
+// reports the pid in the INITIAL namespace, while inside a container
+// os.Getpid() is the namespaced one, so a self-filter that compares the two
+// never matches there: measured 2026-09-08, the sensor reported 16 of its own
+// 21 flows from a container (TAIPANBOX/idryx#66). With these set, the program
+// also reports each task's tgid as that namespace numbers it, via
+// bpf_get_ns_current_pid_tgid(), which answers only for tasks whose active PID
+// namespace is the one named here and refuses (-EINVAL) for every other task;
+// the field is then 0, and userspace decides self on that field alone. Zero
+// here means "not set", and userspace refuses to run that way rather than
+// capture with a filter that silently does nothing.
+const volatile __u64 self_pidns_dev = 0;
+const volatile __u64 self_pidns_ino = 0;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -216,6 +234,17 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	ev->pid = pid_tgid >> 32;
 	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+
+	// The same task's tgid as the sensor's own PID namespace numbers it, or 0
+	// for a task that namespace cannot see. -EINVAL is the kernel's normal
+	// answer for a task in another namespace, not a fault, and 0 says so.
+	ev->ns_tgid = 0;
+	ev->_pad1 = 0;
+	if (self_pidns_ino != 0) {
+		struct bpf_pidns_info ns = {};
+		if (bpf_get_ns_current_pid_tgid(self_pidns_dev, self_pidns_ino, &ns, sizeof(ns)) == 0)
+			ev->ns_tgid = ns.tgid;
+	}
 
 	// The cgroup this process belongs to, read in the process's own context
 	// rather than from /proc afterwards. That difference is the whole reason

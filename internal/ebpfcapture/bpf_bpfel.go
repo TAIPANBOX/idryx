@@ -23,6 +23,8 @@ type bpfConnEvent struct {
 	Pad0     uint8
 	Daddr    [16]uint8
 	Comm     [16]int8
+	NsTgid   uint32
+	Pad1     uint32
 }
 
 type bpfSkippedCounts struct {
@@ -39,6 +41,8 @@ const (
 	bpfMapEvents              = "events"
 	bpfMapSkipped             = "skipped"
 	bpfProgOnConnect          = "on_connect"
+	bpfVarSelfPidnsDev        = "self_pidns_dev"
+	bpfVarSelfPidnsIno        = "self_pidns_ino"
 	bpfVarUnusedConnEvent     = "unused_conn_event"
 	bpfVarUnusedSkippedCounts = "unused_skipped_counts"
 )
@@ -100,6 +104,8 @@ type bpfMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
+	SelfPidnsDev        *ebpf.VariableSpec `ebpf:"self_pidns_dev"`
+	SelfPidnsIno        *ebpf.VariableSpec `ebpf:"self_pidns_ino"`
 	UnusedConnEvent     *ebpf.VariableSpec `ebpf:"unused_conn_event"`
 	UnusedSkippedCounts *ebpf.VariableSpec `ebpf:"unused_skipped_counts"`
 }
@@ -139,6 +145,8 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
+	SelfPidnsDev        *ebpf.Variable `ebpf:"self_pidns_dev"`
+	SelfPidnsIno        *ebpf.Variable `ebpf:"self_pidns_ino"`
 	UnusedConnEvent     *ebpf.Variable `ebpf:"unused_conn_event"`
 	UnusedSkippedCounts *ebpf.Variable `ebpf:"unused_skipped_counts"`
 }

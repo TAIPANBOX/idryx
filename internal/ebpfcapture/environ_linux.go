@@ -27,6 +27,9 @@ import (
 // /proc, and no lookup of a pid this sensor has not just observed connecting.
 // The read is a side effect of an observation, never a search.
 func claimedAgentURI(pid uint32) string {
+	if pid == 0 {
+		return "" // a task this /proc cannot address (another PID namespace): not declared
+	}
 	data, err := os.ReadFile("/proc/" + strconv.FormatUint(uint64(pid), 10) + "/environ")
 	if err != nil {
 		return "" // exited, permission, namespace: all "not declared"

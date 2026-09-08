@@ -1,6 +1,7 @@
 package ebpfcapture
 
 import (
+	"encoding/binary"
 	"math"
 	"net"
 	"strings"
@@ -157,7 +158,7 @@ func TestDecodeConnEventRefusesAShortRecord(t *testing.T) {
 // connect.c. Nothing compiles the two together, so this pins the number the
 // decoder actually indexes with.
 func TestConnEventSizeMatchesTheOffsetsTheDecoderUses(t *testing.T) {
-	const fields = 8 + 8 + 4 + 2 + 1 + 1 + 16 + 16 // cgroup + ktime + pid + dport + family + pad + daddr + comm
+	const fields = 8 + 8 + 4 + 2 + 1 + 1 + 16 + 16 + 4 + 4 // cgroup + ktime + pid + dport + family + pad + daddr + comm + ns_tgid + pad
 	if connEventSize != fields {
 		t.Errorf("connEventSize = %d, but the fields the decoder reads span %d bytes", connEventSize, fields)
 	}
@@ -342,6 +343,26 @@ func TestTheCgroupSeparatesTwoContainersRunningTheSameBinary(t *testing.T) {
 // produced before cgroups existed here, not "proc:curl@cg0": zero means absent,
 // and an absent cgroup rendered as cgroup zero would group every unattributed
 // process on such a host into one identity.
+// The namespaced tgid rides at the end of the record so every earlier offset
+// stays where it was, and a 56-byte record from an older connect.c is refused
+// rather than read with the field missing.
+func TestDecodeReadsTheNamespacedTGIDFromItsOwnOffset(t *testing.T) {
+	raw := make([]byte, 64)
+	binary.LittleEndian.PutUint32(raw[16:20], 4242) // the kernel's pid
+	raw[22] = 4
+	binary.LittleEndian.PutUint32(raw[56:60], 7) // the tgid in the sensor's own namespace
+	ev, ok := decodeConnEvent(raw)
+	if !ok {
+		t.Fatal("a 64-byte record was refused")
+	}
+	if ev.pid != 4242 || ev.nsTgid != 7 {
+		t.Errorf("pid=%d nsTgid=%d, want 4242 and 7", ev.pid, ev.nsTgid)
+	}
+	if _, ok := decodeConnEvent(raw[:56]); ok {
+		t.Error("a 56-byte record from an older connect.c was accepted")
+	}
+}
+
 func TestAnAbsentCgroupLeavesTheIdentityUnqualified(t *testing.T) {
 	if got := Identity("curl", 0); got != "proc:curl" {
 		t.Errorf("identity = %q, want proc:curl", got)
