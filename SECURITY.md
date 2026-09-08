@@ -65,6 +65,17 @@ rather than folding into the table above:
   address/port. It never reads packet payloads, never terminates or inspects
   TLS, and captures no data after the connection is established (`Bytes` is
   always `0` in its output -- see `internal/ebpfcapture/flow.go`).
+- **A connect on port 53 is name resolution, not egress, whichever address it
+  went to.** Go's resolver, choosing a source address per RFC 6724, `connect()`s
+  a UDP socket to every candidate address of a multi-address name on port 53
+  and sends nothing (`net/addrselect.go`, `srcAddrs`). So a process that merely
+  looked up `api.openai.com` produces one such connect per A record, and
+  rendered under the hostname those read as API calls: measured 2026-09-08,
+  `unmanaged_egress` graded a 20-line `net.LookupHost` program HIGH, and graded
+  the sensor itself HIGH for resolving its own LLM host list. The sensor keeps
+  such a flow in the log under its raw address and never under an LLM
+  hostname, so it is graded like any other unattributed connect. A rendering
+  rule, not a filter: nothing the kernel reported is dropped.
 - **The BPF program is load-only, not enforcement.** `connect.c`'s
   `on_connect` handler only copies fields into a ring buffer; it never
   returns a non-zero verdict that could block or alter the syscall. A kernel

@@ -412,6 +412,18 @@ an absent invariant.
     `TestAIInventoryReadsAQryxDocument` holds the other seam, the document
     shape qryx writes and this reads, which nothing else compares.)*
 
+12. **A connect on port 53 is name resolution, not egress, whichever address it
+    went to.** Go's resolver `connect()`s a UDP socket to every candidate
+    address of a multi-address name on port 53 while choosing a source address
+    (RFC 6724, `net/addrselect.go`), and sends nothing. Rendered under the LLM
+    hostname it resolved to, such a flow is an API call to every detector
+    downstream, and `unmanaged_egress` grades it HIGH: measured 2026-09-08, a
+    20-line `net.LookupHost` program drew that grade, and so did the sensor
+    itself for resolving its own host list. So `destination()` never consults
+    the LLM map for port 53. The flow is kept, under its raw address.
+    *(test: `TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname`,
+    red on the unfixed `destination()`)*
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**

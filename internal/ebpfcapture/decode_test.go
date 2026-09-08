@@ -197,6 +197,31 @@ func TestAKnownLLMAddressIsRenderedUnderItsHostname(t *testing.T) {
 	}
 }
 
+// A connect on port 53 is name resolution, whichever address it went to. Go's
+// resolver, choosing a source address per RFC 6724, connect()s a UDP socket to
+// EVERY candidate address of a multi-address name on port 53 and sends nothing
+// (net/addrselect.go, srcAddrs), so a process that merely looked up
+// api.openai.com produces one such connect per A record. Rendered under the
+// hostname, those flows read as API calls and unmanaged_egress grades them
+// HIGH: measured 2026-09-08, the sensor graded ITSELF that way for resolving
+// its own LLM host list. The flow stays in the log; it keeps its raw address,
+// and the grade falls back to what any unattributed connect gets.
+func TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname(t *testing.T) {
+	llm := map[string]string{"1.2.3.4": "api.openai.com", "2606:4700:4700::1111": "api.anthropic.com"}
+
+	if got := destination(net.ParseIP("1.2.3.4"), 53, llm); got != "1.2.3.4:53" {
+		t.Errorf("IPv4 on 53 = %q, want the raw address 1.2.3.4:53", got)
+	}
+	if got := destination(net.ParseIP("2606:4700:4700::1111"), 53, llm); got != "[2606:4700:4700::1111]:53" {
+		t.Errorf("IPv6 on 53 = %q, want the raw address [2606:4700:4700::1111]:53", got)
+	}
+	// The same address on an API port still resolves: the rule is about the
+	// port, not the address.
+	if got := destination(net.ParseIP("1.2.3.4"), 443, llm); got != "api.openai.com:443" {
+		t.Errorf("IPv4 on 443 = %q, want api.openai.com:443", got)
+	}
+}
+
 func TestLocalModelPortsAreOneListForFilterAndClassifier(t *testing.T) {
 	for _, p := range []uint16{11434, 8000, 8001} {
 		if !isLocalModelPort(p) {
