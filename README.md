@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-334-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-337-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -528,7 +528,7 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 ./bin/idryx detect --db "$DSN"                      # detect from the DB
 ./bin/idryx serve  --db "$DSN"                      # dashboard from the DB
 
-# ebpf-capture: Linux, root (or CAP_BPF+CAP_PERFMON), see SECURITY.md
+# ebpf-capture: Linux 5.7 or later, root (or CAP_BPF+CAP_PERFMON), see SECURITY.md
 sudo ./bin/idryx ebpf-capture -duration 30s -out captured.json  # live-capture outbound connections
 ./bin/idryx detect --load egress:captured.json                  # same pipeline every other source uses
 ```
@@ -683,7 +683,7 @@ and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 
 **eBPF network sensor** (`internal/ebpfcapture`, `idryx ebpf-capture`) -
-Linux-only, root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached to the
+Linux-only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached to the
 `sys_enter_connect` tracepoint via `cilium/ebpf`, capturing real outbound
 connections (pid, process name, destination) with no dependency on IAM,
 agent-event, or Passport data. Writes an egress-shaped log consumed by the

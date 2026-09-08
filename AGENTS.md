@@ -276,8 +276,10 @@ an absent invariant.
    architecture. `capture_linux.go` skips loopback traffic unless the port is
    11434, 8000 **or 8001**, while radar's filter omits 8001 and drops the
    packet before its own `is_llm` can recognise the local vLLM port it
-   nevertheless lists. And this one drops its own traffic by PID, while radar
-   compares `comm`, which SECURITY.md correctly says any process can rename.
+   nevertheless lists. And this one drops its own traffic by the tgid its own
+   PID namespace assigns, since a raw-pid filter never matches inside a
+   container (#66), while radar compares `comm`, which SECURITY.md correctly
+   says any process can rename.
 
    The other half of the reason is structural: the eBPF layer here carries
    invariant 4 and `scripts/ebpf-optional.sh`, and radar carries no invariant
@@ -423,6 +425,23 @@ an absent invariant.
     the LLM map for port 53. The flow is kept, under its raw address.
     *(test: `TestAConnectOnPort53IsNameResolutionAndNeverWearsAnLLMHostname`,
     red on the unfixed `destination()`)*
+
+13. **The sensor decides "self" by the tgid its own PID namespace assigns,
+    never by the kernel's pid, and addresses `/proc` by the pid that namespace
+    can see.** `bpf_get_current_pid_tgid()` numbers a task in the initial
+    namespace and `os.Getpid()` in the sensor's own; inside a container they
+    never agree for the sensor and can agree by coincidence for a foreign task.
+    Measured 2026-09-08: on the raw pid the sensor reported 16 of its own 21
+    flows from a container and filed `unmanaged_egress` HIGH against itself;
+    with the namespace handed to the program and
+    `bpf_get_ns_current_pid_tgid()` reporting each task's tgid as that
+    namespace sees it, the same run gave 3 flows, none its own, and a
+    neighbour's `AGENT_PASSPORT_ID` read correctly. Needs Linux 5.7 or later,
+    which the program's load enforces loudly.
+    *(test: `TestSelfIsRecognisedByTheNamespacedTGIDNotTheHostPID`,
+    `TestAClaimIsReadFromThePIDThisNamespaceCanAddress`,
+    `TestDecodeReadsTheNamespacedTGIDFromItsOwnOffset`, all red on the previous
+    semantics; and the live run recorded in estate-gates PROVEN.md)*
 
 ## Decisions that have no gate yet
 

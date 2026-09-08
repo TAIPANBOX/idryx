@@ -53,7 +53,7 @@ These are load-bearing security properties. A change that breaks one is a bug.
 
 `internal/ebpfcapture` is idryx's one privileged, host-level connector -- every
 other connector reads logs/inventory a caller already has; this one asks to run
-as root (or with `CAP_BPF`+`CAP_PERFMON`) on a real Linux host so it can attach
+as root (or with `CAP_BPF`+`CAP_PERFMON`) on a real Linux host, kernel 5.7 or later, so it can attach
 a small BPF program to the `sys_enter_connect` tracepoint and observe outbound
 `connect()` calls directly from the kernel. That is a materially different
 trust posture from the rest of idryx, so it gets its own explicit callout
@@ -76,6 +76,20 @@ rather than folding into the table above:
   such a flow in the log under its raw address and never under an LLM
   hostname, so it is graded like any other unattributed connect. A rendering
   rule, not a filter: nothing the kernel reported is dropped.
+- **Self is decided by the tgid the sensor's own PID namespace assigns, never
+  by the kernel's pid.** `bpf_get_current_pid_tgid()` numbers a task in the
+  initial namespace and `os.Getpid()` in the sensor's own, so inside a
+  container the two never agree: on 2026-09-08 a filter comparing them let the
+  sensor report 16 of its own 21 flows (TAIPANBOX/idryx#66). The program is
+  now told the sensor's namespace (the dev and inode of `/proc/self/ns/pid`,
+  set before load) and reports each task's tgid as that namespace sees it via
+  `bpf_get_ns_current_pid_tgid()`, zero for a task outside it; userspace
+  filters on that field alone, and reads a claimed identity from `/proc` under
+  the pid this namespace can actually address. Re-run the same way after the
+  change: 3 flows, none the sensor's own, and the `AGENT_PASSPORT_ID` of a
+  neighbouring process read correctly from inside the container. This needs
+  Linux 5.7 or later; an older kernel refuses to load the program rather than
+  running with a filter that matches nothing.
 - **The BPF program is load-only, not enforcement.** `connect.c`'s
   `on_connect` handler only copies fields into a ring buffer; it never
   returns a non-zero verdict that could block or alter the syscall. A kernel
