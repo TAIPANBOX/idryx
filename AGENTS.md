@@ -288,12 +288,27 @@ an absent invariant.
    **This said radar "will read the wrong bytes on any other architecture"
    until 2026-09-09, and that was wrong.** `struct trace_entry` is 8 bytes,
    then `long id`, then `unsigned long args[6]` from offset 16, so `args[1]`
-   is at 24 on every LP64 architecture, aarch64 included, which this
-   repository's own `vmlinux.h` says because it was dumped from an aarch64
-   kernel. Confirmed by running radar there with its architecture refusal
-   lifted in a throwaway copy: it built, loaded on Linux 7.0.12 aarch64, and
-   reported both test destinations exactly as connected (TAIPANBOX/tokenfuse#268,
-   #269). 32-bit is genuinely different, and radar's refusal covers it.
+   is at 24 on every LP64 architecture, aarch64 included. Confirmed by running
+   radar there with its architecture refusal lifted in a throwaway copy: it
+   built, loaded on Linux 7.0.12 aarch64, and reported both test destinations
+   exactly as connected (TAIPANBOX/tokenfuse#268, #269). 32-bit is genuinely
+   different, and radar's refusal covers it.
+
+   **That correction carried a false sentence of its own, corrected the same
+   day.** It said the offset was what "this repository's own `vmlinux.h` says
+   because it was dumped from an aarch64 kernel". The committed header is
+   x86_64's: `struct pt_regs` runs r15, r14, r13, r12, bp, bx down to
+   `orig_ax`, the file defines `x86_hw_tss` and `desc_struct`, and it has no
+   `user_pt_regs` at all (@measured `grep` over
+   `internal/ebpfcapture/bpf/vmlinux.h`, 2026-09-09). So the header was never
+   evidence about aarch64 and should not have been offered as any.
+
+   The conclusion stands, because the other two supports in the paragraph are
+   the real ones and neither depends on the header: the offset follows from
+   the C types under any LP64 ABI, and the program was then run on aarch64 and
+   reported correctly. A conclusion that is right for an invented reason is
+   worse than one that is wrong, because being right stops anybody checking
+   the reason.
 
    The correction is left in place of the claim because this paragraph is the
    argument for where the sensor grows, and an argument resting on a false
