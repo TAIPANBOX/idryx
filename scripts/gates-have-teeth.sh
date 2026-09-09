@@ -302,7 +302,7 @@ open("docs/architecture.svg","w").write(s.replace(m.group(0), "agents/AI x%d" % 
 
 run_case "ebpf-optional: the OS constraint lost from a generated file" fail \
 	'./scripts/ebpf-optional.sh' \
-	"$(py 'edit("internal/ebpfcapture/bpf_bpfel.go", "//go:build linux && (", "//go:build (")')" \
+	"$(py 'edit("internal/ebpfcapture/bpf_x86_bpfel.go", "//go:build linux && amd64", "//go:build amd64")')" \
 	"cilium/ebpf packages"
 
 run_case "reproducible-build: a version back in the asset name" fail \
@@ -383,7 +383,7 @@ open("README.md","w").write(s.replace(m.group(0), "", 1))')" \
 run_case_bpf "object-matches-its-source: no committed object left to compare" fail \
 	'./scripts/object-matches-its-source.sh' \
 	"$(py 'import os
-os.remove("internal/ebpfcapture/bpf_bpfel.o")')" \
+os.remove("internal/ebpfcapture/bpf_x86_bpfel.o")')" \
 	"measured nothing"
 
 # The pin itself, which is the part of that gate most easily removed by somebody
@@ -405,8 +405,8 @@ assert not m.group(0).startswith("18."), "python3 reports 18.x, the pinned clang
 run_case "ebpf-optional: nothing pulling in cilium on linux either" fail \
 	'./scripts/ebpf-optional.sh' \
 	"$(py 'for f in ["internal/ebpfcapture/capture_linux.go",
-          "internal/ebpfcapture/bpf_bpfel.go",
-          "internal/ebpfcapture/bpf_bpfeb.go"]:
+          "internal/ebpfcapture/bpf_x86_bpfel.go",
+          "internal/ebpfcapture/bpf_arm64_bpfel.go"]:
     t = open(f).read()
     i = t.index("//go:build ")
     j = t.index(chr(10), i)

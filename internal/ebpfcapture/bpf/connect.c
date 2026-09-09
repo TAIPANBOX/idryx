@@ -1,30 +1,94 @@
-// connect.c is idryx's eBPF network-behavior sensor: attaches to the
-// sys_enter_connect tracepoint and reports every outbound AF_INET and
-// AF_INET6 connect() (pid, comm, destination ip:port) to userspace via a
-// ring buffer, and counts what it deliberately did not report.
+// connect.c is idryx's eBPF network-behavior sensor. It reports every outbound
+// AF_INET and AF_INET6 connection (pid, comm, destination ip:port) to userspace
+// through a ring buffer, and counts what it deliberately did not report.
+//
+// WHERE IT ATTACHES, AND WHY IT IS NOT THE SYSCALL
+//
+// Everything comes from a single kprobe on __sys_connect_file. Until 2026-09-09
+// it came from the sys_enter_connect tracepoint, which is gone.
+//
+// The tracepoint fires at the syscall boundary, where the destination address
+// is still a pointer into the CALLING PROCESS'S memory that the kernel has not
+// copied yet. Three consequences, none of them visible in anything the sensor
+// printed:
+//
+//   1. A second thread can rewrite that buffer between this program reading it
+//      and the kernel reading it (__sys_connect's own move_addr_to_kernel), so
+//      the sensor records an address the kernel never used. Measured
+//      2026-09-09 against the tracepoint build with a two-thread probe and
+//      ground truth taken from connect()'s own return value: 58 of 20,000 raced
+//      connections wrong, 126 of 30,000, 221 of 25,000.
+//   2. io_uring never passes through it. IORING_OP_CONNECT copies the address
+//      at submission (io_connect_prep's move_addr_to_kernel) and calls
+//      __sys_connect_file directly, so a process using io_uring was invisible,
+//      silently and completely: one io_uring connection and one ordinary one
+//      gave one flow.
+//   3. The length the caller passed was never consulted, so a sockaddr the
+//      kernel is about to REFUSE for being too short was read as though it were
+//      whole, and whatever lay after it in the caller's memory was reported as
+//      an address.
+//
+// __sys_connect_file closes all three. It runs after the kernel has copied the
+// address into its own memory, both the syscall path and io_uring reach it, and
+// it carries addrlen as its third argument. It has existed since Linux 5.5,
+// below this sensor's own floor, so nothing is narrowed by choosing it.
+//
+// It also sits BEFORE security_socket_connect, which the first attempt at this
+// move did not: hooking inet_stream_connect and inet_dgram_connect, one layer
+// down, loses every attempt an LSM denied, and a denied attempt is the event
+// this tool most wants. That attempt is TAIPANBOX/idryx#74, closed unmerged,
+// and its closing comment is the long form of this paragraph.
+//
+// KPROBE RATHER THAN FENTRY, AND WHAT IT COSTS
+//
+// fentry on a kernel function needs a BPF trampoline, and arm64 gains one only
+// at 6.4: on 6.1 bpf_arch_text_poke pokes only BPF text, register_fentry
+// returns -ENOTSUPP without tr->fops, and DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+// enters arm64's Kconfig at 6.4. Choosing fentry would move this sensor's floor
+// from 5.8 to 6.4 on arm64 and take Debian 12, Amazon Linux 2023 on Graviton
+// and Ubuntu 22.04 with it. Portability is the whole of why AGENTS.md invariant
+// 7 puts the sensor here rather than in tokenfuse's radar, so paying for it in
+// portability would be paying with the reason.
+//
+// kprobe reaches its arguments through PT_REGS_PARM, whose field names
+// bpf_tracing.h picks per architecture at COMPILE time. That is exactly the
+// property radar was criticised for, and the difference is that radar hard-codes
+// ONE offset into ONE object shipped everywhere, while this is compiled once per
+// architecture and selected by build tag: correct by construction rather than by
+// a comment claiming an offset is universal.
+//
+// The price is stated rather than buried: this object is built for amd64 and
+// arm64, and the sensor no longer builds for anything else. The tracepoint build
+// it replaces was architecture-independent and so nominally supported every
+// architecture bpf2go targets. It had run on two. A narrower true claim beats a
+// wider aspirational one, and adding an architecture is one word in the
+// //go:generate line plus its object.
+//
+// WHY ONE PROGRAM IS ENOUGH, WHERE THE FIRST ATTEMPT NEEDED TWO
+//
+// idryx#74 kept the tracepoint beside its fentry programs, because
+// inet_stream_connect and inet_dgram_connect sit BELOW the protocol dispatch and
+// cannot see AF_UNIX or netlink at all: without the tracepoint, invariant 4's
+// "say what you could not observe" had nothing to say. __sys_connect_file sits
+// ABOVE that dispatch, so every family arrives here and the coverage counters
+// come off the kernel's own copy like the evidence does. One attach point, one
+// program, and a counter a hostile process can no longer skew.
 //
 // Mirrors the architecture of tokenfuse's own eBPF sensor
 // (tokenfuse/crates/radar/radar-ebpf/src/main.rs, Rust/aya) rather than its
-// code: same tracepoint, same captured fields, but written in C against
-// libbpf/CO-RE (idryx is 100% Go, so cilium/ebpf + libbpf is the natural
-// toolchain here, not aya). See internal/ebpfcapture/capture_linux.go for the
-// userspace loader.
+// code: written in C against libbpf/CO-RE (idryx is 100% Go, so cilium/ebpf +
+// libbpf is the natural toolchain here, not aya). radar still sits on the
+// tracepoint alone, so all three defects above are its by construction.
 //
-// Two things this file does that radar does not, and both are why AGENTS.md
-// invariant 7 puts the sensor here. It reads the syscall argument through the
-// BTF-typed trace_event_raw_sys_enter out of vmlinux.h, so it is CO-RE and
-// portable across kernels and architectures, where radar counts a fixed byte
-// offset that is only true on x86_64. And it observes IPv6, which radar's
-// AF_INET-only filter drops without saying so.
-//
-// GPL: sys_enter_connect tracepoint programs conventionally declare GPL
-// license (several core BPF helpers are GPL-only-gated); this program calls
-// none of the GPL-restricted helpers today but keeps the declaration for the
-// same reason the Rust sensor does -- future helpers on this program stay
-// available without a relicensing exercise.
+// GPL: this program calls bpf_probe_read_kernel, which is GPL-only-gated, so
+// the declaration is load-bearing rather than conventional.
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
+// BPF_KPROBE, which reads a kprobe's arguments through the per-architecture
+// PT_REGS_PARM macros. bpf2go defines __TARGET_ARCH_<arch> for each target it
+// compiles (its gen/compile.go does), which is what makes those macros resolve.
+#include <bpf/bpf_tracing.h>
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -70,12 +134,17 @@ struct conn_event {
 };
 
 // skipped counts what the program saw and did NOT put on the ring buffer, per
-// reason. Without it "zero flows captured" has three indistinguishable
+// reason. Without it "zero flows captured" has several indistinguishable
 // meanings: nothing connected, everything connected over a family this sensor
 // ignores, or the ring buffer was full and the evidence was dropped on the
 // floor. AGENTS.md invariant 4 requires idryx to say what it could not
 // observe rather than present a partial graph as complete, and until this map
 // existed the sensor had no way to say it.
+//
+// Every one of these is now counted from the KERNEL'S OWN COPY of the address,
+// so the numbers cannot be raced any more than the evidence can. On the
+// tracepoint they were read out of the calling process's memory, which meant a
+// hostile process could skew them; that is gone with the attach point.
 //
 // A single-entry ARRAY rather than PERCPU_ARRAY: these are rare events by
 // construction (a busy host makes far more connections than it makes
@@ -83,9 +152,16 @@ struct conn_event {
 // per-CPU map would trade an exact answer for a contended-write optimisation
 // this workload never needs.
 struct skipped_counts {
-	__u64 other_family;   // neither AF_INET nor AF_INET6 (AF_UNIX, netlink, ...)
-	__u64 unreadable;     // bpf_probe_read_user could not read the sockaddr
+	__u64 other_family;   // reached the connect path over a family this sensor does not report (AF_UNIX, netlink, ...)
+	__u64 unreadable;     // the kernel's own copy of the sockaddr could not be read
 	__u64 ringbuf_full;   // a real, in-scope connection we could not report
+	// The caller passed fewer bytes than the family needs, so the address is
+	// not all there. The kernel refuses these too, a few frames later
+	// (tcp_v4_connect: `addr_len < sizeof(struct sockaddr_in)` is EINVAL), so
+	// this counts a connection that was never going to happen. Reporting it
+	// would put an address in the graph that was half read out of whatever the
+	// caller happened to have in that buffer, which the tracepoint build did.
+	__u64 too_short;
 };
 
 struct {
@@ -96,9 +172,9 @@ struct {
 } skipped SEC(".maps");
 
 // sockaddr_in/sockaddr_in6 mirror the kernel's own layout (linux/in.h,
-// linux/in6.h) for the two structs this program reads from userspace memory.
-// Not sourced from vmlinux.h: these are libc/uapi types, not kernel-internal
-// ones, so they are not present in the kernel's own BTF.
+// linux/in6.h) for the two structs this program reads. Not sourced from
+// vmlinux.h: these are libc/uapi types, not kernel-internal ones, so they are
+// not present in the kernel's own BTF.
 struct sockaddr_in_local {
 	__u16 sin_family;
 	__u8 sin_port[2];
@@ -112,6 +188,38 @@ struct sockaddr_in6_local {
 	__u8 sin6_addr[16];
 	__u32 sin6_scope_id;
 };
+
+// What the KERNEL requires of addrlen for each family, which is more than this
+// program reads: the full sockaddr_in is 16 bytes because of sin_zero, and
+// sockaddr_in6 is 28. Checked against the caller's length before the address is
+// believed, because a shorter one means the bytes after the truncation belong
+// to whatever else was in that buffer, and the kernel is about to refuse the
+// call anyway.
+#define SOCKADDR_IN_MIN 16
+#define SOCKADDR_IN6_MIN 28
+
+// bpf_tracing.h reaches a kprobe's arguments through PT_REGS_PARM, which on
+// arm64 casts the context to `struct user_pt_regs`. vmlinux.h is generated from
+// ONE kernel's BTF and the committed one is x86_64's, so that type is not in it
+// and the arm64 build does not compile without this.
+//
+// Written out here rather than by committing a second 3.5 MB vmlinux.h per
+// architecture, for the same reason sockaddr_in_local above is written out: it
+// is a uapi type (arch/arm64/include/uapi/asm/ptrace.h), stable ABI, and not a
+// kernel-internal shape that BTF would have to be trusted for.
+//
+// It is safe to define unconditionally on the arm64 target only. The rest of
+// this program reads no kernel struct through BTF at all any more, since
+// dropping the sys_enter_connect tracepoint removed the last CO-RE-typed read,
+// so an x86_64 vmlinux.h is otherwise harmless when compiling for arm64.
+#if defined(__TARGET_ARCH_arm64)
+struct user_pt_regs {
+	__u64 regs[31];
+	__u64 sp;
+	__u64 pc;
+	__u64 pstate;
+};
+#endif
 
 #define AF_INET 2
 #define AF_INET6 10
@@ -164,27 +272,45 @@ static __always_inline void bump(__u64 offset)
 
 #define BUMP(field) bump(__builtin_offsetof(struct skipped_counts, field))
 
-// sys_enter_connect's real syscall arguments arrive in the generic
-// tracepoint context's args[] array (struct trace_event_raw_sys_enter,
-// BTF-typed by vmlinux.h -- portable across kernel versions/builds, unlike
-// a hand-rolled offset struct): args[0] = fd, args[1] = uservaddr (struct
-// sockaddr *), args[2] = addrlen. See /sys/kernel/debug/tracing/events/
-// syscalls/sys_enter_connect/format on any Linux box for the authoritative
-// field order, part of the syscall tracepoint ABI.
-SEC("tracepoint/syscalls/sys_enter_connect")
-int on_connect(struct trace_event_raw_sys_enter *ctx)
+// int __sys_connect_file(struct file *file, struct sockaddr_storage *address,
+//                        int addrlen, int file_flags)
+//
+// net/socket.c. `address` points into KERNEL memory: __sys_connect has already
+// copied it with move_addr_to_kernel, and io_uring copied it at submission, so
+// by the time this runs it is the address the kernel is about to act on and no
+// thread can swap it underneath. Hence bpf_probe_read_kernel below.
+//
+// Every family arrives here, because __sys_connect calls this with no protocol
+// dispatch in front of it, which is why one program is enough and the
+// sys_enter_connect tracepoint this sensor used to carry beside it is gone:
+// AF_UNIX and netlink are counted from the kernel's copy now rather than from
+// the caller's.
+//
+// What does NOT reach here is a connect() that never became a connection
+// attempt: a bad file descriptor, or a sockaddr move_addr_to_kernel refused
+// outright. The tracepoint saw those and reported them as flows, reading an
+// address out of a buffer the kernel had rejected. Not seeing them is the
+// improvement, not the loss.
+// `address` is declared void* rather than as the kernel's own
+// `struct sockaddr_storage`, and that is not laziness. vmlinux.h carries
+// `struct __kernel_sockaddr_storage`, not `struct sockaddr_storage`, so naming
+// the latter here declares an incomplete type inside the parameter list; the two
+// expansions BPF_KPROBE makes of this signature then disagree about it and the
+// compile fails with "conflicting types". Nothing dereferences the pointer
+// anyway: the address is read with bpf_probe_read_kernel into the local sockaddr
+// mirrors below, which is what makes this program independent of the kernel's
+// own storage layout.
+SEC("kprobe/__sys_connect_file")
+int BPF_KPROBE(on_connect, void *file, void *address, int addrlen, int file_flags)
 {
-	void *addr_ptr = (void *)ctx->args[1];
-	if (!addr_ptr)
+	if (!address)
 		return 0;
 
 	// The family is the first two bytes of every sockaddr, so it is read
 	// first and decides which struct to read afterwards. Reading the larger
-	// sockaddr_in6 unconditionally would fault on an AF_INET sockaddr that
-	// sits at the end of a page, which is a real layout and not a
-	// hypothetical one.
+	// sockaddr_in6 unconditionally would read past a shorter allocation.
 	__u16 family = 0;
-	if (bpf_probe_read_user(&family, sizeof(family), addr_ptr) != 0) {
+	if (bpf_probe_read_kernel(&family, sizeof(family), address) != 0) {
 		BUMP(unreadable);
 		return 0;
 	}
@@ -193,11 +319,22 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 	}
 
+	// The caller's own length, which the tracepoint build never consulted.
+	// Below the family's minimum the address is not all there and the kernel
+	// will refuse the call a few frames from here, so reporting it would put a
+	// destination in the graph that half came from whatever else was in that
+	// buffer.
+	if ((family == AF_INET && addrlen < SOCKADDR_IN_MIN) ||
+	    (family == AF_INET6 && addrlen < SOCKADDR_IN6_MIN)) {
+		BUMP(too_short);
+		return 0;
+	}
+
 	struct conn_event *ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
 	if (!ev) {
 		// A connection this sensor WANTED to report and could not. This is
-		// the counter that matters most: the other two are traffic out of
-		// scope, this one is evidence lost.
+		// the counter that matters most: the others are traffic out of scope
+		// or a call the kernel will refuse, this one is evidence lost.
 		BUMP(ringbuf_full);
 		return 0;
 	}
@@ -207,7 +344,7 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 
 	if (family == AF_INET) {
 		struct sockaddr_in_local sa = {};
-		if (bpf_probe_read_user(&sa, sizeof(sa), addr_ptr) != 0) {
+		if (bpf_probe_read_kernel(&sa, sizeof(sa), address) != 0) {
 			bpf_ringbuf_discard(ev, 0);
 			BUMP(unreadable);
 			return 0;
@@ -217,7 +354,7 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 		__builtin_memcpy(ev->daddr, sa.sin_addr, sizeof(sa.sin_addr));
 	} else {
 		struct sockaddr_in6_local sa6 = {};
-		if (bpf_probe_read_user(&sa6, sizeof(sa6), addr_ptr) != 0) {
+		if (bpf_probe_read_kernel(&sa6, sizeof(sa6), address) != 0) {
 			bpf_ringbuf_discard(ev, 0);
 			BUMP(unreadable);
 			return 0;
@@ -227,8 +364,9 @@ int on_connect(struct trace_event_raw_sys_enter *ctx)
 		__builtin_memcpy(ev->daddr, sa6.sin6_addr, sizeof(sa6.sin6_addr));
 	}
 
-	// Taken as late as possible but still in the syscall's own context, so it
-	// times the connect() rather than this program's bookkeeping.
+	// Taken as late as possible but still in the connecting task's own
+	// context, so it times the connection rather than this program's
+	// bookkeeping.
 	ev->ktime_ns = bpf_ktime_get_ns();
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();

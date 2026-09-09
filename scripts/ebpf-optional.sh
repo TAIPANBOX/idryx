@@ -5,8 +5,10 @@
 # Three halves, and they fail in different ways.
 #
 #   1. idryx BUILDS where eBPF does not exist. Checked by cross-compiling the
-#      whole tree for darwin and windows. If someone puts a Linux-only import
-#      into a file without an OS build tag, this is what catches it.
+#      whole tree for darwin and windows, on both amd64 and arm64. The second
+#      dimension is not thoroughness: the sensor's bindings are per-architecture
+#      since 2026-09-09, so a check using only the host's GOARCH cannot see a
+#      file for the other one losing its OS constraint.
 #
 #   2. The eBPF dependency is genuinely ABSENT off Linux, not merely harmless.
 #      `go list -deps` for darwin and windows must contain zero cilium/ebpf
@@ -53,13 +55,22 @@ note() {
 }
 
 # ------------------------------------------------------------ 1. it builds
+#
+# Both architectures, not just the host's. The sensor's generated bindings are
+# per-architecture since 2026-09-09, so a file that lost its OS constraint is
+# invisible to a check that only ever cross-compiles for whatever GOARCH the
+# machine running it happens to have. That is not hypothetical: it made this
+# gate's own teeth case report TOOTHLESS the moment the objects were split,
+# on an arm64 laptop, while the same case would have passed on an amd64 runner.
 for os in darwin windows; do
-  if ! out=$(GOOS="$os" go build ./... 2>&1); then
-    note "the tree does not build for GOOS=$os, so idryx cannot run on a machine
-      without eBPF. Usually this is a Linux-only import in a file with no OS
-      build tag.
+  for arch in amd64 arm64; do
+    if ! out=$(GOOS="$os" GOARCH="$arch" go build ./... 2>&1); then
+      note "the tree does not build for GOOS=$os GOARCH=$arch, so idryx cannot run on a
+      machine without eBPF. Usually this is a Linux-only import in a file with
+      no OS build tag.
 $(printf '%s' "$out" | sed 's/^/      /' | head -12)"
-  fi
+    fi
+  done
 done
 
 # ------------------------------------------- 2. the dependency is really absent
@@ -68,14 +79,16 @@ done
 # directly, per GOOS. The linux side is checked too: an allow-list with nothing
 # on the other side of it would pass while the capture no longer worked at all.
 for os in darwin windows; do
-  n=$(GOOS="$os" go list -deps ./... 2>/dev/null | grep -c 'cilium/ebpf')
-  if [ "$n" -ne 0 ]; then
-    note "a GOOS=$os build pulls in $n cilium/ebpf packages, which it can never use.
-      Almost always this is bpf2go output that lost its \`linux &&\` prefix:
-      bpf2go tags by architecture only and has no flag for an OS constraint, so
-      a regeneration removes it silently. See the note beside //go:generate in
-      internal/ebpfcapture/capture_linux.go."
-  fi
+  for arch in amd64 arm64; do
+    n=$(GOOS="$os" GOARCH="$arch" go list -deps ./... 2>/dev/null | grep -c 'cilium/ebpf')
+    if [ "$n" -ne 0 ]; then
+      note "a GOOS=$os GOARCH=$arch build pulls in $n cilium/ebpf packages, which it can
+      never use. Almost always this is bpf2go output that lost its \`linux &&\`
+      prefix: bpf2go tags by architecture only and has no flag for an OS
+      constraint, so a regeneration removes it silently. See the note beside
+      //go:generate in internal/ebpfcapture/capture_linux.go."
+    fi
+  done
 done
 
 n_linux=$(GOOS=linux go list -deps ./... 2>/dev/null | grep -c 'cilium/ebpf')
@@ -108,6 +121,37 @@ $(grep -nE '^\s*return\s+(nil,\s*nil|nil)\s*$' "$STUB" | sed 's/^/      /')
       presents a partial graph as a complete one, which is what invariant 4 is
       about."
   fi
+fi
+
+# ------------------------- 4. the object claims only what it was compiled for
+#
+# bpf2go groups 386 with amd64 under one target and emits `//go:build 386 ||
+# amd64`. The object is not both. bpf_tracing.h picks its register names inside
+# `#if defined(__KERNEL__) || defined(__VMLINUX_H__)`, which is the branch this
+# program takes, and that branch is x86_64's: di, si, dx, cx. The i386 branch
+# below it is unreachable here, so an object tagged 386 would read the wrong
+# registers on a 32-bit kernel, silently.
+#
+# That is the exact defect this estate corrected in tokenfuse's radar on
+# 2026-09-09: one object claiming an architecture whose register layout it does
+# not use. The narrowing is a hand edit on generated output, so a regeneration
+# removes it, which is why it is checked here beside the `linux &&` one.
+for f in internal/ebpfcapture/bpf_*.go; do
+  [ -f "$f" ] || continue
+  if grep -q '^//go:build .*\b386\b' "$f"; then
+    note "$f claims GOARCH 386. bpf2go groups 386 with amd64, but the object is
+      compiled with x86_64's register names (bpf_tracing.h takes its
+      __VMLINUX_H__ branch, di/si/dx/cx), so on a 32-bit kernel it would read
+      the wrong registers and report plausible, wrong addresses. Narrow the tag
+      to amd64, as the note beside //go:generate in capture_linux.go says."
+  fi
+done
+
+n_objects=$(ls internal/ebpfcapture/bpf_*.o 2>/dev/null | wc -l | tr -d ' ')
+if [ "$n_objects" -eq 0 ]; then
+  note "there is no compiled BPF object in internal/ebpfcapture at all, so the
+      checks above measured nothing about what ships. The sensor embeds these
+      with //go:embed; without them there is no sensor."
 fi
 
 # ------------------------------------- the behavioural half, where it is possible
