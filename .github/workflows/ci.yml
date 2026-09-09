@@ -91,7 +91,19 @@ jobs:
 
   ebpf:
     name: ebpf (build)
-    runs-on: ubuntu-latest
+    # Pinned, unlike the other jobs, and for a reason the others do not have:
+    # this one compares the committed BPF object byte for byte against what it
+    # compiles here, and clang's output for one source changes between versions.
+    # `ubuntu-latest` moves between releases on GitHub's schedule and would take
+    # the compiler with it, turning a supply-chain check into a coin toss on a
+    # date nobody chose.
+    runs-on: ubuntu-24.04
+    # Named versions, and named to bpf2go through its own environment rather
+    # than on the //go:generate line, so the repository keeps ONE spelling of
+    # that command. See the note beside it in internal/ebpfcapture/capture_linux.go.
+    env:
+      BPF2GO_CC: clang-18
+      BPF2GO_STRIP: llvm-strip-18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -105,7 +117,25 @@ jobs:
       # and doesn't need the kernel's own linux-headers package -- that's
       # the point of CO-RE).
       - name: system deps
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18 libbpf-dev
+
+      # Both of these run BEFORE vmlinux.h is regenerated below, and the order is
+      # the point. The question here is whether the object committed to this
+      # repository is what the C committed beside it compiles to, and the header
+      # that question is asked about is the committed one. Answering it against a
+      # header dumped from whatever kernel this runner booted would compare two
+      # things that were never meant to match.
+      #
+      # Until 2026-09-09 nothing asked it at all: internal/ebpfcapture/*.o are
+      # compiled binaries in git, //go:embed puts them in every release binary
+      # and published image, a pull request renders them as "Binary files
+      # differ", and this job overwrote them before anything looked. Measured the
+      # same day: the object then committed did not reproduce from its own source
+      # under this compiler.
+      - name: the committed object is what the committed C compiles to
+        run: ./scripts/object-matches-its-source.sh
+      - name: and that gate can still fail
+        run: ./scripts/gates-have-teeth.sh object-matches-its-source
       # bpftool from a static release, not the linux-tools-generic apt
       # package: that package is tied to a specific installed kernel
       # package version and 404s whenever the runner's actual running
@@ -127,7 +157,14 @@ jobs:
       # ahead of the one just installed above, silently shadowing it.
       - name: regenerate vmlinux.h from this runner's BTF
         run: sudo /usr/local/bin/bpftool btf dump file /sys/kernel/btf/vmlinux format c > internal/ebpfcapture/bpf/vmlinux.h
-      - name: go generate (bpf2go) -- catches connect.c/committed-output drift
+      # This step's name claimed until 2026-09-09 that it "catches
+      # connect.c/committed-output drift". It never did, and the correction is
+      # worth keeping rather than quietly rewriting: it overwrites the committed
+      # object and then builds, so it proves connect.c still COMPILES against a
+      # real, current kernel's types, which is the CO-RE portability claim and is
+      # worth a job on its own. Drift is the step above, against the committed
+      # header, and it had to be written before anything held it.
+      - name: connect.c still compiles against this kernel's own types
         run: go generate ./internal/ebpfcapture/...
       - name: build
         run: go build ./...

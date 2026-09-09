@@ -18,7 +18,7 @@ go test ./...                     # all packages MUST be ok
 ./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
 ./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
-./scripts/gates-have-teeth.sh     # invariant 9, the five above can still fail
+./scripts/gates-have-teeth.sh     # invariant 9, the gates above can still fail
                                   # (mutates tracked files; needs a clean tree)
 
 # CI runs these in a separate job called `security`, which is exactly why they
@@ -33,6 +33,16 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...               # MUST exit 
 `go test -race ./...` rather than plain `go test`, and, in separate jobs,
 integration tests behind the `integration` build tag against a Postgres
 service, plus the eBPF build.
+
+**One gate is deliberately not on that list, and knowing why is the point.**
+`./scripts/object-matches-its-source.sh` (invariant 14) recompiles
+`bpf/connect.c` and compares the result with the committed `.o`, so it needs
+clang 18 with the BPF target, `llvm-strip`, and libbpf's headers. Apple's clang
+has no BPF target at all, so on a Mac this refuses rather than passes, which is
+correct and is not something to work around. It runs in ci.yml's `ebpf` job,
+together with its own cases from `gates-have-teeth.sh`, and that job is a
+required check. If you touched `connect.c`, you changed that object and CI will
+say so; the container the job uses is the way to settle it locally.
 
 **This list was three commands short until 2026-08-08, and the omission cost
 two red CI runs in one day.** It named `gofmt`, `go vet`, `go test` and
@@ -348,12 +358,15 @@ an absent invariant.
    This also puts a check under a claim invariant 6 has made since it was
    written, that `reproducible-build.sh` refuses just as loudly when it finds
    no asset name at all. That was true, and nothing had ever confirmed it.
-   *(gate: `scripts/gates-have-teeth.sh`, 13 cases over all five gates: six
-   real faults each must catch, two non-faults they must not, and five subjects
+   *(gate: `scripts/gates-have-teeth.sh`, 17 cases over all six gates: seven
+   real faults each must catch, three non-faults they must not, six subjects
    taken away entirely, where the gate must say it measured nothing instead of
-   reporting OK. Every mutation asserts it applied, because a mutation that
+   reporting OK, and one compiler pin that must refuse to compare across two
+   versions. Every mutation asserts it applied, because a mutation that
    changed no file is the second failure above, and this harness must not
-   commit the error it exists to catch.)*
+   commit the error it exists to catch. Four of the seventeen need a compiler
+   that emits BPF: on a machine without one they are printed as NOT RUN with
+   the job that runs them, never counted as passes.)*
 
    **What it does not cover.** It cannot test itself; nothing watches this one
    fail. It proves each gate catches the faults named in it, not every fault of
@@ -446,6 +459,46 @@ an absent invariant.
     `TestAClaimIsReadFromThePIDThisNamespaceCanAddress`,
     `TestDecodeReadsTheNamespacedTGIDFromItsOwnOffset`, all red on the previous
     semantics; and the live run recorded in estate-gates PROVEN.md)*
+
+14. **The committed BPF object is what the committed C compiles to, and until
+    2026-09-09 nothing in this repository checked that.**
+    `internal/ebpfcapture/bpf_bpfel.o` and `bpf_bpfeb.o` are compiled binaries
+    kept in git, and `//go:embed` puts them inside every released binary and
+    every published image. They are the one artifact here a reviewer cannot
+    read: a pull request renders them as "Binary files differ". CI compiled
+    `connect.c` on every push and never compared the result, because it
+    overwrote the committed object first, so a green `ebpf (build)` said the C
+    still compiles and said nothing at all about the bytes that ship.
+
+    Measured 2026-09-09 rather than argued: the object committed the day before
+    did NOT reproduce from its own source under the compiler CI installs. The
+    rebuilt program was two instructions shorter, both a redundant `r9 = 0x0`
+    that a newer clang proves unnecessary. So that difference was benign, and
+    that is the finding: nothing here could tell it from a substituted program.
+    The same measurement settled two things the gate depends on. The host
+    architecture is not a variable, since identical bytes came out of aarch64
+    and x86_64 containers running one clang, so a laptop and the runner agree.
+    And the generated Go bindings were already exact, so only the object had
+    drifted.
+
+    The compiler is pinned and a bump must fail this, deliberately: clang's
+    output for one source changes between versions, so a comparison made with an
+    unknown compiler measures nothing. Moving it is one commit that regenerates
+    the object and moves the pin together, by somebody who looked.
+    *(gate: `scripts/object-matches-its-source.sh`, which compiles in a throwaway
+    copy of the tree from the COMMITTED `vmlinux.h`, and refuses rather than
+    passes when the compiler is absent, is the wrong version, is mismatched with
+    its stripper, or has no committed object left to compare. Four cases in
+    `gates-have-teeth.sh`, run by ci.yml's `ebpf` job: an edited `connect.c`
+    with a stale object, a harmless edit on the Go side it must NOT catch, the
+    object taken away, and an unpinned compiler.)*
+
+    **What it deliberately does not do.** It never looks at the `//go:build`
+    line of the generated Go files: bpf2go strips the `linux &&` prefix on every
+    regeneration, that prefix is a deliberate post-generation edit, and
+    invariant 4's gate already owns it with its own case. Two gates on one
+    property is how the two start disagreeing. And it says nothing about whether
+    the program is correct, only that it is the program the C describes.
 
 ## Decisions that have no gate yet
 

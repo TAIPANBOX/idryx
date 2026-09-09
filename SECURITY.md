@@ -176,11 +176,32 @@ rather than folding into the table above:
   made it possible inside the promise above.
   This version mirrors what TokenFuse's own `crates/radar` sensor ships
   today, not the originally-specced full scope.
-- **CI builds it, never loads it, and that gap is closed by hand.** The
-  `ebpf (build)` job regenerates `vmlinux.h` from the runner's own BTF and
-  rebuilds the sensor on every push, so `connect.c` drifting out of sync with
-  the committed bindings (`internal/ebpfcapture/bpf_bpfel.go`/`bpf_bpfeb.go`)
-  fails CI. It never attaches the program or reads a packet: that needs a
+- **The compiled program in this repository is derived from the C beside it,
+  and it is checked.** `internal/ebpfcapture/bpf_bpfel.o` and `bpf_bpfeb.o` are
+  compiled binaries kept in git, and `//go:embed` puts them inside every
+  released binary and every published image. They are the one artifact here a
+  reviewer cannot read: a pull request shows "Binary files differ". Since
+  2026-09-09 `scripts/object-matches-its-source.sh` recompiles `connect.c` in a
+  throwaway copy of the tree, from the committed `vmlinux.h` and with a pinned
+  clang, and requires the result to be byte for byte the committed object. It
+  refuses to report success when it cannot measure: no compiler, the wrong
+  version, a mismatched stripper, or no committed object left to compare.
+
+  **This paragraph said something weaker and wrong until that day**, and the
+  correction is left here rather than quietly replaced. It claimed the
+  `ebpf (build)` job made `connect.c` drifting out of sync with the committed
+  output fail CI. It did not. That job regenerates `vmlinux.h` from the runner's
+  own kernel and runs `go generate` over the top, which overwrites the committed
+  object before anything compares it, so it proved the C still compiles and
+  nothing else. Measured on 2026-09-09: the object committed the day before did
+  not reproduce from its own source under the compiler that job installs, by two
+  redundant register initialisations a newer clang removes. Benign, and
+  indistinguishable at the time from a substituted program.
+
+- **CI builds it and never loads it.** The `ebpf (build)` job still regenerates
+  `vmlinux.h` from the runner's own BTF and rebuilds, which is the CO-RE
+  portability claim: `connect.c` compiles against a real, current kernel's own
+  types. It never attaches the program or reads a packet: that needs a
   BTF-enabled kernel and root, which a hosted runner may not reliably provide.
 
   So a green CI says the sensor COMPILES against a kernel's types. It says

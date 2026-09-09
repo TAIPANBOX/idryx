@@ -108,6 +108,27 @@ trap cleanup EXIT INT TERM
 
 failures=0
 cases=0
+skipped_toolchain=0
+
+# An optional name filter, so one gate's cases can be run on their own. This
+# exists for object-matches-its-source.sh, whose cases need clang, llvm-strip
+# and libbpf's headers: those live in ci.yml's `ebpf` job, and that job checks
+# out shallow, which the diagram cases cannot survive (they compare the commit
+# that last touched each SVG with the one that touched its PNG, and on a shallow
+# clone both are HEAD). So the `ebpf` job runs `gates-have-teeth.sh
+# object-matches-its-source` rather than the whole suite twice.
+FILTER="${1:-}"
+
+# Whether this machine can compile a BPF object at all. Checked explicitly
+# rather than left to the gate's own refusal: without a toolchain that gate
+# correctly reports that it measured nothing, every case against it would come
+# back UNJUDGEABLE, and a harness reporting six failures on a machine that is
+# simply a laptop teaches everyone to ignore it.
+have_bpf_toolchain=0
+if command -v clang >/dev/null 2>&1 && command -v llvm-strip >/dev/null 2>&1 &&
+	clang --version 2>/dev/null | grep -q 'clang version 18\.'; then
+	have_bpf_toolchain=1
+fi
 
 # run_case <name> <expect: fail|pass> <gate> <python edit> [required output]
 #
@@ -116,6 +137,11 @@ cases=0
 # failure, including one this harness caused itself.
 run_case() {
 	local name="$1" expect="$2" gate="$3" edit="$4" needle="${5:-}"
+
+	if [ -n "$FILTER" ] && ! printf '%s' "$name" | grep -qF -- "$FILTER"; then
+		return
+	fi
+
 	cases=$((cases + 1))
 
 	# The baseline applies to EVERY case, not only the ones expecting a failure.
@@ -181,6 +207,23 @@ run_case() {
 
 py() { printf 'def edit(p, a, b):\n    s = open(p).read()\n    assert a in s, "pattern not found in " + p\n    open(p, "w").write(s.replace(a, b, 1))\n%s\n' "$1"; }
 
+# The same, for cases that cannot run without a compiler that emits BPF. A
+# machine without one records the case as NOT RUN and names the job that runs
+# it, which is a different statement from a pass and is printed as one. The
+# distinction is the whole subject of this file, so it would be a poor place to
+# let a skip wear a pass's clothes.
+run_case_bpf() {
+	if [ "$have_bpf_toolchain" = 1 ]; then
+		run_case "$@"
+		return
+	fi
+	if [ -n "$FILTER" ] && ! printf '%s' "$1" | grep -qF -- "$FILTER"; then
+		return
+	fi
+	skipped_toolchain=$((skipped_toolchain + 1))
+	printf 'NOT RUN  %s\n         needs clang 18 with the BPF target and libbpf headers;\n         ci.yml runs it in the `ebpf` job\n' "$1"
+}
+
 echo "=== faults each gate must catch ==="
 
 run_case "readme-numbers: a stale test badge" fail \
@@ -225,6 +268,11 @@ run_case "reproducible-build: a version back in the asset name" fail \
 	"$(py 'edit(".github/workflows/release.yml", "out=\"idryx_", "out=\"idryx_${VERSION}_")')" \
 	"VERSION"
 
+run_case_bpf "object-matches-its-source: connect.c edited, object not regenerated" fail \
+	'./scripts/object-matches-its-source.sh' \
+	"$(py 'edit("internal/ebpfcapture/bpf/connect.c", "__uint(max_entries, 256 * 1024);", "__uint(max_entries, 512 * 1024);")')" \
+	"not what the committed C compiles to"
+
 echo
 echo "=== and what they must NOT catch ==="
 
@@ -235,6 +283,15 @@ run_case "diagrams: prose edited around the count" pass \
 run_case "detectors-complete: a comment added beside the registry" pass \
 	'./scripts/detectors-complete.sh' \
 	"$(py 'edit("cmd/idryx/main.go", "detectors.NewBeaconing(),", "// a harmless comment\n\t\tdetectors.NewBeaconing(),")')"
+
+# Deliberately an edit on the GO side, not a comment in connect.c. Under `-g`
+# the compiled object carries BTF line information, so editing even a comment in
+# the C genuinely changes the bytes and the object genuinely does need
+# regenerating. This case exists to prove the gate is not simply always red,
+# which is what a pass-case is for.
+run_case_bpf "object-matches-its-source: prose edited on the Go side of the sensor" pass \
+	'./scripts/object-matches-its-source.sh' \
+	"$(py 'edit("internal/ebpfcapture/capture_linux.go", "// Options configures Run.", "// Options configures Run. A harmless prose edit.")')"
 
 echo
 echo "=== and the one this repository learned the hard way ==="
@@ -281,6 +338,28 @@ assert m, "no test badge in README.md"
 open("README.md","w").write(s.replace(m.group(0), "", 1))')" \
 	"nothing to compare against"
 
+run_case_bpf "object-matches-its-source: no committed object left to compare" fail \
+	'./scripts/object-matches-its-source.sh' \
+	"$(py 'import os
+os.remove("internal/ebpfcapture/bpf_bpfel.o")')" \
+	"measured nothing"
+
+# The pin itself, which is the part of that gate most easily removed by somebody
+# tidying up. clang changes its output between versions (measured 2026-09-09:
+# 18.1.3 drops two redundant register initialisations the committed object
+# carried), so a comparison made with an unpinned compiler answers a different
+# question and must refuse rather than report OK. `fail_env` because the fault is
+# the command, not a mutation: nothing is edited, and the edit below only asserts
+# the case is meaningful.
+run_case_bpf "object-matches-its-source: a compiler that is not the pinned one" fail_env \
+	'BPF2GO_CC=python3 ./scripts/object-matches-its-source.sh' \
+	"$(py 'import re, subprocess
+r = subprocess.run(["python3", "--version"], capture_output=True, text=True)
+m = re.search(r"[0-9]+\.[0-9]+\.[0-9]+", r.stdout + r.stderr)
+assert m, "python3 reports no version, so it cannot stand in for a wrong compiler"
+assert not m.group(0).startswith("18."), "python3 reports 18.x, the pinned clang version, so this case proves nothing"')" \
+	"was built with clang"
+
 run_case "ebpf-optional: nothing pulling in cilium on linux either" fail \
 	'./scripts/ebpf-optional.sh' \
 	"$(py 'for f in ["internal/ebpfcapture/capture_linux.go",
@@ -298,6 +377,13 @@ if [ -n "$(git status --porcelain)" ]; then
 	printf 'FAIL: this script left the tree dirty, so it cannot be trusted about anything above\n'
 	git status --porcelain | head -5
 	exit 1
+fi
+
+if [ "$skipped_toolchain" -gt 0 ]; then
+	printf '%d case(s) above did not run on this machine, which is not the same as\n' "$skipped_toolchain"
+	printf 'passing. They need a compiler that emits BPF, and ci.yml runs them in the\n'
+	printf '`ebpf` job:  ./scripts/gates-have-teeth.sh object-matches-its-source\n'
+	printf '\n'
 fi
 
 if [ "$failures" -gt 0 ]; then
