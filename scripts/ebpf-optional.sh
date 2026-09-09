@@ -110,6 +110,37 @@ $(grep -nE '^\s*return\s+(nil,\s*nil|nil)\s*$' "$STUB" | sed 's/^/      /')
   fi
 fi
 
+# ------------------------- 4. the object claims only what it was compiled for
+#
+# bpf2go groups 386 with amd64 under one target and emits `//go:build 386 ||
+# amd64`. The object is not both. bpf_tracing.h picks its register names inside
+# `#if defined(__KERNEL__) || defined(__VMLINUX_H__)`, which is the branch this
+# program takes, and that branch is x86_64's: di, si, dx, cx. The i386 branch
+# below it is unreachable here, so an object tagged 386 would read the wrong
+# registers on a 32-bit kernel, silently.
+#
+# That is the exact defect this estate corrected in tokenfuse's radar on
+# 2026-09-09: one object claiming an architecture whose register layout it does
+# not use. The narrowing is a hand edit on generated output, so a regeneration
+# removes it, which is why it is checked here beside the `linux &&` one.
+for f in internal/ebpfcapture/bpf_*.go; do
+  [ -f "$f" ] || continue
+  if grep -q '^//go:build .*\b386\b' "$f"; then
+    note "$f claims GOARCH 386. bpf2go groups 386 with amd64, but the object is
+      compiled with x86_64's register names (bpf_tracing.h takes its
+      __VMLINUX_H__ branch, di/si/dx/cx), so on a 32-bit kernel it would read
+      the wrong registers and report plausible, wrong addresses. Narrow the tag
+      to amd64, as the note beside //go:generate in capture_linux.go says."
+  fi
+done
+
+n_objects=$(ls internal/ebpfcapture/bpf_*.o 2>/dev/null | wc -l | tr -d ' ')
+if [ "$n_objects" -eq 0 ]; then
+  note "there is no compiled BPF object in internal/ebpfcapture at all, so the
+      checks above measured nothing about what ships. The sensor embeds these
+      with //go:embed; without them there is no sensor."
+fi
+
 # ------------------------------------- the behavioural half, where it is possible
 host_os=$(go env GOOS)
 if [ "$host_os" = "linux" ]; then

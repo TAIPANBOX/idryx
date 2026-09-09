@@ -173,12 +173,19 @@ type SkippedCounts struct {
 	// report and could not, so the capture is incomplete in a way no other
 	// number would show.
 	RingbufFull uint64
+	// TooShort is a connect whose address was shorter than its family needs.
+	// The kernel refuses these a few frames later, so it is a call that was
+	// never going to become a connection, and reporting one would put a
+	// destination in the graph half read out of whatever else was in the
+	// caller's buffer. The tracepoint build did exactly that, because it never
+	// consulted the length at all.
+	TooShort uint64
 }
 
 // Any reports whether anything at all went uncounted, so a caller can decide
 // between staying quiet and telling an operator what the capture missed.
 func (s SkippedCounts) Any() bool {
-	return s.OtherFamily > 0 || s.Unreadable > 0 || s.RingbufFull > 0
+	return s.OtherFamily > 0 || s.Unreadable > 0 || s.RingbufFull > 0 || s.TooShort > 0
 }
 
 // Lost reports whether evidence in scope was dropped, as opposed to traffic

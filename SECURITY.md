@@ -114,43 +114,49 @@ rather than folding into the table above:
   Passport record whatsoever), which is a real gap it closes regardless of
   this limitation, not a claim that it resolves identity reliably under an
   adversarial host.
-- **The attach point is the `connect()` syscall boundary, and that costs two
-  things, both measured on 2026-09-09 rather than reasoned about.** The
-  tracepoint fires at the moment the syscall enters, where the destination
-  address is still a pointer into the calling process's memory that the kernel
-  has not copied yet.
+- **The attach point is `__sys_connect_file`, and it moved there on 2026-09-09
+  to close three defects the syscall boundary had.** The
+  `sys_enter_connect` tracepoint fires at the moment the syscall enters, where
+  the destination address is still a pointer into the calling process's memory
+  that the kernel has not copied yet. All three were measured against that
+  build rather than reasoned about, and all three are closed.
 
-  - **A second thread can change the address after this sensor reads it and
-    before the kernel does.** `__sys_connect` copies it with
-    `move_addr_to_kernel` some instructions later, and the sensor records
-    whichever bytes it saw first. A two-thread probe on a 10-CPU kernel, with
-    ground truth taken from `connect()`'s own return value, made this sensor
+  - **A second thread could change the address after this sensor read it and
+    before the kernel did.** `__sys_connect` copies it with
+    `move_addr_to_kernel` some instructions later, and the sensor recorded
+    whichever bytes it saw first. A two-thread probe on a 10-CPU kernel, ground
+    truth taken from `connect()`'s own return value, made the tracepoint build
     record a destination the kernel never used **58 times in 20,000
-    connections**, 126 in 30,000 and 221 in 25,000. This is the same class of
-    limitation as the `comm` one above and has the same shape: it takes a
-    process already trying to evade, and it is an upper bound on what a crude
-    probe achieves, not on what a prepared one does.
-  - **io_uring is not observed at all.** `IORING_OP_CONNECT` copies its address
-    at submission and calls `__sys_connect_file` directly, so it never reaches
-    this tracepoint. Measured with one io_uring connection and one ordinary one
-    in the same capture: the sensor reported one flow. Nothing is counted, so
-    an operator sees a quiet host rather than a gap. No mainstream agent
-    runtime uses io_uring for sockets today (CPython's asyncio, Node's libuv,
-    Go's netpoll and tokio's default all use epoll), which bounds how much this
-    matters now and not how much it will.
+    connections**, 126 in 30,000 and 221 in 25,000.
+  - **io_uring was not observed at all.** `IORING_OP_CONNECT` copies its address
+    at submission and calls `__sys_connect_file` directly, so it never reached
+    the tracepoint. One io_uring connection and one ordinary one in the same
+    capture gave one flow. Nothing was counted either, so an operator saw a
+    quiet host rather than a gap.
+  - **The length the caller passed was never consulted.** A sockaddr the kernel
+    is about to refuse for being too short was read as though it were whole, and
+    whatever lay after it in the caller's buffer was reported as an address.
 
-  **The fix is known and deliberately not built yet.** One program on
-  `__sys_connect_file` would close both: it takes the address after the kernel
-  copied it, both the syscall path and io_uring pass through it, and it carries
-  `addrlen`. It was prototyped and measured closing both defects, and then
-  refused, because attaching below the syscall costs more than it buys today.
-  `security_socket_connect` runs BEFORE `sock->ops->connect`, so hooking the
-  protocol's connect loses every attempt an LSM denied, which is the event this
-  tool most wants; and `fentry` on a kernel function needs a BPF trampoline,
-  which arm64 gains only in 6.4, moving this sensor's floor from 5.8 to 6.4
-  there and taking portability, its one real advantage, with it. That trade is
-  worth making deliberately, with a test matrix, when this sensor goes into a
-  real deployment. It is not worth making blind.
+  The sensor now reads the address the kernel copied, so no thread can swap it;
+  io_uring reaches the same function, so it is seen; and `addrlen` is its third
+  argument, so a short address is counted and never reported. Measured on
+  Linux 7.0.12 aarch64: two flows reported (IPv4 and IPv6), 13 connects over
+  other families counted, and exactly the 4 deliberately short ones counted as
+  such.
+
+  **What this is NOT.** Not a claim of unevadability: a host compromised enough
+  to load kernel code, or to reach the network by a path that never calls
+  `__sys_connect_file`, is outside it entirely. `comm` remains what the
+  paragraph above says it is.
+
+  **What it costs, said plainly.** A kprobe reaches its arguments through
+  per-architecture register macros, so the sensor is now compiled for **amd64
+  and arm64** and builds for nothing else. The tracepoint build was
+  architecture-independent and so nominally covered every architecture its
+  toolchain targets; it had run on two. The alternative, `fentry`, needs a BPF
+  trampoline that arm64 gains only at 6.4, which would have cost Graviton on
+  Amazon Linux 2023, Debian 12 and Ubuntu 22.04. A narrower true claim was
+  preferred to a wider aspirational one.
 
 - **JA3/JA4 TLS fingerprinting is out of scope permanently, not for this
   version.** It would require reading the ClientHello, which is reading what

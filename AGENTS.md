@@ -517,6 +517,57 @@ an absent invariant.
     property is how the two start disagreeing. And it says nothing about whether
     the program is correct, only that it is the program the C describes.
 
+15. **The sensor reads the destination the KERNEL is about to use, and reads
+    the length the caller passed.** One kprobe on `__sys_connect_file`, which
+    runs after `move_addr_to_kernel` has copied the address into kernel memory,
+    is reached by both the `connect()` syscall and io_uring, sits above the
+    protocol dispatch so every family arrives, and carries `addrlen` as its
+    third argument. It replaced the `sys_enter_connect` tracepoint on
+    2026-09-09, and it replaced it alone: the tracepoint is gone rather than
+    kept for counters, because the counters come off the same kernel copy now.
+
+    Three defects closed, each measured against the tracepoint build rather than
+    argued. A second thread rewriting the sockaddr made it record a destination
+    the kernel never used, 58 of 20,000 raced connections, 126 of 30,000, 221 of
+    25,000, against ground truth from `connect()`'s own return. `IORING_OP_CONNECT`
+    never reached it, so io_uring was invisible. And the caller's length was
+    never consulted, so an address the kernel was about to refuse for being too
+    short was read as whole.
+
+    **kprobe rather than fentry, and the cost is stated.** `fentry` needs a BPF
+    trampoline that arm64 gains only at 6.4, which would cost Graviton on Amazon
+    Linux 2023, Debian 12 and Ubuntu 22.04; portability is why invariant 7 puts
+    the sensor here rather than in radar, so paying in portability would be
+    paying with the reason. kprobe reaches its arguments through
+    per-architecture register macros, so the object is compiled once per
+    architecture and selected by build tag: correct by construction, unlike
+    radar's one object with a hard-coded offset. The sensor is therefore built
+    for **amd64 and arm64 and nothing else**, where the tracepoint build
+    nominally covered every architecture its toolchain targets and had run on
+    two.
+
+    **The x86 object is tagged `amd64`, not `386 || amd64`**, and that hand edit
+    is load-bearing. bpf2go groups both under one target; `bpf_tracing.h` picks
+    its register names in the `__VMLINUX_H__` branch, which is x86_64's
+    (di, si, dx, cx), so an object claiming 386 would read the wrong registers
+    on a 32-bit kernel. That is the defect this estate corrected in radar the
+    same day, and shipping it here would have been the same fault one repository
+    over.
+    *(gate: `scripts/ebpf-optional.sh`, which now also refuses a generated file
+    claiming GOARCH 386 and refuses a tree with no compiled object at all;
+    verified by restoring the `386 ||` and watching it fire. The behaviour is
+    held by the live runs in estate-gates PROVEN.md, since no gate can attach a
+    kprobe.)*
+
+    **What is NOT proven.** No live run on x86_64: this machine's kernel is
+    aarch64 and cannot load an x86_64 object. No run on arm64 below 6.4, which
+    is the configuration the kprobe choice exists to protect. No LSM-denied
+    attempt was run; that one is structural rather than measured, since a kprobe
+    fires at function entry and `security_socket_connect` is in the body. And
+    one io_uring TCP connect can produce two records when `io_connect` re-issues
+    after `EINPROGRESS`; the run here completed inline with ECONNREFUSED, so the
+    re-issue path has never been observed.
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**
@@ -598,46 +649,19 @@ that goes red proves nothing until you know which line made it red.
   nobody notices breaking: the next capability added in the wrong repository
   compiles, passes its own CI, and reads as progress.
 
-**The sensor's attach point: moving it off the syscall boundary was prototyped,
-measured, and DEFERRED.** `@decided 2026-09-09`, after a review priced the move:
-name the two defects honestly and redesign once, deliberately, when this sensor
-goes into a real deployment, rather than a third time in one day. Written down
-here so the next session does not rediscover the same two defects and build the
-same wrong fix.
-
-The defects are real and are now named in SECURITY.md rather than left silent.
-The `sys_enter_connect` tracepoint reads the destination out of the calling
-process's memory before the kernel copies it, so a second thread can change it
-underneath: 58 of 20,000 raced connections recorded a destination the kernel
-never used, 126 of 30,000, 221 of 25,000, against ground truth from `connect()`'s
-own return. And `IORING_OP_CONNECT` calls `__sys_connect_file` directly, so
-io_uring is invisible: one io_uring connection plus one ordinary one gave one
-flow.
+**The sensor's attach point moved off the syscall boundary on 2026-09-09**, and
+what is left here is the record of the attempt that did NOT ship. The move is
+invariant 15; this entry exists so nobody rebuilds the rejected shape.
 
 **What was built and rejected**: `fentry` on `inet_stream_connect` and
-`inet_dgram_connect`, which closed both, and cost more than they bought.
-`security_socket_connect` runs BEFORE `sock->ops->connect` in
-`__sys_connect_file` (net/socket.c, v6.12 and v7.0), so an attempt an LSM denies
-never reaches those two functions at all, and a denied attempt is the event this
-tool exists for. `fentry` on a kernel function needs a BPF trampoline, and arm64
-gains one at 6.4: on 6.1 `bpf_arch_text_poke` pokes only BPF text,
-`register_fentry` returns `-ENOTSUPP` without `tr->fops`, and
-`DYNAMIC_FTRACE_WITH_DIRECT_CALLS` enters arm64's Kconfig at 6.4. That moves the
-floor from 5.8 to 6.4 on arm64 and takes portability with it, which is the whole
-of why invariant 7 puts the sensor here rather than in radar. SCTP
-(`sctp_inet_connect`) and MPTCP on 6.1 to 6.3 also bypass both, uncounted.
-
-**What to build when it is time**, so nobody re-derives it: ONE program on
-`__sys_connect_file`. It precedes the LSM hook, both the syscall path and
-io_uring reach it, and it carries `addrlen`, which closes a third hole nothing
-here checks today (the sensor reads a fixed-size sockaddr without consulting the
-length the caller passed). Two things must be decided first rather than
-discovered: whether arm64 below 6.4 must be supported, which forces kprobe with
-per-architecture objects (`bpf2go -target amd64,arm64`, correct by construction,
-unlike radar's hard-coded offset) instead of fentry; and that one io_uring TCP
-connect can produce two records, because `io_connect` re-issues after
-`EINPROGRESS`. The test matrix is an LSM-denied attempt, an SCTP connect,
-io_uring against a live listener, and arm64 on 6.1.
+`inet_dgram_connect` (TAIPANBOX/idryx#74, closed unmerged). It closed the race
+and io_uring, and cost more than it bought. `security_socket_connect` runs
+inside `__sys_connect_file` BEFORE `sock->ops->connect`, so hooking the
+protocol's connect loses every attempt an LSM denied, which is the event this
+tool exists for. `fentry` needs a BPF trampoline, which arm64 gains only at 6.4,
+moving the floor from 5.8 and taking Graviton on Amazon Linux 2023, Debian 12
+and Ubuntu 22.04 with it. SCTP and MPTCP on 6.1 to 6.3 bypass both functions
+uncounted.
 
 The branch is kept as the design record: `feat/the-sensor-reads-the-kernels-own-copy`,
 closed as TAIPANBOX/idryx#74, with the review's findings in its closing comment.

@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 #
-# internal/ebpfcapture/bpf_bpfel.o and bpf_bpfeb.o are compiled binaries kept in
+# internal/ebpfcapture/bpf_x86_bpfel.o and bpf_arm64_bpfel.o are compiled binaries kept in
 # git, and `//go:embed` puts them inside every binary this repository releases
 # and every image it publishes. They are the one artifact here that a reviewer
 # cannot read: a pull request shows "Binary files differ" and nothing else.
@@ -74,8 +74,8 @@ EXPECTED_CLANG="18.1.3"
 CC="${BPF2GO_CC:-clang}"
 STRIP="${BPF2GO_STRIP:-llvm-strip}"
 
-OBJECTS="internal/ebpfcapture/bpf_bpfel.o internal/ebpfcapture/bpf_bpfeb.o"
-BINDINGS="internal/ebpfcapture/bpf_bpfel.go internal/ebpfcapture/bpf_bpfeb.go"
+OBJECTS="internal/ebpfcapture/bpf_x86_bpfel.o internal/ebpfcapture/bpf_arm64_bpfel.o"
+BINDINGS="internal/ebpfcapture/bpf_x86_bpfel.go internal/ebpfcapture/bpf_arm64_bpfel.go"
 
 refuse() {
 	printf 'FAIL: measured nothing, which is not a pass.\n      %s\n' "$1"

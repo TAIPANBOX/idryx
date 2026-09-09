@@ -1380,8 +1380,8 @@ func runEBPFCapture(args []string) error {
 	// so it is worded as a warning and named last, where an operator reading a
 	// terminal stops.
 	if skipped.Any() {
-		fmt.Fprintf(os.Stderr, "idryx: not reported -- %d connect(s) over other address families (AF_UNIX, netlink, ...), %d unreadable sockaddr(s)\n",
-			skipped.OtherFamily, skipped.Unreadable)
+		fmt.Fprintf(os.Stderr, "idryx: not reported -- %d connect(s) over other address families (AF_UNIX, netlink, ...), %d with an address shorter than its family needs (the kernel refuses these too), %d unreadable sockaddr(s)\n",
+			skipped.OtherFamily, skipped.TooShort, skipped.Unreadable)
 	}
 	if skipped.Lost() {
 		fmt.Fprintf(os.Stderr, "idryx: WARNING: %d connection(s) were dropped because the ring buffer was full; this capture is incomplete\n",

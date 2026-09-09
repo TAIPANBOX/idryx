@@ -24,7 +24,7 @@ import (
 // Without -g, bpf2go fails at generate time with "looking up type
 // conn_event: not found" -- the object still compiles, it just carries no
 // type information to reflect.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -type skipped_counts bpf bpf/connect.c -- -g -O2 -I bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -type conn_event -type skipped_counts bpf bpf/connect.c -- -g -O2 -I bpf
 //
 // `-cc clang` used to be on that line and is gone deliberately, without
 // changing what a developer running `go generate` gets: "clang" is already
@@ -37,13 +37,26 @@ import (
 // back and the gate silently compiles with whatever `clang` happens to be on
 // the runner, which is the drift it exists to catch.
 //
-// AFTER REGENERATING, PUT THE `linux &&` BACK. bpf2go tags bpf_bpfel.go and
-// bpf_bpfeb.go by ARCHITECTURE only, with no OS constraint, and it has no flag
-// to add one. Without `linux &&` those files compile on darwin and windows too,
-// which drags all 19 cilium/ebpf packages into the dependency graph of a build
-// that can never use them. Invariant 4 says the eBPF layer is optional; that is
-// the line that makes it true. `scripts/ebpf-optional.sh` fails the moment it
-// is gone, so this is a visible debt rather than a silent one.
+// AFTER REGENERATING, TWO EDITS GO BACK ON BY HAND. Both are bpf2go output
+// marked DO NOT EDIT, so a regeneration removes them silently, and both are
+// visible debts rather than hidden ones because a gate fails when they are gone.
+//
+// 1. PUT THE `linux &&` BACK. bpf2go tags its output by ARCHITECTURE only, with
+//    no OS constraint, and has no flag to add one. Without it those files
+//    compile on darwin and windows too, which drags all 19 cilium/ebpf packages
+//    into the dependency graph of a build that can never use them. Invariant 4
+//    says the eBPF layer is optional; that is the line that makes it true, and
+//    `scripts/ebpf-optional.sh` fails the moment it is gone.
+//
+// 2. NARROW THE x86 TAG FROM `386 || amd64` TO `amd64`. bpf2go groups both under
+//    one target, and the object is not both. bpf_tracing.h picks its register
+//    names inside `#if defined(__KERNEL__) || defined(__VMLINUX_H__)`, which is
+//    the branch this program takes, and that branch is x86_64's: di, si, dx, cx.
+//    The i386 branch below it is unreachable here. So an object tagged 386 would
+//    read the wrong registers on a 32-bit kernel, silently, which is exactly the
+//    defect this repository corrected in tokenfuse's radar on 2026-09-09
+//    (TAIPANBOX/tokenfuse#268). One object claiming an architecture whose
+//    register layout it does not use is the fault, whoever ships it.
 
 // knownLLMHosts is the same starting set tokenfuse's own radar resolves
 // (crates/radar/src/main.rs's resolve_llm_ips) -- kept short and
@@ -71,15 +84,16 @@ type Options struct {
 	OnFlow func(Flow)
 }
 
-// Run attaches to sys_enter_connect, captures until ctx is canceled or
+// Run attaches to __sys_connect_file, captures until ctx is canceled or
 // Duration elapses (whichever first), and returns every captured flow together
 // with what it deliberately did not capture.
 //
 // The second return value is not diagnostics. AGENTS.md invariant 4 requires
 // idryx to say what it could not observe rather than present a partial graph as
-// a complete one, and an empty flow list has three meanings without it: nothing
-// connected, everything connected over a family this sensor ignores, or the
-// ring buffer filled and real evidence went on the floor.
+// a complete one, and an empty flow list has several meanings without it:
+// nothing connected, everything connected over a family this sensor ignores, an
+// address arrived too short for the kernel to accept, or the ring buffer filled
+// and real evidence went on the floor.
 //
 // Requires root (or CAP_BPF+CAP_PERFMON); returns a clear error otherwise
 // rather than a confusing EPERM three calls deep into the kernel.
@@ -127,11 +141,23 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 	}
 	defer objs.Close()
 
-	tp, err := link.Tracepoint("syscalls", "sys_enter_connect", objs.OnConnect, nil)
+	// __sys_connect_file, not the sys_enter_connect tracepoint. The address it
+	// carries is the kernel's own copy, so no thread can swap it between this
+	// sensor reading it and the kernel acting on it; io_uring reaches it, which
+	// the tracepoint never was; and it is above the protocol dispatch, so every
+	// family arrives and the coverage counters come off the same copy. See
+	// connect.c's header for the whole of it.
+	//
+	// A static symbol, so a kernel that inlined it has nothing to attach to and
+	// says so here rather than capturing part of the traffic: it has been a
+	// distinct function since Linux 5.5, below this sensor's own floor, and the
+	// error names it so an operator is not left guessing which symbol was
+	// missing.
+	kp, err := link.Kprobe("__sys_connect_file", objs.OnConnect, nil)
 	if err != nil {
-		return nil, skipped, fmt.Errorf("ebpfcapture: attach sys_enter_connect: %w", err)
+		return nil, skipped, fmt.Errorf("ebpfcapture: attach kprobe on __sys_connect_file (present since Linux 5.5; a kernel that inlined it cannot be watched this way): %w", err)
 	}
-	defer tp.Close()
+	defer kp.Close()
 
 	reader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -233,6 +259,7 @@ func readSkipped(objs *bpfObjects) SkippedCounts {
 		OtherFamily: raw.OtherFamily,
 		Unreadable:  raw.Unreadable,
 		RingbufFull: raw.RingbufFull,
+		TooShort:    raw.TooShort,
 	}
 }
 
