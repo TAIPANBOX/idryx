@@ -1375,13 +1375,19 @@ func runEBPFCapture(args []string) error {
 	// graph as a complete one, and "captured 0 flow(s)" alone cannot
 	// distinguish a quiet host from a sensor watching the wrong thing.
 	//
-	// The two out-of-scope counters are informational; a full ring buffer is
+	// The out-of-scope counters are informational; a full ring buffer is
 	// not, because it means connections this sensor wanted to record were lost,
 	// so it is worded as a warning and named last, where an operator reading a
 	// terminal stops.
+	//
+	// The AF_UNSPEC count is named separately from the other-family one rather
+	// than summed with it: they count different populations (a socket that
+	// never reaches the INET connect path, against that path being asked to
+	// dissolve a UDP association), and an operator who wants to know what the
+	// sensor did not see cannot take one combined number apart again.
 	if skipped.Any() {
-		fmt.Fprintf(os.Stderr, "idryx: not reported -- %d connect(s) over other address families (AF_UNIX, netlink, ...), %d unreadable sockaddr(s)\n",
-			skipped.OtherFamily, skipped.Unreadable)
+		fmt.Fprintf(os.Stderr, "idryx: not reported -- %d connect(s) over other address families (AF_UNIX, netlink, ...), %d AF_UNSPEC (a UDP socket being disconnected, not a connection), %d unreadable sockaddr(s)\n",
+			skipped.OtherFamily, skipped.NotInet, skipped.Unreadable)
 	}
 	if skipped.Lost() {
 		fmt.Fprintf(os.Stderr, "idryx: WARNING: %d connection(s) were dropped because the ring buffer was full; this capture is incomplete\n",

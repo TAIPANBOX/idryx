@@ -127,11 +127,35 @@ func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 	}
 	defer objs.Close()
 
+	// The coverage counter. It reports nothing: it counts connect() calls over
+	// families this sensor does not observe, which is the one thing the INET
+	// path below cannot say. See connect.c's header.
 	tp, err := link.Tracepoint("syscalls", "sys_enter_connect", objs.OnConnect, nil)
 	if err != nil {
 		return nil, skipped, fmt.Errorf("ebpfcapture: attach sys_enter_connect: %w", err)
 	}
 	defer tp.Close()
+
+	// The evidence. Both read the destination address AFTER the kernel copied
+	// it into its own memory, so no thread can swap it between this sensor
+	// reading it and the kernel acting on it, and both are reached by io_uring
+	// as well as by connect(), which the tracepoint above never was.
+	//
+	// Attached separately rather than in a loop so that a failure names the
+	// function it could not attach to: "attach fentry" with no symbol sends an
+	// operator to read this file, and the two have different reasons to be
+	// missing on an unusual kernel.
+	stream, err := link.AttachTracing(link.TracingOptions{Program: objs.OnInetStreamConnect})
+	if err != nil {
+		return nil, skipped, fmt.Errorf("ebpfcapture: attach fentry/inet_stream_connect (needs a BTF-enabled kernel that will attach there; this is the TCP half of the sensor and there is no partial capture without it): %w", err)
+	}
+	defer stream.Close()
+
+	dgram, err := link.AttachTracing(link.TracingOptions{Program: objs.OnInetDgramConnect})
+	if err != nil {
+		return nil, skipped, fmt.Errorf("ebpfcapture: attach fentry/inet_dgram_connect (needs a BTF-enabled kernel that will attach there; this is the UDP half of the sensor): %w", err)
+	}
+	defer dgram.Close()
 
 	reader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -233,6 +257,7 @@ func readSkipped(objs *bpfObjects) SkippedCounts {
 		OtherFamily: raw.OtherFamily,
 		Unreadable:  raw.Unreadable,
 		RingbufFull: raw.RingbufFull,
+		NotInet:     raw.NotInet,
 	}
 }
 

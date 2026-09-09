@@ -32,19 +32,22 @@ type bpfSkippedCounts struct {
 	OtherFamily uint64
 	Unreadable  uint64
 	RingbufFull uint64
+	NotInet     uint64
 }
 
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
-	bpfMapEvents              = "events"
-	bpfMapSkipped             = "skipped"
-	bpfProgOnConnect          = "on_connect"
-	bpfVarSelfPidnsDev        = "self_pidns_dev"
-	bpfVarSelfPidnsIno        = "self_pidns_ino"
-	bpfVarUnusedConnEvent     = "unused_conn_event"
-	bpfVarUnusedSkippedCounts = "unused_skipped_counts"
+	bpfMapEvents               = "events"
+	bpfMapSkipped              = "skipped"
+	bpfProgOnConnect           = "on_connect"
+	bpfProgOnInetDgramConnect  = "on_inet_dgram_connect"
+	bpfProgOnInetStreamConnect = "on_inet_stream_connect"
+	bpfVarSelfPidnsDev         = "self_pidns_dev"
+	bpfVarSelfPidnsIno         = "self_pidns_ino"
+	bpfVarUnusedConnEvent      = "unused_conn_event"
+	bpfVarUnusedSkippedCounts  = "unused_skipped_counts"
 )
 
 // loadBpf returns the embedded CollectionSpec for bpf.
@@ -89,7 +92,9 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	OnConnect *ebpf.ProgramSpec `ebpf:"on_connect"`
+	OnConnect           *ebpf.ProgramSpec `ebpf:"on_connect"`
+	OnInetDgramConnect  *ebpf.ProgramSpec `ebpf:"on_inet_dgram_connect"`
+	OnInetStreamConnect *ebpf.ProgramSpec `ebpf:"on_inet_stream_connect"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
@@ -155,12 +160,16 @@ type bpfVariables struct {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	OnConnect *ebpf.Program `ebpf:"on_connect"`
+	OnConnect           *ebpf.Program `ebpf:"on_connect"`
+	OnInetDgramConnect  *ebpf.Program `ebpf:"on_inet_dgram_connect"`
+	OnInetStreamConnect *ebpf.Program `ebpf:"on_inet_stream_connect"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
 		p.OnConnect,
+		p.OnInetDgramConnect,
+		p.OnInetStreamConnect,
 	)
 }
 

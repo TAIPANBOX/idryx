@@ -54,10 +54,43 @@ These are load-bearing security properties. A change that breaks one is a bug.
 `internal/ebpfcapture` is idryx's one privileged, host-level connector -- every
 other connector reads logs/inventory a caller already has; this one asks to run
 as root (or with `CAP_BPF`+`CAP_PERFMON`) on a real Linux host, kernel 5.7 or later, so it can attach
-a small BPF program to the `sys_enter_connect` tracepoint and observe outbound
-`connect()` calls directly from the kernel. That is a materially different
+small BPF programs to the kernel's own INET connect path and observe outbound
+connections directly from the kernel. That is a materially different
 trust posture from the rest of idryx, so it gets its own explicit callout
 rather than folding into the table above:
+
+- **Where it attaches, and why that moved on 2026-09-09.** The evidence comes
+  from `fentry` programs on `inet_stream_connect` and `inet_dgram_connect`. It
+  used to come from the `sys_enter_connect` tracepoint, which sits at the
+  syscall boundary where the destination address is still a pointer into the
+  calling process's memory that the kernel has not copied yet. Two things
+  followed from that, and neither was visible in anything the sensor printed:
+
+  - **A second thread could rewrite the address between the sensor reading it
+    and the kernel reading it**, so the sensor recorded a destination the kernel
+    never used. Against a tool whose job is noticing an agent reaching somewhere
+    it should not, a decoy destination is the whole game. Measured on 2026-09-09
+    with a two-thread probe on a 10-CPU kernel, 20,000 connections, ground truth
+    taken from `connect()`'s own return value: the old sensor misreported **58**
+    of them, and **126** of 30,000 on a second run. The current sensor matched
+    ground truth exactly in both runs.
+  - **io_uring never passed through it at all.** `IORING_OP_CONNECT` copies the
+    address at submission and calls `__sys_connect_file` directly, so a process
+    using io_uring was invisible: silently, and completely. Measured the same
+    day, one io_uring connection and one ordinary one under each sensor: the old
+    one reported 1 flow, the current one reports 2.
+
+  Both fentry programs take the address **after** the kernel has copied it into
+  its own memory, and both the syscall path and io_uring reach them through
+  `__sys_connect_file`. The tracepoint is still attached and now reserves
+  nothing and reports nothing: it counts `connect()` calls over families this
+  sensor does not observe, which is a coverage statement the INET path cannot
+  make. It still reads user memory, and a race there now reaches a counter
+  beside the evidence rather than the evidence.
+
+  This is not a claim that the sensor is unevadable. A host compromised enough
+  to load kernel code, or to use a path that does not reach
+  `sock->ops->connect`, is outside what any of this addresses.
 
 - **Scope of what it reads.** Only the arguments of `connect()` calls already
   visible to any process on the host with tracing permissions: the calling

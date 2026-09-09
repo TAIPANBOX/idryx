@@ -166,19 +166,36 @@ type SkippedCounts struct {
 	// OtherFamily is connect() calls over neither AF_INET nor AF_INET6:
 	// AF_UNIX, netlink and friends. Out of scope by design, counted so that a
 	// quiet capture on a busy host is explainable rather than mysterious.
+	//
+	// This is the only number that comes from the sys_enter_connect
+	// tracepoint, which since 2026-09-09 counts and reports nothing. It is a
+	// statement about coverage that the sensor's own attach point cannot make:
+	// down on the INET connect path, traffic over another family is not
+	// skipped, it is never seen at all.
 	OtherFamily uint64
-	// Unreadable is a sockaddr the kernel would not let the program read.
+	// Unreadable is a sockaddr the kernel would not let a program read, from
+	// either the counter or the evidence path.
 	Unreadable uint64
 	// RingbufFull is the one that matters: a connection this sensor wanted to
 	// report and could not, so the capture is incomplete in a way no other
 	// number would show.
 	RingbufFull uint64
+	// NotInet is the INET connect path reached with a family it does not
+	// report. In practice that is AF_UNSPEC, which on a datagram socket
+	// dissolves an association rather than making one: it is how a process
+	// disconnects a UDP socket, and it is not a connection.
+	//
+	// Separate from OtherFamily rather than added to it, because they count
+	// different populations and one number made of both could not be taken
+	// apart afterwards: OtherFamily is sockets that never reach this path,
+	// NotInet is this path being asked for something that is not a connection.
+	NotInet uint64
 }
 
 // Any reports whether anything at all went uncounted, so a caller can decide
 // between staying quiet and telling an operator what the capture missed.
 func (s SkippedCounts) Any() bool {
-	return s.OtherFamily > 0 || s.Unreadable > 0 || s.RingbufFull > 0
+	return s.OtherFamily > 0 || s.Unreadable > 0 || s.RingbufFull > 0 || s.NotInet > 0
 }
 
 // Lost reports whether evidence in scope was dropped, as opposed to traffic

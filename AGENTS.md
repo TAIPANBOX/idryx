@@ -500,6 +500,46 @@ an absent invariant.
     property is how the two start disagreeing. And it says nothing about whether
     the program is correct, only that it is the program the C describes.
 
+15. **The sensor reads the destination the KERNEL is about to use, never the
+    copy still sitting in the calling process's memory.** Evidence comes from
+    `fentry` on `inet_stream_connect` and `inet_dgram_connect`; the
+    `sys_enter_connect` tracepoint is still attached and now reserves nothing
+    and reports nothing, counting only what this sensor does not observe.
+
+    Two defects closed, both measured on 2026-09-09 against the previous build
+    rather than argued. A second thread rewriting the sockaddr between the
+    tracepoint reading it and the kernel copying it made the old sensor record a
+    destination the kernel never used: 58 of 20,000 connections, and 126 of
+    30,000 on a second run, against ground truth taken from `connect()`'s own
+    return value. The current sensor matched ground truth exactly in both. And
+    `IORING_OP_CONNECT` copies its address at submission and calls
+    `__sys_connect_file` directly, so io_uring never reached the tracepoint at
+    all: one io_uring connection and one ordinary one gave the old sensor 1 flow
+    and the current one 2.
+
+    **fentry rather than kprobe is forced, not preferred.** A kprobe on the same
+    two functions would read the same kernel copy, and would reach its arguments
+    through `PT_REGS_PARM`, whose field names `bpf_tracing.h` picks per
+    architecture at COMPILE time. This repository ships one object for bpfel and
+    one for bpfeb, and that portability is the whole of why invariant 7 puts the
+    sensor here rather than in radar, which hard-codes an x86_64 offset.
+    Choosing kprobe would reintroduce the exact defect this sensor exists to
+    avoid. fentry needs BTF, which CO-RE already required, so the floor does not
+    move.
+
+    **What it does not claim.** Not unevadability: a host compromised enough to
+    load kernel code, or to reach the network by a path that never calls
+    `sock->ops->connect`, is outside this entirely. And the tracepoint's own
+    counter still reads user memory and can still be raced, which is now the
+    whole of what a race reaches: a number beside the evidence, never the
+    evidence.
+    *(test: `TestAFUnspecOnTheInetPathIsCountedAndIsNotLostEvidence` and
+    `TestTheTwoOutOfScopeCountersAreSeparateFields`, both red against the
+    previous tree, which had no such counter to name. The two behaviours above
+    are held by the live A/B recorded in estate-gates PROVEN.md and reproducible
+    with the probes named there; no gate can hold them, because both need a
+    running kernel, root and a racing workload.)*
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**

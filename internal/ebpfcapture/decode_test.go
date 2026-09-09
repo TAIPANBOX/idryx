@@ -284,6 +284,40 @@ func TestSkippedDistinguishesOutOfScopeTrafficFromLostEvidence(t *testing.T) {
 	}
 }
 
+// NotInet counts the INET connect path being reached with a family it does not
+// report, which in practice is AF_UNSPEC dissolving a UDP association. It
+// arrived with the fentry attach point on 2026-09-09 and gets its own case
+// because Any() is what decides whether an operator is told anything at all: a
+// counter left out of it increments into a capture that reports itself as
+// having skipped nothing, which is the silence invariant 4 exists to refuse.
+func TestAFUnspecOnTheInetPathIsCountedAndIsNotLostEvidence(t *testing.T) {
+	unspec := SkippedCounts{NotInet: 2}
+	if !unspec.Any() {
+		t.Error("a UDP socket being disconnected is worth reporting; the sensor saw it and said nothing about it otherwise")
+	}
+	if unspec.Lost() {
+		t.Error("AF_UNSPEC is not a connection, so counting it must not tell an operator the capture is incomplete")
+	}
+}
+
+// The two out-of-scope counters answer different questions and must not be
+// merged into one number: OtherFamily counts sockets that never reach the INET
+// connect path at all (AF_UNIX, netlink), NotInet counts that path being asked
+// for something which is not a connection. One field made of both could not be
+// taken apart again by anyone reading a capture.
+func TestTheTwoOutOfScopeCountersAreSeparateFields(t *testing.T) {
+	both := SkippedCounts{OtherFamily: 7, NotInet: 3}
+	if both.OtherFamily == both.NotInet {
+		t.Fatal("the fixture must distinguish them for this test to mean anything")
+	}
+	if both.OtherFamily != 7 || both.NotInet != 3 {
+		t.Errorf("counters must survive independently, got OtherFamily=%d NotInet=%d", both.OtherFamily, both.NotInet)
+	}
+	if !both.Any() || both.Lost() {
+		t.Error("out-of-scope traffic of either kind is reportable and is not lost evidence")
+	}
+}
+
 func TestIdentityIsPrefixedSoTheDetectorCanRecognizeIt(t *testing.T) {
 	got := Identity("python3", 0)
 	if got != "proc:python3" {

@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-338-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-340-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -146,7 +146,7 @@ this file is still the one to read.
 
 idryx is a complete MVP for detection and remediation and has passed a security
 self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
-layer has shipped since (the `sys_enter_connect` sensor and its
+layer has shipped since (the INET-connect-path sensor and its
 `unmanaged_egress` detector). Beaconing shipped, and corroborating a claimed
 identity against the graph has begun: `unrouted_egress` reads the web-egress
 plane's own journal to decide whether a claim names an agent that plane
@@ -321,7 +321,7 @@ internal/model               Identity, Event, Permission, Alert, Severity (share
 internal/ingest               source connectors -> []model.Event or []model.Identity
 internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
 internal/ingest/passport        Agent Passport JSON documents (identity enrichment)
-internal/ebpfcapture         Linux-only eBPF sensor: sys_enter_connect -> egress-shaped
+internal/ebpfcapture         Linux-only eBPF sensor: the INET connect path -> egress-shaped
                               flows (root/CAP_BPF, see SECURITY.md); feeds internal/ingest's
                               egress connector via idryx ebpf-capture -out + --load egress:
 internal/graph                Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
@@ -354,7 +354,7 @@ Design principles, held as hard rules:
 One language and three direct dependencies. `make build` produces a single binary that carries the dashboard, the detectors and the eBPF program inside it.
 
 - **Core, ingest, baseline, detection, remediation:** Go 1.27. Detection is Go rather than a separate analytics runtime on purpose: it is statistics and rules over the graph, it has to stay deterministic, and somebody eventually has to defend a finding by reading the code that made it.
-- **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`) on the `sys_enter_connect` tracepoint, compiled with `bpf2go` and embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, and the only non-Go source in the repository.
+- **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`, about 90 lines of logic) carrying three small BPF programs: two `fentry` probes on the kernel's own INET connect path, which is where the evidence comes from, and the `sys_enter_connect` tracepoint, which now only counts what the sensor does not observe. Compiled with `bpf2go`, embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, and the only non-Go source in the repository. The compiled object is checked against that source on every push (`scripts/object-matches-its-source.sh`), because a binary in git is the one file a reviewer cannot read.
 - **Graph:** in-memory by default, Postgres (`pgx/v5`, embedded `schema.sql`, additive `IF NOT EXISTS` migrations) as the alternative. Both satisfy the same `graph.Reader`, so detectors run unchanged against either. Delegation chains are walked in Go (`graph.WalkDelegationChain`, cycle-safe), not in SQL.
 - **API and dashboard:** Go `net/http`, a JSON API and one self-contained `html/template` page. No frontend build step, no CDN, no framework.
 - **Dependencies:** `cilium/ebpf`, `pgx/v5`, and `agent-stack-go` for the shared wire types. That is the entire list.
@@ -683,10 +683,16 @@ and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 
 **eBPF network sensor** (`internal/ebpfcapture`, `idryx ebpf-capture`) -
-Linux-only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached to the
-`sys_enter_connect` tracepoint via `cilium/ebpf`, capturing real outbound
+Linux-only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached via
+`cilium/ebpf` to the kernel's own INET connect path (`fentry` on
+`inet_stream_connect` and `inet_dgram_connect`), capturing real outbound
 connections (pid, process name, destination) with no dependency on IAM,
-agent-event, or Passport data. Writes an egress-shaped log consumed by the
+agent-event, or Passport data. It reads the destination after the kernel has
+copied it, so a second thread cannot swap the address the sensor records, and it
+sees io_uring connections, which a sensor on the `connect()` syscall does not.
+Both were measured on 2026-09-09 against the previous version, which missed the
+io_uring connection entirely and misreported 58 of 20,000 raced ones. See
+[`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture). Writes an egress-shaped log consumed by the
 same `--load egress:` pipeline every other source uses. Known LLM API
 destinations are resolved to their hostname so the existing `shadow_ai`
 detector reasons over eBPF-captured traffic for free; its own
@@ -728,7 +734,7 @@ against, both because they would need to read a payload, see
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [x] eBPF network-behavior layer (descoped first version): Linux sensor on
-      `sys_enter_connect` (`idryx ebpf-capture`), its `unmanaged_egress`
+      the INET connect path (`idryx ebpf-capture`), its `unmanaged_egress`
       detector, live-validated against real traffic on a disposable VM (see
       [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
       original larger spec's beaconing shipped 2026-08-09; JA3/JA4 and
