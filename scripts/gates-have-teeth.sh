@@ -122,11 +122,22 @@ FILTER="${1:-}"
 # Whether this machine can compile a BPF object at all. Checked explicitly
 # rather than left to the gate's own refusal: without a toolchain that gate
 # correctly reports that it measured nothing, every case against it would come
-# back UNJUDGEABLE, and a harness reporting six failures on a machine that is
+# back UNJUDGEABLE, and a harness reporting four failures on a machine that is
 # simply a laptop teaches everyone to ignore it.
+#
+# THE LAST CLAUSE IS THE ONE THAT MATTERS, and it is not decoration. GitHub's
+# ubuntu-24.04 image ships clang 18 already, and does NOT ship libbpf-dev. So
+# `command -v clang` plus a version match is true in the `build` job, where the
+# <bpf/bpf_helpers.h> that connect.c includes does not exist: the gate would
+# refuse for a perfectly good reason, its baseline would be red, and all four
+# cases would report UNJUDGEABLE in a job that never intended to run them.
+# Asking whether a minimal BPF translation unit COMPILES is the same question
+# the cases actually need, and costs one clang invocation.
 have_bpf_toolchain=0
 if command -v clang >/dev/null 2>&1 && command -v llvm-strip >/dev/null 2>&1 &&
-	clang --version 2>/dev/null | grep -q 'clang version 18\.'; then
+	clang --version 2>/dev/null | grep -q 'clang version 18\.' &&
+	printf '#include <bpf/bpf_helpers.h>\nchar _l[] SEC("license") = "GPL";\n' |
+	clang -target bpf -O2 -c -x c - -o /dev/null >/dev/null 2>&1; then
 	have_bpf_toolchain=1
 fi
 
