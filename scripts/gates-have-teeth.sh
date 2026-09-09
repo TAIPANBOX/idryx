@@ -404,5 +404,23 @@ if [ "$failures" -gt 0 ]; then
 	exit 1
 fi
 
+# A run that judged nothing is not a pass, and this is the one file that cannot
+# be allowed to make that mistake. It is reachable: `gates-have-teeth.sh
+# object-matches-its-source` on a machine with no BPF compiler filters down to
+# four cases and skips all four. That combination is exactly what ci.yml's
+# `ebpf` job runs, so if that job ever lost libbpf-dev this script would have
+# printed "OK: 0 cases" and gone green over a gate nobody had exercised.
+if [ "$cases" -eq 0 ]; then
+	printf 'FAIL: no case ran, which is not the same as every case passing.\n'
+	if [ -n "$FILTER" ]; then
+		printf '      The filter was "%s". Either it matches no case name, or the\n' "$FILTER"
+		printf '      cases it matches all need a toolchain this machine does not have.\n'
+	else
+		printf '      Nothing at all was judged. This script has cases; if none ran,\n'
+		printf '      something above it is wrong, not something below.\n'
+	fi
+	exit 1
+fi
+
 printf 'OK: %d cases. Every gate fails on its own fault, passes on a non-fault,\n' "$cases"
 printf '    and refuses to report success when it measured nothing.\n'
