@@ -132,12 +132,20 @@ FILTER="${1:-}"
 # refuse for a perfectly good reason, its baseline would be red, and all four
 # cases would report UNJUDGEABLE in a job that never intended to run them.
 # Asking whether a minimal BPF translation unit COMPILES is the same question
-# the cases actually need, and costs one clang invocation.
+# the cases actually need, and costs a quarter of a second.
+#
+# The probe uses connect.c's OWN include chain, vmlinux.h before
+# <bpf/bpf_helpers.h>, and that order is not decoration. bpf_helpers.h does not
+# define __u32 and __u64; vmlinux.h does. A first version of this probe included
+# only bpf_helpers.h, failed with "unknown type name '__u64'" on a machine with
+# a perfectly good toolchain, and reported all four cases as NOT RUN in the one
+# job that exists to run them. A detector that answers "no" everywhere is not a
+# conservative detector, it is a broken one.
 have_bpf_toolchain=0
 if command -v clang >/dev/null 2>&1 && command -v llvm-strip >/dev/null 2>&1 &&
 	clang --version 2>/dev/null | grep -q 'clang version 18\.' &&
-	printf '#include <bpf/bpf_helpers.h>\nchar _l[] SEC("license") = "GPL";\n' |
-	clang -target bpf -O2 -c -x c - -o /dev/null >/dev/null 2>&1; then
+	printf '#include "vmlinux.h"\n#include <bpf/bpf_helpers.h>\nchar _l[] SEC("license") = "GPL";\n' |
+	clang -target bpf -O2 -c -x c - -I internal/ebpfcapture/bpf -o /dev/null >/dev/null 2>&1; then
 	have_bpf_toolchain=1
 fi
 
