@@ -141,11 +141,30 @@ FILTER="${1:-}"
 # a perfectly good toolchain, and reported all four cases as NOT RUN in the one
 # job that exists to run them. A detector that answers "no" everywhere is not a
 # conservative detector, it is a broken one.
+# IT MUST ASK ABOUT THE COMPILER THE GATE WILL ACTUALLY USE. ci.yml installs
+# `clang-18` and names it to bpf2go through $BPF2GO_CC, and nothing guarantees an
+# unversioned `clang` exists beside it. A first version of this probe hard-coded
+# the name: on GitHub's runner the gate itself passed, this harness then found no
+# `clang`, reported all four cases NOT RUN, and the zero-case guard below failed
+# the job. Two places naming one compiler is how they disagree, so there is one.
+#
+# The pinned version is read out of the gate itself for the same reason. A second
+# copy of "18" here would be a pin nobody moves when the real one moves.
+probe_cc="${BPF2GO_CC:-clang}"
+probe_strip="${BPF2GO_STRIP:-llvm-strip}"
+probe_pin="$(sed -n 's/^EXPECTED_CLANG="\([^"]*\)".*/\1/p' scripts/object-matches-its-source.sh | head -1)"
+if [ -z "$probe_pin" ]; then
+	printf 'FAIL: could not read EXPECTED_CLANG out of scripts/object-matches-its-source.sh,\n'
+	printf '      so this harness cannot tell whether a machine has the compiler that\n'
+	printf '      gate is pinned to, and would silently treat every machine as lacking it.\n'
+	exit 1
+fi
+
 have_bpf_toolchain=0
-if command -v clang >/dev/null 2>&1 && command -v llvm-strip >/dev/null 2>&1 &&
-	clang --version 2>/dev/null | grep -q 'clang version 18\.' &&
+if command -v "$probe_cc" >/dev/null 2>&1 && command -v "$probe_strip" >/dev/null 2>&1 &&
+	"$probe_cc" --version 2>/dev/null | grep -qF "clang version $probe_pin" &&
 	printf '#include "vmlinux.h"\n#include <bpf/bpf_helpers.h>\nchar _l[] SEC("license") = "GPL";\n' |
-	clang -target bpf -O2 -c -x c - -I internal/ebpfcapture/bpf -o /dev/null >/dev/null 2>&1; then
+	"$probe_cc" -target bpf -O2 -c -x c - -I internal/ebpfcapture/bpf -o /dev/null >/dev/null 2>&1; then
 	have_bpf_toolchain=1
 fi
 
@@ -240,7 +259,11 @@ run_case_bpf() {
 		return
 	fi
 	skipped_toolchain=$((skipped_toolchain + 1))
-	printf 'NOT RUN  %s\n         needs clang 18 with the BPF target and libbpf headers;\n         ci.yml runs it in the `ebpf` job\n' "$1"
+	# Names what was looked for, not just that something was missing: the first
+	# time this printed, the answer was that it had looked for the wrong
+	# compiler, and the message gave a reader no way to see that.
+	printf 'NOT RUN  %s\n         looked for %s (clang %s) and %s with libbpf headers;\n         ci.yml runs it in the `ebpf` job\n' \
+		"$1" "$probe_cc" "$probe_pin" "$probe_strip"
 }
 
 echo "=== faults each gate must catch ==="
