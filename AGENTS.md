@@ -281,9 +281,26 @@ an absent invariant.
    this direction and not the other** (@claude, read off both trees
    2026-08-08). `connect.c` reads the syscall argument through the
    BTF-typed `trace_event_raw_sys_enter` from `vmlinux.h`, so it is CO-RE and
-   portable, while radar hard-codes `ctx.read_at::<u64>(24)` with a comment
-   saying "offset 24 on x86_64" and will read the wrong bytes on any other
-   architecture. `capture_linux.go` skips loopback traffic unless the port is
+   portable, while radar hard-codes `ctx.read_at::<u64>(24)`: it counts bytes
+   where this one reads a type, so a layout that changes is one radar would
+   follow silently.
+
+   **This said radar "will read the wrong bytes on any other architecture"
+   until 2026-09-09, and that was wrong.** `struct trace_entry` is 8 bytes,
+   then `long id`, then `unsigned long args[6]` from offset 16, so `args[1]`
+   is at 24 on every LP64 architecture, aarch64 included, which this
+   repository's own `vmlinux.h` says because it was dumped from an aarch64
+   kernel. Confirmed by running radar there with its architecture refusal
+   lifted in a throwaway copy: it built, loaded on Linux 7.0.12 aarch64, and
+   reported both test destinations exactly as connected (TAIPANBOX/tokenfuse#268,
+   #269). 32-bit is genuinely different, and radar's refusal covers it.
+
+   The correction is left in place of the claim because this paragraph is the
+   argument for where the sensor grows, and an argument resting on a false
+   premise is one somebody re-derives. The other two differences below were
+   measured and stand.
+
+   `capture_linux.go` skips loopback traffic unless the port is
    11434, 8000 **or 8001**, while radar's filter omits 8001 and drops the
    packet before its own `is_llm` can recognise the local vLLM port it
    nevertheless lists. And this one drops its own traffic by the tgid its own
