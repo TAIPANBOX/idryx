@@ -581,6 +581,50 @@ that goes red proves nothing until you know which line made it red.
   nobody notices breaking: the next capability added in the wrong repository
   compiles, passes its own CI, and reads as progress.
 
+**The sensor's attach point: moving it off the syscall boundary was prototyped,
+measured, and DEFERRED.** `@decided 2026-09-09`, after a review priced the move:
+name the two defects honestly and redesign once, deliberately, when this sensor
+goes into a real deployment, rather than a third time in one day. Written down
+here so the next session does not rediscover the same two defects and build the
+same wrong fix.
+
+The defects are real and are now named in SECURITY.md rather than left silent.
+The `sys_enter_connect` tracepoint reads the destination out of the calling
+process's memory before the kernel copies it, so a second thread can change it
+underneath: 58 of 20,000 raced connections recorded a destination the kernel
+never used, 126 of 30,000, 221 of 25,000, against ground truth from `connect()`'s
+own return. And `IORING_OP_CONNECT` calls `__sys_connect_file` directly, so
+io_uring is invisible: one io_uring connection plus one ordinary one gave one
+flow.
+
+**What was built and rejected**: `fentry` on `inet_stream_connect` and
+`inet_dgram_connect`, which closed both, and cost more than they bought.
+`security_socket_connect` runs BEFORE `sock->ops->connect` in
+`__sys_connect_file` (net/socket.c, v6.12 and v7.0), so an attempt an LSM denies
+never reaches those two functions at all, and a denied attempt is the event this
+tool exists for. `fentry` on a kernel function needs a BPF trampoline, and arm64
+gains one at 6.4: on 6.1 `bpf_arch_text_poke` pokes only BPF text,
+`register_fentry` returns `-ENOTSUPP` without `tr->fops`, and
+`DYNAMIC_FTRACE_WITH_DIRECT_CALLS` enters arm64's Kconfig at 6.4. That moves the
+floor from 5.8 to 6.4 on arm64 and takes portability with it, which is the whole
+of why invariant 7 puts the sensor here rather than in radar. SCTP
+(`sctp_inet_connect`) and MPTCP on 6.1 to 6.3 also bypass both, uncounted.
+
+**What to build when it is time**, so nobody re-derives it: ONE program on
+`__sys_connect_file`. It precedes the LSM hook, both the syscall path and
+io_uring reach it, and it carries `addrlen`, which closes a third hole nothing
+here checks today (the sensor reads a fixed-size sockaddr without consulting the
+length the caller passed). Two things must be decided first rather than
+discovered: whether arm64 below 6.4 must be supported, which forces kprobe with
+per-architecture objects (`bpf2go -target amd64,arm64`, correct by construction,
+unlike radar's hard-coded offset) instead of fentry; and that one io_uring TCP
+connect can produce two records, because `io_connect` re-issues after
+`EINPROGRESS`. The test matrix is an LSM-denied attempt, an SCTP connect,
+io_uring against a live listener, and arm64 on 6.1.
+
+The branch is kept as the design record: `feat/the-sensor-reads-the-kernels-own-copy`,
+closed as TAIPANBOX/idryx#74, with the review's findings in its closing comment.
+
 ## Standing rule
 
 An approved architecture decision is **not finished** until it is two things: a

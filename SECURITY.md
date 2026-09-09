@@ -114,6 +114,44 @@ rather than folding into the table above:
   Passport record whatsoever), which is a real gap it closes regardless of
   this limitation, not a claim that it resolves identity reliably under an
   adversarial host.
+- **The attach point is the `connect()` syscall boundary, and that costs two
+  things, both measured on 2026-09-09 rather than reasoned about.** The
+  tracepoint fires at the moment the syscall enters, where the destination
+  address is still a pointer into the calling process's memory that the kernel
+  has not copied yet.
+
+  - **A second thread can change the address after this sensor reads it and
+    before the kernel does.** `__sys_connect` copies it with
+    `move_addr_to_kernel` some instructions later, and the sensor records
+    whichever bytes it saw first. A two-thread probe on a 10-CPU kernel, with
+    ground truth taken from `connect()`'s own return value, made this sensor
+    record a destination the kernel never used **58 times in 20,000
+    connections**, 126 in 30,000 and 221 in 25,000. This is the same class of
+    limitation as the `comm` one above and has the same shape: it takes a
+    process already trying to evade, and it is an upper bound on what a crude
+    probe achieves, not on what a prepared one does.
+  - **io_uring is not observed at all.** `IORING_OP_CONNECT` copies its address
+    at submission and calls `__sys_connect_file` directly, so it never reaches
+    this tracepoint. Measured with one io_uring connection and one ordinary one
+    in the same capture: the sensor reported one flow. Nothing is counted, so
+    an operator sees a quiet host rather than a gap. No mainstream agent
+    runtime uses io_uring for sockets today (CPython's asyncio, Node's libuv,
+    Go's netpoll and tokio's default all use epoll), which bounds how much this
+    matters now and not how much it will.
+
+  **The fix is known and deliberately not built yet.** One program on
+  `__sys_connect_file` would close both: it takes the address after the kernel
+  copied it, both the syscall path and io_uring pass through it, and it carries
+  `addrlen`. It was prototyped and measured closing both defects, and then
+  refused, because attaching below the syscall costs more than it buys today.
+  `security_socket_connect` runs BEFORE `sock->ops->connect`, so hooking the
+  protocol's connect loses every attempt an LSM denied, which is the event this
+  tool most wants; and `fentry` on a kernel function needs a BPF trampoline,
+  which arm64 gains only in 6.4, moving this sensor's floor from 5.8 to 6.4
+  there and taking portability, its one real advantage, with it. That trade is
+  worth making deliberately, with a test matrix, when this sensor goes into a
+  real deployment. It is not worth making blind.
+
 - **JA3/JA4 TLS fingerprinting is out of scope permanently, not for this
   version.** It would require reading the ClientHello, which is reading what
   the application wrote into its socket, and that contradicts all three clauses
