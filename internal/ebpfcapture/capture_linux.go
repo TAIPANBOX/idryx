@@ -24,7 +24,18 @@ import (
 // Without -g, bpf2go fails at generate time with "looking up type
 // conn_event: not found" -- the object still compiles, it just carries no
 // type information to reflect.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -type skipped_counts -cc clang bpf bpf/connect.c -- -g -O2 -I bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type conn_event -type skipped_counts bpf bpf/connect.c -- -g -O2 -I bpf
+//
+// `-cc clang` used to be on that line and is gone deliberately, without
+// changing what a developer running `go generate` gets: "clang" is already
+// bpf2go's own default for -cc. What naming it on the command line did was
+// override $BPF2GO_CC, because a flag given explicitly beats the environment
+// default behind it. scripts/object-matches-its-source.sh compiles this file
+// with one PINNED compiler and compares the result against the committed
+// object, and it sets that compiler through $BPF2GO_CC precisely so there is
+// still only ONE spelling of this command in the repository. Put `-cc clang`
+// back and the gate silently compiles with whatever `clang` happens to be on
+// the runner, which is the drift it exists to catch.
 //
 // AFTER REGENERATING, PUT THE `linux &&` BACK. bpf2go tags bpf_bpfel.go and
 // bpf_bpfeb.go by ARCHITECTURE only, with no OS constraint, and it has no flag
