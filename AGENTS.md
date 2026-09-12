@@ -18,6 +18,7 @@ go test ./...                     # all packages MUST be ok
 ./scripts/ebpf-optional.sh        # invariant 4, the eBPF layer is optional
 ./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
+./scripts/compat-surface.sh       # invariant 16, the promised surface is in the code
 ./scripts/gates-have-teeth.sh     # invariant 9, the gates above can still fail
                                   # (mutates tracked files; needs a clean tree)
 
@@ -582,6 +583,32 @@ an absent invariant.
     one io_uring TCP connect can produce two records when `io_connect` re-issues
     after `EINPROGRESS`; the run here completed inline with ECONNREFUSED, so the
     re-issue path has never been observed.
+
+16. **The surface `compat/1.0.json` promises is present in the code, and
+    `COMPATIBILITY.md` is rendered from it, never typed.** SemVer's item 5:
+    version 1.0.0 defines the public API, so a 1.0 is a promise about a
+    surface, and a promise nobody can point at is a mood. The estate's first two
+    1.0 tags (agent-passport, agent-stack-go, 2026-09-12) each came with the
+    surface written down and a gate that fails when it moves; this repository
+    writes its surface before its 1.0 so that the tag, when it comes, freezes
+    something already held: the eight subcommands, the sink-delivery exit code,
+    the four `serve` routes, the three `IDRYX_` names, the one event type it
+    emits, the ten bus types it reasons about, and the CycloneDX 1.6 BOM format.
+    Additive things (a detector, a flag, a connector, a known event type, the
+    agent-event schema version it emits) are listed as such and never checked;
+    experimental things (the egress log shape, the dashboard HTML) may change.
+
+    The check is textual by design and says so: a name must appear as a quoted
+    literal in the file the manifest says holds it, so a comment does not
+    count, and `lhs=rhs` entries are read as assignments. It does not prove the
+    code does what the name says, and it does not prove a name absent from the
+    manifest is not part of the surface. estate-gates C19 asks whether this
+    file and the manifest exist and CI runs the gate; this gate asks whether
+    the promise still holds.
+    *(gate: `scripts/compat-surface.sh`; seven cases in `gates-have-teeth.sh`:
+    a route renamed, an environment name gone, an exit code moved, the human
+    form edited by hand, an additive route that must pass, and the manifest and
+    a named file taken away, both of which must read as measured nothing)*
 
 ## Decisions that have no gate yet
 
