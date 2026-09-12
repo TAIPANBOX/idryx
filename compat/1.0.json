@@ -1,0 +1,35 @@
+{
+  "schema": "taipanbox.dev/compat/v1",
+  "repo": "TAIPANBOX/idryx",
+  "major": 1,
+  "status": "proposed: this repository is at 0.x, and the surface named here is what its 1.0 will freeze; the gate holds it from today so that 1.0 is a tag and not a rewrite",
+  "frozen": {
+    "cli.subcommands": ["detect", "bom", "ai-inventory", "serve", "load", "remediate", "ebpf-capture", "version"],
+    "cli.exit_codes": ["exitSinkDelivery=3"],
+    "http.routes": ["/api/alerts", "/api/identities", "/api/remediations", "/healthz"],
+    "env": ["IDRYX_OTLP_ENDPOINT", "IDRYX_EVENTS", "IDRYX_TRUST_DOMAIN"],
+    "events.emitted": ["identity_finding"],
+    "events.consumed": ["budget_exhausted", "sustained_loop", "spend_spike", "fanout_explosion", "breaker_tripped", "dlp_block", "taint_block", "mcp_drift", "web_fetch", "web_blocked"],
+    "formats": ["CycloneDX", "1.6"]
+  },
+  "where": {
+    "cli.subcommands": ["cmd/idryx/main.go"],
+    "cli.exit_codes": ["cmd/idryx/main.go"],
+    "http.routes": ["internal/server/server.go"],
+    "env": ["cmd/idryx/main.go"],
+    "events.emitted": ["internal/events/events.go"],
+    "events.consumed": ["internal/ingest/tokenfuse/tokenfuse.go"],
+    "formats": ["internal/bom/cyclonedx.go"]
+  },
+  "additive": [
+    "a detector: a new one is a new finding, never a removed one",
+    "a CLI flag on an existing subcommand",
+    "a connector source",
+    "an event type in events.consumed",
+    "the agent-event schema version this repository emits, which moves in its own release (agent-passport SPEC 6.4.1)"
+  ],
+  "experimental": [
+    "the egress log JSON that ebpf-capture writes",
+    "the dashboard HTML"
+  ]
+}

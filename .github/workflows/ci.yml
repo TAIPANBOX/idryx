@@ -64,6 +64,12 @@ jobs:
       - name: the diagrams count what exists
         run: ./scripts/diagrams-match-detectors.sh
 
+      # The surface compat/1.0.json promises is in the code, and
+      # COMPATIBILITY.md is its rendering (invariant 16). Written before the
+      # 1.0 tag so that the tag freezes something already held.
+      - name: the promised compatibility surface is in the code
+        run: ./scripts/compat-surface.sh
+
       # Last, because it mutates tracked files and restores them: anything
       # after it would run against a tree it had just rewritten and put back.
       #

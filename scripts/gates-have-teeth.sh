@@ -414,6 +414,49 @@ run_case "ebpf-optional: nothing pulling in cilium on linux either" fail \
     open(f, "w").write(t[:i] + "//go:build never_built" + t[j:])')" \
 	"pulls in NO cilium/ebpf packages"
 
+# --- the compatibility surface (invariant 16) ------------------------------
+# A frozen name that leaves the code must be red; an additive route must not
+# be; the manifest, a file it names and the rendered human form are all
+# subjects whose absence or drift is a finding rather than a pass.
+echo
+echo "=== compat-surface: the promised surface is in the code ==="
+
+run_case "compat-surface: a frozen route renamed in the router" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("internal/server/server.go", "\"/api/alerts\"", "\"/api/alert\"")')" \
+	"/api/alerts"
+
+run_case "compat-surface: a frozen environment name gone from the reader" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("cmd/idryx/main.go", "\"IDRYX_TRUST_DOMAIN\"", "\"IDRYX_TRUSTDOMAIN\"")')" \
+	"IDRYX_TRUST_DOMAIN"
+
+run_case "compat-surface: an exit code that moved" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("cmd/idryx/main.go", "const exitSinkDelivery = 3", "const exitSinkDelivery = 4")')" \
+	"exitSinkDelivery=3"
+
+run_case "compat-surface: COMPATIBILITY.md edited by hand" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("COMPATIBILITY.md", "## Frozen", "## Frozen (edited by hand)")')" \
+	"COMPATIBILITY.md"
+
+run_case "compat-surface: a route added, which is additive" pass \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("internal/server/server.go", "\tmux.HandleFunc(\"/healthz\"", "\tmux.HandleFunc(\"/api/added\", s.handleAlerts)\n\tmux.HandleFunc(\"/healthz\"")')"
+
+run_case "compat-surface: the manifest gone, so it measured nothing" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'import os
+os.remove("compat/1.0.json")')" \
+	"measured nothing"
+
+run_case "compat-surface: a file the manifest names gone, so it measured nothing" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'import os
+os.remove("internal/server/server.go")')" \
+	"measured nothing"
+
 echo
 if [ -n "$(git status --porcelain)" ]; then
 	printf 'FAIL: this script left the tree dirty, so it cannot be trusted about anything above\n'
