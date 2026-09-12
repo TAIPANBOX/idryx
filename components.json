@@ -29,6 +29,7 @@
   ],
   "schema": "taipanbox.dev/components/v1",
   "repo": "TAIPANBOX/idryx",
+  "distribution": "ghcr.io/taipanbox/idryx; per-target archives with SHA256SUMS on each GitHub Release",
   "components": [
     {
       "name": "idryx",
