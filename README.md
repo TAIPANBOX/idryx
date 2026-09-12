@@ -471,6 +471,31 @@ toolchain, and a digest is only meaningful beside the compiler that made it.
 
 > Maintainers: a release is cut automatically by CI on `git tag vX.Y.Z && git push --tags`.
 
+## Verify a download
+
+Every release is signed keyless with Sigstore and carries a build-provenance
+attestation and an SBOM. With `cosign` and `gh` installed:
+
+```sh
+tag=<tag>
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/TAIPANBOX/idryx/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum -c SHA256SUMS
+gh attestation verify <one downloaded archive> -R TAIPANBOX/idryx
+```
+
+The image (where one is published):
+
+```sh
+cosign verify ghcr.io/taipanbox/idryx:<tag> \
+  --certificate-identity-regexp '^https://github.com/TAIPANBOX/idryx/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/taipanbox/idryx:<tag> -R TAIPANBOX/idryx
+```
+
+Releases before the tag that first carries these have none of this; the tags say so.
+
 ## Quick start
 
 ```sh
