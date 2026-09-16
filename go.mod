@@ -5,7 +5,7 @@ go 1.27
 toolchain go1.27.0
 
 require (
-	github.com/TAIPANBOX/agent-stack-go v1.0.0
+	github.com/TAIPANBOX/agent-stack-go v1.0.1
 	github.com/cilium/ebpf v0.22.0
 	github.com/jackc/pgx/v5 v5.9.2
 	golang.org/x/sys v0.43.0
