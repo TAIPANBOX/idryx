@@ -144,6 +144,27 @@ rather than folding into the table above:
   other families counted, and exactly the 4 deliberately short ones counted as
   such.
 
+  **Measured on x86_64 too, 2026-09-27**, closing the gap the release notes
+  named: `ghcr.io/taipanbox/idryx:v1.0.0 ebpf-capture --duration 70s`, a
+  privileged container sharing the host PID namespace, on Debian's own kernel
+  (`6.12.107+deb13-amd64`, BTF present), captured 349 flows in 70 seconds and
+  exited 0, with 91 connects over other families counted and named rather
+  than dropped. This is also the first live capture against a real governed
+  agent rather than a synthetic one: a Hermes agent (`AGENT_PASSPORT_ID` set)
+  took one turn through a TokenFuse gateway, and every one of its own flows
+  carried `claimed:agent://taipanbox.dev/hermes/alpha`. The gateway's own
+  upstream to the model provider appeared as
+  `proc:tokio-rt-worker@... -> api.anthropic.com:443`, the provider's
+  hostname on port 443 (this section's own rule), and it belongs to the
+  gateway's process, never the agent's: no connection from the agent went to
+  the provider directly. The agent did connect directly, on start, to the
+  addresses `pypi.org` and `files.pythonhosted.org` resolve to, which the
+  gateway never sees, because nothing on this cluster puts an egress plane in
+  front of that path (see `unrouted_egress` below, and the estate's own
+  egress connector, `scopyx`, not deployed here). This closes the "x86_64 is
+  built and gated, not run" line in the 1.0.0 release notes; it has still not
+  run on a real fleet or a cloud host, only on this one lab cluster's node.
+
   **What this is NOT.** Not a claim of unevadability: a host compromised enough
   to load kernel code, or to reach the network by a path that never calls
   `__sys_connect_file`, is outside it entirely. `comm` remains what the
