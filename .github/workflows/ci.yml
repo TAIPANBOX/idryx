@@ -70,6 +70,11 @@ jobs:
       - name: the promised compatibility surface is in the code
         run: ./scripts/compat-surface.sh
 
+      # Every scenario in features/ names a test that exists, and every
+      # scenario names one (AGENTS.md invariant 17).
+      - name: every scenario is bound to a test
+        run: ./scripts/features-are-bound.sh
+
       # Last, because it mutates tracked files and restores them: anything
       # after it would run against a tree it had just rewritten and put back.
       #

@@ -457,6 +457,34 @@ run_case "compat-surface: a file the manifest names gone, so it measured nothing
 os.remove("internal/server/server.go")')" \
 	"measured nothing"
 
+# --- the scenarios (invariant 17) -----------------------------------------
+# features/ holds what the owner asked for as Given / When / Then, and this gate
+# is what keeps each scenario pointing at a test that exists. A binding to a
+# renamed test, a scenario with no binding, and a features/ directory that has
+# gone must all be red; prose edited inside a scenario must not be.
+echo
+echo "=== features-are-bound: every scenario names a test that exists ==="
+
+run_case "features-are-bound: a scenario bound to a test that is gone" fail \
+	'./scripts/features-are-bound.sh' \
+	"$(py 'edit("features/source-must-match-its-stream.feature", "# @test:TestARefusalIsReportedAndNeverFatal", "# @test:TestARefusalIsReportedAndNeverFatalRenamed")')" \
+	"no such test exists"
+
+run_case "features-are-bound: a scenario with no binding" fail \
+	'./scripts/features-are-bound.sh' \
+	"$(py 'edit("features/source-must-match-its-stream.feature", "  # @test:TestARefusalIsReportedAndNeverFatal\n", "")')" \
+	"binding(s)"
+
+run_case "features-are-bound: prose edited inside a scenario" pass \
+	'./scripts/features-are-bound.sh' \
+	"$(py 'edit("features/source-must-match-its-stream.feature", "Given tokenfuse.ndjson holds a line claiming wardryx", "Given tokenfuse.ndjson holds one line claiming wardryx (a harmless prose edit)")')"
+
+run_case "features-are-bound: no scenario left, so it measured nothing" fail \
+	'./scripts/features-are-bound.sh' \
+	"$(py 'import os
+os.remove("features/source-must-match-its-stream.feature")')" \
+	"measured nothing"
+
 echo
 if [ -n "$(git status --porcelain)" ]; then
 	printf 'FAIL: this script left the tree dirty, so it cannot be trusted about anything above\n'

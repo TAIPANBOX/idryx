@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-338-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-373-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -519,15 +519,18 @@ IDRYX_OTLP_ENDPOINT=<url> ./bin/idryx detect ...    # deliver alerts as OTLP/HTT
 # --db, where enrichment happens at load time) is an error, not a silent no-op.
 
 # agent identities: TokenFuse events + Passport enrichment (owner/runtime/parent/attestation)
-./bin/idryx detect --source tokenfuse --passports ./passports events.ndjson
-./bin/idryx detect --load tokenfuse:events.ndjson --passports "passports/*.json"
+./bin/idryx detect --source tokenfuse --passports ./passports tokenfuse.ndjson
+./bin/idryx detect --load tokenfuse:tokenfuse.ndjson --passports "passports/*.json"
 
 # whole agent-event bus: stitch every producer into one graph
-./bin/idryx detect --load tokenfuse:tf.ndjson --load wardryx:wx.ndjson \
-  --load mockryx:mx.ndjson --load verdryx:vx.ndjson --load scopyx:sx.ndjson
+./bin/idryx detect --load tokenfuse:tokenfuse.ndjson --load wardryx:wardryx.ndjson \
+  --load mockryx:mockryx.ndjson --load verdryx:verdryx.ndjson --load scopyx:scopyx.ndjson
+
+# a bus file is read as the source it claims only if its name says it may carry
+# that source (see "What a bus file may carry" below)
 
 # unrouted_egress: the web-egress plane's journal beside what the sensor saw
-./bin/idryx detect --load scopyx:events.ndjson --load egress:captured.json
+./bin/idryx detect --load scopyx:scopyx.ndjson --load egress:captured.json
 
 # bom: Agent-BOM, a CycloneDX-shaped inventory of every agent identity
 ./bin/idryx bom <log.json>                          # JSON (CycloneDX-shaped), the default
@@ -568,6 +571,32 @@ make serve     # then open http://localhost:8080
 ```
 
 ---
+
+### What a bus file may carry
+
+The agent-event bus is one directory with one NDJSON file per writer, and every
+plane can append to every file, so the `source` inside a line is not proof of who
+wrote it. idryx ingests an event as the source it claims only when the file it
+was read from may carry that source. By convention `tokenfuse.ndjson` carries
+`tokenfuse`, `wardryx.ndjson` carries `wardryx`, and so on for every source the
+agent-passport registry lists; `tokenfuse-cloud.ndjson` and
+`tokenfuse-mcp.ndjson` (the control plane's and the MCP broker's own files) carry
+`tokenfuse`. `demo.ndjson` (what `taipan demo` writes, with lines from six
+planes) is not built in, because any co-tenant could create it: declare it with
+`IDRYX_STREAMS=demo=tokenfuse|wardryx|engram|qryx|verdryx|mockryx` when you load
+the demo. A line that claims anything else is not put in the graph: no
+identity, no event, and a stderr line says how many and which file claimed what.
+It never stops the load. A file whose name nothing declares is ingested when its
+lines claim the file's own name, and stderr names the stream.
+
+If your files are laid out differently, say what each may carry:
+
+```bash
+IDRYX_STREAMS='events=tokenfuse|wardryx,mixed=engram|qryx' idryx detect --load tokenfuse:events.ndjson
+```
+
+A declaration adds to what a file may carry and never removes from it. A
+malformed one refuses the load and names the variable.
 
 ## What works today
 
@@ -653,7 +682,7 @@ receive the alerts; only the exit code marks that one of them did not, which
 is what a cron or CI invocation checking `$?` actually needs.
 
 ```sh
-idryx detect --load tokenfuse:events.ndjson \
+idryx detect --load tokenfuse:tokenfuse.ndjson \
   --webhook 'https://cloud.example/v1/findings?source=idryx' \
   --webhook-header "Authorization: Bearer $OPS_KEY"
 ```
@@ -673,7 +702,7 @@ delivered it. Unset (the default), the sink is never constructed and idryx's
 behavior is unchanged:
 
 ```sh
-IDRYX_OTLP_ENDPOINT=http://localhost:4318 idryx detect --load tokenfuse:events.ndjson
+IDRYX_OTLP_ENDPOINT=http://localhost:4318 idryx detect --load tokenfuse:tokenfuse.ndjson
 ```
 
 **Web dashboard** (`internal/server`, `idryx serve`) - a read-only HTTP server

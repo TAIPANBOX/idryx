@@ -66,6 +66,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 ## Additive within a major
 
 - a detector: a new one is a new finding, never a removed one
+- an optional environment name, such as IDRYX_STREAMS, which only widens what a bus file may carry
 - a CLI flag on an existing subcommand
 - a connector source
 - an event type in events.consumed

@@ -46,6 +46,9 @@
           "IDRYX_OTLP_ENDPOINT": {
             "required": false
           },
+          "IDRYX_STREAMS": {
+            "required": false
+          },
           "IDRYX_TRUST_DOMAIN": {
             "required": false
           }

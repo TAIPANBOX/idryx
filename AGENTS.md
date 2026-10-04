@@ -19,6 +19,7 @@ go test ./...                     # all packages MUST be ok
 ./scripts/diagrams-match-detectors.sh  # invariant 8, the pictures count what exists
 ./scripts/detectors-complete.sh   # every detector registered and tested
 ./scripts/compat-surface.sh       # invariant 16, the promised surface is in the code
+./scripts/features-are-bound.sh   # invariant 17, every scenario names a test that exists
 ./scripts/gates-have-teeth.sh     # invariant 9, the gates above can still fail
                                   # (mutates tracked files; needs a clean tree)
 
@@ -391,15 +392,18 @@ an absent invariant.
    This also puts a check under a claim invariant 6 has made since it was
    written, that `reproducible-build.sh` refuses just as loudly when it finds
    no asset name at all. That was true, and nothing had ever confirmed it.
-   *(gate: `scripts/gates-have-teeth.sh`, 17 cases over all six gates: seven
-   real faults each must catch, three non-faults they must not, six subjects
+   *(gate: `scripts/gates-have-teeth.sh`, 28 cases over eight gates: thirteen
+   real faults each must catch, five non-faults they must not, nine subjects
    taken away entirely, where the gate must say it measured nothing instead of
    reporting OK, and one compiler pin that must refuse to compare across two
    versions. Every mutation asserts it applied, because a mutation that
    changed no file is the second failure above, and this harness must not
-   commit the error it exists to catch. Four of the seventeen need a compiler
-   that emits BPF: on a machine without one they are printed as NOT RUN with
-   the job that runs them, never counted as passes.)*
+   commit the error it exists to catch. Four of the twenty-eight need a
+   compiler that emits BPF: on a machine without one they are printed as NOT
+   RUN with the job that runs them, never counted as passes. This count read
+   "17 cases over all six gates" until the stream-rule change, which found it
+   seven cases short of the compat gate's own seven: the same shape as the gate
+   list at the top of this file.)*
 
    **What it does not cover.** It cannot test itself; nothing watches this one
    fail. It proves each gate catches the faults named in it, not every fault of
@@ -609,6 +613,92 @@ an absent invariant.
     a route renamed, an environment name gone, an exit code moved, the human
     form edited by hand, an additive route that must pass, and the manifest and
     a named file taken away, both of which must read as measured nothing)*
+
+17. **An event is ingested into the identity graph as the source it claims only
+    when the file it was read from may carry that source.** `@decided
+    2026-10-04`: on the shared event bus each writer writes only its own stream
+    and everyone else reads, plus a verifier on the box; this is the reader half
+    of that decision for idryx. `@claude 2026-10-04, delegated by the owner`:
+    the shape below.
+
+    The bus is one directory with one file per writer, and every plane can
+    append to every file. idryx verified the `prev_hash` chain and then
+    ingested every well-formed line as the source it named, so a line claiming
+    `source: wardryx` inside `tokenfuse.ndjson` put an identity and an event
+    about wardryx into the graph that every detector reasons over. The chain
+    cannot help: it is unkeyed, so a forged line can carry a valid one.
+    `tokenfuse.LoadWith` now checks each parsed line against the stem of the
+    file it came from (`internal/ingest/stream`, a pure table and a pure
+    decision), after the line parsed and before it can create an identity or an
+    event. A refused line is counted as `Report.ForeignSource` beside
+    `Malformed`, its (file, claimed source) pair is named in `Report.Foreign`
+    (bounded at 64, the count stays whole), and `reportStreams` prints one
+    escaped line per pair on stderr, in the same place and style as
+    `reportChain`. It is never fatal, for the reason `reportChain` gives: a tool
+    that stopped reading because a file held a foreign line would have been
+    talked out of the rest of that file by whoever wrote it. The chain is
+    verified over the whole file as written BEFORE any line is refused, so an
+    edit that made a line foreign still breaks the chain at the next one and
+    both are said. A glob is judged file by file. `Parse`, which is handed bytes
+    and no file, applies no rule; `Load` is the door for a file, and
+    `loadAgentBus` in `cmd/idryx` is the one place `detect`, `serve`, `bom`,
+    `ai-inventory`, `remediate` and `load` reach it from.
+
+    What a file may carry is the convention (`<source>.ndjson` carries
+    `<source>`, for the fourteen sources agent-passport SPEC 6.2 registers,
+    `agent-conform` among them), plus a small table of the measured exceptions,
+    plus what the operator
+    declares in `IDRYX_STREAMS` (`stem=source|source`, comma-separated; widens
+    and never narrows; a malformed entry refuses the load naming the variable,
+    because the rule fails closed and an ignored entry would read as a plane
+    that stopped being heard). The table, `@claude 2026-10-04`, read from the
+    producers' writer code, estate-gates C4's producer table and the three
+    launchers: `tokenfuse-cloud` and `tokenfuse-mcp` (the control plane and the
+    MCP broker append to their own files and stamp `tokenfuse`, through the one
+    crate that builds the envelope). `demo` is deliberately NOT in the table
+    (`@claude 2026-10-04`, from review): `taipan demo` writes one file
+    attributed to six planes, but until each writer owns its own file the
+    events directory is writable by every co-tenant, and a built-in row would
+    let any of them create `demo.ndjson` and speak as any of the six. It is
+    opt-in, declared with `IDRYX_STREAMS=demo=tokenfuse|wardryx|engram|qryx|verdryx|mockryx`
+    by the operator who runs `taipan demo` against this box (taipan starts
+    idryx with an empty environment and only `--load tokenfuse:<its own file>`,
+    so nothing there reads `demo.ndjson` or sets the variable); undeclared it
+    is an unknown stream where only `source: demo` is ingested. The own-volume journals (`events.ndjson` for
+    scopyx in two launchers, `sent.ndjson` for heraldyx) are not on the shared
+    bus and are deliberately not in the table.
+
+    A stream nothing declares is not trusted in silence and not dropped: a line
+    whose source is the stream's own name is still ingested (a plane new to the
+    box must not go unseen the day it ships), counted as
+    `Report.UnknownStream`, and the file is named on stderr; a line in it
+    claiming any other source is refused like any other.
+
+    **What it does not cover.** A writer that is compromised in its own uid can
+    still forge its own stream; only signing closes that. A process that
+    creates `wardryx.ndjson` before wardryx does, and writes `source: wardryx`
+    into it, passes this check, because the file name and the claim agree: that
+    is closed by who may create files in the directory (launcher ownership) and
+    by checking the owning uid of each stream file, neither of which is done
+    here. The table is a copy that idryx and heraldyx each carry (agent-stack-go
+    is the shared module, and moving it there is a release of that module), and
+    nothing holds the two equal. `idryx load` reaches the same door and is not
+    covered by an integration test against Postgres here.
+    *(test: `TestALineClaimingAnotherSourceIsNotIngestedAsThatSource`,
+    `TestARefusalIsReportedAndNeverFatal`, `TestAGlobAppliesTheRuleFileByFile`,
+    `TestADeclaredMultiSourceFileIsIngestedWhole`,
+    `TestRenamedFilesOfTheSameProducerAreIngested`,
+    `TestACoTenantsDemoFileIsRefusedByDefault`,
+    `TestAnUnknownStreamIsIngestedAndNamedNotTrustedInSilence`,
+    `TestHostileLinesAreUnchangedAndAHostileClaimStaysOnOneLine`,
+    `TestARefusedLineStillTakesPartInTheChainVerdict`, all in
+    `cmd/idryx/source_test.go`, and `TestLoadRefusesAForeignSourceAndCountsIt`
+    in `internal/ingest/tokenfuse`; scenarios:
+    `features/source-must-match-its-stream.feature`, each bound to a named test
+    both ways, held by `scripts/features-are-bound.sh` with four cases in
+    `gates-have-teeth.sh`; every test run red against the unfixed code first,
+    and each verified by the mutation that puts the defect back, recorded in the
+    pull request)*
 
 ## Decisions that have no gate yet
 
