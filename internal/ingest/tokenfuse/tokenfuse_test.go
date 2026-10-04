@@ -495,3 +495,45 @@ func TestHostileLinesStillCountAsMalformedNotForeign(t *testing.T) {
 		t.Fatalf("%d ids, Malformed = %d, ForeignSource = %d, want 1, 3, 0", len(ids), rep.Malformed, rep.ForeignSource)
 	}
 }
+
+// Across a glob the named pairs stay bounded as they merge, and the count of
+// refused events stays the whole sum.
+func TestTheMergedReportBoundsTheNamedPairsAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	for f := 0; f < 3; f++ {
+		var b strings.Builder
+		for i := 0; i < 30; i++ {
+			b.WriteString(envLine(fmt.Sprintf("forged-%d-%d", f, i), "a"))
+		}
+		name := []string{"tokenfuse.ndjson", "tokenfuse-cloud.ndjson", "tokenfuse-mcp.ndjson"}[f]
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, rep, err := Load(filepath.Join(dir, "*.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ForeignSource != 90 {
+		t.Fatalf("the count must be the whole sum across files: %d", rep.ForeignSource)
+	}
+	if len(rep.Foreign) != maxForeignPairs {
+		t.Fatalf("named pairs = %d after the merge, want the bound %d", len(rep.Foreign), maxForeignPairs)
+	}
+
+	// The same bound on undeclared streams: many files, one entry each.
+	udir := t.TempDir()
+	for i := 0; i < maxForeignPairs+5; i++ {
+		name := fmt.Sprintf("plane%03d.ndjson", i)
+		if err := os.WriteFile(filepath.Join(udir, name), []byte(envLine(fmt.Sprintf("plane%03d", i), "a")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, urep, err := Load(filepath.Join(udir, "*.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if urep.UnknownStream != maxForeignPairs+5 || len(urep.Unknown) != maxForeignPairs {
+		t.Fatalf("UnknownStream = %d, named = %d, want %d and %d", urep.UnknownStream, len(urep.Unknown), maxForeignPairs+5, maxForeignPairs)
+	}
+}
