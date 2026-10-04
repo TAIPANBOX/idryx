@@ -135,9 +135,31 @@ func TestAGlobAppliesTheRuleFileByFile(t *testing.T) {
 	}
 }
 
-// The measured multi-source file: `taipan demo` writes events attributed to six
-// planes into demo.ndjson, and the exception table declares it.
+// `taipan demo` writes events attributed to six planes into one demo.ndjson,
+// but the events directory is writable by every co-tenant until the launchers
+// give each writer its own file, so a built-in exception for demo.ndjson would
+// let any of them create it and speak as wardryx. It is therefore NOT in the
+// default table: undeclared, it is an unknown stream and only `source: demo`
+// would be ingested from it.
+func TestACoTenantsDemoFileIsRefusedByDefault(t *testing.T) {
+	t.Setenv("IDRYX_STREAMS", "")
+	dir := busDir(t, map[string]string{
+		"demo.ndjson": busLine("wardryx", "cotenant"),
+	})
+	g, out := loadBus(t, "tokenfuse", filepath.Join(dir, "demo.ndjson"))
+
+	if hasAgent(g, "cotenant") {
+		t.Fatalf("a co-tenant's demo.ndjson was ingested as wardryx")
+	}
+	if !strings.Contains(out, "not ingested") || !strings.Contains(out, "demo.ndjson") {
+		t.Errorf("the refusal must name demo.ndjson:\n%s", out)
+	}
+}
+
+// An operator who runs `taipan demo` against this box declares the file, and
+// then it is ingested whole and nothing is reported.
 func TestADeclaredMultiSourceFileIsIngestedWhole(t *testing.T) {
+	t.Setenv("IDRYX_STREAMS", "demo=tokenfuse|wardryx|mockryx")
 	dir := busDir(t, map[string]string{
 		"demo.ndjson": busLine("tokenfuse", "a") + busLine("wardryx", "b") + busLine("mockryx", "c"),
 	})

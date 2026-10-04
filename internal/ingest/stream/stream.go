@@ -58,13 +58,16 @@ const (
 )
 
 // knownSources are the sources agent-passport SPEC.md 6.2 registers, as read
-// by estate-gates C4's producer table. Each is a single-source stream under
-// the stem == source convention. A source the registry gains later is an
+// by estate-gates C4's producer table, plus agent-conform (agent-stack-go#66,
+// registered in agent-passport#69: file agent-conform.ndjson, source
+// agent-conform, types chain_broken and chain_unchained). Each is a
+// single-source stream under the stem == source convention. A source the registry gains later is an
 // unknown stream here until this list or the operator's declaration learns it,
 // which is the loud direction to be wrong in.
 var knownSources = []string{
-	"console", "costcrew", "engram", "heraldyx", "idryx", "mockryx", "qryx",
-	"scopyx", "tokenfuse", "typryx", "vouchryx", "verdryx", "wardryx",
+	"agent-conform", "console", "costcrew", "engram", "heraldyx", "idryx",
+	"mockryx", "qryx", "scopyx", "tokenfuse", "typryx", "vouchryx", "verdryx",
+	"wardryx",
 }
 
 // exceptions is the measured set of files whose stem is not their source, or
@@ -76,9 +79,15 @@ var knownSources = []string{
 //     envelope through one crate whose SOURCE constant is `tokenfuse`
 //     (tokenfuse crates/core/src/agent_event.rs; stack-single compose.yaml,
 //     stack-k8s manifests 00-base and 52, stack-up up.sh).
-//   - demo: `taipan demo` writes one synthetic file whose lines are attributed
-//     to six planes (taipan src/commands/demo.rs, SAMPLE_EVENTS), the one
-//     legitimate multi-source file in the estate.
+//
+// Deliberately NOT here: demo. `taipan demo` writes one synthetic file whose
+// lines are attributed to six planes (taipan src/commands/demo.rs,
+// SAMPLE_EVENTS), the one legitimate multi-source file in the estate. A
+// built-in row for it would be a bypass: until each writer owns its own file,
+// the events directory is writable by every co-tenant, and any of them could
+// create demo.ndjson and speak as any of the six. It is opt-in, declared by the
+// operator who runs `taipan demo` against this box, and undeclared it is an
+// unknown stream where only `source: demo` is read.
 //
 // Not listed on purpose: scopyx's and heraldyx's own journals (`events.ndjson`
 // on scopyx's own volume in two launchers, `sent.ndjson` beside heraldyx's
@@ -87,7 +96,6 @@ var knownSources = []string{
 var exceptions = map[string][]string{
 	"tokenfuse-cloud": {"tokenfuse"},
 	"tokenfuse-mcp":   {"tokenfuse"},
-	"demo":            {"engram", "mockryx", "qryx", "tokenfuse", "verdryx", "wardryx"},
 }
 
 // Policy maps a stream stem to the sources it may carry.

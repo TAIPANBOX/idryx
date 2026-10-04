@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-370-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-373-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -581,8 +581,10 @@ was read from may carry that source. By convention `tokenfuse.ndjson` carries
 `tokenfuse`, `wardryx.ndjson` carries `wardryx`, and so on for every source the
 agent-passport registry lists; `tokenfuse-cloud.ndjson` and
 `tokenfuse-mcp.ndjson` (the control plane's and the MCP broker's own files) carry
-`tokenfuse`, and `demo.ndjson` (what `taipan demo` writes) carries the six planes
-it imitates. A line that claims anything else is not put in the graph: no
+`tokenfuse`. `demo.ndjson` (what `taipan demo` writes, with lines from six
+planes) is not built in, because any co-tenant could create it: declare it with
+`IDRYX_STREAMS=demo=tokenfuse|wardryx|engram|qryx|verdryx|mockryx` when you load
+the demo. A line that claims anything else is not put in the graph: no
 identity, no event, and a stderr line says how many and which file claimed what.
 It never stops the load. A file whose name nothing declares is ingested when its
 lines claim the file's own name, and stderr names the stream.

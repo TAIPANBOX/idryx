@@ -645,8 +645,9 @@ an absent invariant.
     `ai-inventory`, `remediate` and `load` reach it from.
 
     What a file may carry is the convention (`<source>.ndjson` carries
-    `<source>`, for the thirteen sources agent-passport SPEC 6.2 registers),
-    plus a small table of the measured exceptions, plus what the operator
+    `<source>`, for the fourteen sources agent-passport SPEC 6.2 registers,
+    `agent-conform` among them), plus a small table of the measured exceptions,
+    plus what the operator
     declares in `IDRYX_STREAMS` (`stem=source|source`, comma-separated; widens
     and never narrows; a malformed entry refuses the load naming the variable,
     because the rule fails closed and an ignored entry would read as a plane
@@ -654,8 +655,16 @@ an absent invariant.
     producers' writer code, estate-gates C4's producer table and the three
     launchers: `tokenfuse-cloud` and `tokenfuse-mcp` (the control plane and the
     MCP broker append to their own files and stamp `tokenfuse`, through the one
-    crate that builds the envelope) and `demo` (`taipan demo` writes one file
-    attributed to six planes). The own-volume journals (`events.ndjson` for
+    crate that builds the envelope). `demo` is deliberately NOT in the table
+    (`@claude 2026-10-04`, from review): `taipan demo` writes one file
+    attributed to six planes, but until each writer owns its own file the
+    events directory is writable by every co-tenant, and a built-in row would
+    let any of them create `demo.ndjson` and speak as any of the six. It is
+    opt-in, declared with `IDRYX_STREAMS=demo=tokenfuse|wardryx|engram|qryx|verdryx|mockryx`
+    by the operator who runs `taipan demo` against this box (taipan starts
+    idryx with an empty environment and only `--load tokenfuse:<its own file>`,
+    so nothing there reads `demo.ndjson` or sets the variable); undeclared it
+    is an unknown stream where only `source: demo` is ingested. The own-volume journals (`events.ndjson` for
     scopyx in two launchers, `sent.ndjson` for heraldyx) are not on the shared
     bus and are deliberately not in the table.
 
@@ -679,6 +688,7 @@ an absent invariant.
     `TestARefusalIsReportedAndNeverFatal`, `TestAGlobAppliesTheRuleFileByFile`,
     `TestADeclaredMultiSourceFileIsIngestedWhole`,
     `TestRenamedFilesOfTheSameProducerAreIngested`,
+    `TestACoTenantsDemoFileIsRefusedByDefault`,
     `TestAnUnknownStreamIsIngestedAndNamedNotTrustedInSilence`,
     `TestHostileLinesAreUnchangedAndAHostileClaimStaysOnOneLine`,
     `TestARefusedLineStillTakesPartInTheChainVerdict`, all in

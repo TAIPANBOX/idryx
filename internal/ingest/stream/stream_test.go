@@ -47,13 +47,46 @@ func TestTheMeasuredExceptionsAreDeclared(t *testing.T) {
 			t.Errorf("%s.ndjson carrying wardryx: %v, want Foreign", stem, got)
 		}
 	}
+}
+
+// demo.ndjson is NOT a built-in exception: the events directory is writable by
+// co-tenants, so a built-in multi-source file is a file any of them can create
+// to speak as any plane. It is an unknown stream until an operator declares it.
+func TestDemoIsNotInTheDefaultTableAndIsOptIn(t *testing.T) {
+	p := Default()
 	for _, source := range []string{"tokenfuse", "wardryx", "engram", "qryx", "verdryx", "mockryx"} {
-		if got := p.Check("demo", source); got != Allowed {
-			t.Errorf("demo.ndjson carrying %s: %v, want Allowed", source, got)
+		if got := p.Check("demo", source); got != Foreign {
+			t.Errorf("an undeclared demo.ndjson carrying %s: %v, want Foreign", source, got)
 		}
 	}
-	if got := p.Check("demo", "costcrew"); got != Foreign {
-		t.Errorf("demo.ndjson carrying costcrew: %v, want Foreign (`taipan demo` does not write it)", got)
+	if got := p.Check("demo", "demo"); got != AllowedUnknownStem {
+		t.Errorf("an undeclared demo.ndjson carrying demo: %v, want AllowedUnknownStem", got)
+	}
+	extra, err := ParseExtra("demo=tokenfuse|wardryx|engram|qryx|verdryx|mockryx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := p.Extend(extra)
+	for _, source := range []string{"tokenfuse", "wardryx", "engram", "qryx", "verdryx", "mockryx"} {
+		if got := declared.Check("demo", source); got != Allowed {
+			t.Errorf("a declared demo.ndjson carrying %s: %v, want Allowed", source, got)
+		}
+	}
+}
+
+// agent-conform (agent-stack-go#66, registered in agent-passport#69) writes
+// agent-conform.ndjson with source agent-conform: a known single-source stream,
+// not an unknown one.
+func TestAgentConformIsAKnownSingleSourceStream(t *testing.T) {
+	p := Default()
+	if got := p.Check("agent-conform", "agent-conform"); got != Allowed {
+		t.Fatalf("agent-conform.ndjson carrying agent-conform: %v, want Allowed", got)
+	}
+	if got := p.Check("agent-conform", "tokenfuse"); got != Foreign {
+		t.Fatalf("agent-conform.ndjson carrying tokenfuse: %v, want Foreign", got)
+	}
+	if got := p.Check("tokenfuse", "agent-conform"); got != Foreign {
+		t.Fatalf("tokenfuse.ndjson carrying agent-conform: %v, want Foreign", got)
 	}
 }
 
@@ -119,8 +152,8 @@ func TestAllowedForNamesWhatWouldHaveBeenAccepted(t *testing.T) {
 	if got, want := p.AllowedFor("tokenfuse"), []string{"tokenfuse"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("tokenfuse: %v, want %v", got, want)
 	}
-	if got, want := p.AllowedFor("demo"), []string{"engram", "mockryx", "qryx", "tokenfuse", "verdryx", "wardryx"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("demo: %v, want %v", got, want)
+	if got, want := p.AllowedFor("agent-conform"), []string{"agent-conform"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("agent-conform: %v, want %v", got, want)
 	}
 	if got, want := p.AllowedFor("newplane"), []string{"newplane"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("an undeclared stem: %v, want %v", got, want)

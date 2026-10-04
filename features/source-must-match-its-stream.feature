@@ -31,11 +31,23 @@ Feature: An event is ingested as the source it claims only when its file may car
     Then the claim in tokenfuse.ndjson is refused and the line in wardryx.ndjson is kept
   # @test:TestAGlobAppliesTheRuleFileByFile
 
-  Scenario: a file declared to carry several sources is ingested whole
-    Given demo.ndjson holds lines from tokenfuse, wardryx and mockryx
+  Scenario: a file nobody declared cannot carry several sources, even one named demo
+    Given a co-tenant creates demo.ndjson holding a line claiming wardryx
+    When idryx loads it with no declaration
+    Then the claim is not ingested as wardryx and stderr names demo.ndjson
+  # @test:TestACoTenantsDemoFileIsRefusedByDefault
+
+  Scenario: a file the operator declared to carry several sources is ingested whole
+    Given IDRYX_STREAMS declares demo=tokenfuse|wardryx|mockryx and demo.ndjson holds lines from those three
     When idryx loads it
     Then all three agents are in the graph and nothing is reported as refused
   # @test:TestADeclaredMultiSourceFileIsIngestedWhole
+
+  Scenario: agent-conform's own stream is a known stream
+    Given agent-conform.ndjson holds a line claiming agent-conform
+    When the stream rule decides it
+    Then it is allowed as a known single-source stream and not counted as an unknown stream
+  # @test:TestAgentConformIsAKnownSingleSourceStream
 
   Scenario: the control plane's and the broker's own files carry the tokenfuse source
     Given tokenfuse-cloud.ndjson and tokenfuse-mcp.ndjson each hold a tokenfuse line
