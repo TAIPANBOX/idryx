@@ -15,7 +15,7 @@ import (
 // same code a real bus producer uses.
 func chainedStream(t *testing.T, n int) (path string, lines []string) {
 	t.Helper()
-	path = filepath.Join(t.TempDir(), "chained.ndjson")
+	path = filepath.Join(t.TempDir(), "tokenfuse.ndjson")
 	w, err := event.NewChainedWriter(path)
 	if err != nil {
 		t.Fatalf("new chained writer: %v", err)
@@ -44,7 +44,7 @@ func chainedStream(t *testing.T, n int) (path string, lines []string) {
 
 func writeLines(t *testing.T, lines []string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "stream.ndjson")
+	path := filepath.Join(t.TempDir(), "tokenfuse.ndjson")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestChainRestartIsNotABreak(t *testing.T) {
 // bundled fixture carries no prev_hash at all, so the chain was checked and
 // found absent. That is neither a break nor a clean bill of health.
 func TestChainAbsentIsNotIntact(t *testing.T) {
-	data, err := os.ReadFile("testdata/events.ndjson")
+	data, err := os.ReadFile("testdata/tokenfuse.ndjson")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +225,8 @@ func TestChainReportMergesAcrossFiles(t *testing.T) {
 	_, broken := chainedStream(t, 3)
 	broken[1] = strings.Replace(broken[1], `"type":"spend_spike"`, `"type":"sustained_loop"`, 1)
 
-	cleanPath := filepath.Join(dir, "a.ndjson")
-	brokenPath := filepath.Join(dir, "b.ndjson")
+	cleanPath := filepath.Join(dir, "tokenfuse.ndjson")
+	brokenPath := filepath.Join(dir, "tokenfuse-cloud.ndjson")
 	if err := os.WriteFile(cleanPath, []byte(strings.Join(clean, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

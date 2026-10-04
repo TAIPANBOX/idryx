@@ -35,6 +35,7 @@ import (
 
 	"github.com/TAIPANBOX/agent-stack-go/event"
 	"github.com/TAIPANBOX/agent-stack-go/passport"
+	"github.com/TAIPANBOX/idryx/internal/ingest/stream"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -76,7 +77,48 @@ type Report struct {
 	Malformed    int
 	UnknownTypes map[string]int
 	Chain        Chain
+
+	// ForeignSource counts well-formed events whose `source` the file they
+	// were read from may not carry. They are NOT ingested: no identity, no
+	// event, nothing in the graph carries the source they claimed. Beside
+	// Malformed on purpose, and for the same reason (SECURITY.md invariant 3):
+	// a connector reading attacker-influenced input must not drop a record
+	// without a caller-visible count of what it dropped.
+	ForeignSource int
+	// Foreign names the (file, claimed source) pairs behind that count, sorted
+	// and bounded at maxForeignPairs; the count above is always the whole.
+	Foreign []Foreign
+	// UnknownStream counts events read from a file whose stem nothing
+	// declares, the line claiming the stem itself. They ARE ingested (a plane
+	// this build has not heard of must not go unseen) and counted, because
+	// trusting a stream in silence is the other way to be wrong.
+	UnknownStream int
+	// Unknown names those files, sorted and bounded like Foreign.
+	Unknown []UnknownFile
 }
+
+// Foreign is one (file, claimed source) pair whose events were refused.
+type Foreign struct {
+	File, Stem string
+	// Claimed is the `source` the events carried, exactly as written.
+	// Attacker-influenced text: a caller that prints it must keep it on one
+	// line.
+	Claimed string
+	Count   int
+	// Allowed is what the file may carry, sorted.
+	Allowed []string
+}
+
+// UnknownFile is one file of an undeclared stream that was read.
+type UnknownFile struct {
+	File, Stem string
+	Count      int
+}
+
+// maxForeignPairs bounds the pairs a Report names. A producer minting a new
+// claimed source per line cannot make a Report the size of its log; the
+// ForeignSource count stays whole.
+const maxForeignPairs = 64
 
 // ChainBreak is one genuine prev_hash violation: an event whose prev_hash is
 // present and does not match the hash of the event on the line before it. It
@@ -147,6 +189,20 @@ func (r *Report) merge(o Report) {
 		r.UnknownTypes[t] += n
 	}
 	r.Chain.merge(o.Chain)
+	r.ForeignSource += o.ForeignSource
+	r.UnknownStream += o.UnknownStream
+	if room := maxForeignPairs - len(r.Foreign); room > 0 {
+		if len(o.Foreign) < room {
+			room = len(o.Foreign)
+		}
+		r.Foreign = append(r.Foreign, o.Foreign[:room]...)
+	}
+	if room := maxForeignPairs - len(r.Unknown); room > 0 {
+		if len(o.Unknown) < room {
+			room = len(o.Unknown)
+		}
+		r.Unknown = append(r.Unknown, o.Unknown[:room]...)
+	}
 }
 
 // merge folds one file's chain verdict into an aggregate over several files.
@@ -227,15 +283,29 @@ func verifyChain(data []byte, file string) Chain {
 // tampering, and refusing to ingest a stream that shows evidence of it
 // would hand an attacker a way to delete every finding in the file by
 // editing one line of it.
+//
+// Parse is handed bytes and no file, so it has no stream to check a claimed
+// source against and applies no stream rule: every well-formed line is
+// ingested as the source it names. The door for a file is [Load], which does
+// apply it, and nothing that reads a file should call Parse instead.
 func Parse(data []byte) ([]model.Identity, []model.Event, Report) {
-	return parse(data, "")
+	return parse(data, "", nil)
 }
 
 // parse is Parse with the file name the data came from, so a chain break
-// can name it. Empty when the caller had only bytes (Parse's own contract).
-func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
+// can name it, and with the policy that decides which sources that file may
+// carry. A nil policy applies no stream rule, which is what a caller with only
+// bytes gets.
+//
+// The chain is verified over the whole file as written, BEFORE any line is
+// refused: a refused line is still part of what the file says, and a chain
+// check that skipped it would hide the edit that made it foreign.
+func parse(data []byte, file string, pol *stream.Policy) ([]model.Identity, []model.Event, Report) {
 	rep := newReport()
 	rep.Chain = verifyChain(data, file)
+	stem := stream.Stem(file)
+	foreign := map[string]*Foreign{}
+	unknown := map[string]*UnknownFile{}
 	seenAgents := map[string]bool{}
 	seenHumans := map[string]bool{}
 	var identities []model.Identity
@@ -261,6 +331,33 @@ func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
 		if err != nil {
 			rep.Malformed++
 			continue
+		}
+
+		// The source an event claims is checked against the file it sits in,
+		// AFTER it parsed and BEFORE it can create an identity or an event. A
+		// refused line is counted and ingested as nothing: the identity graph
+		// is what idryx reasons over, and an event that claims a plane it does
+		// not belong to must not put a node or a behaviour into it.
+		if pol != nil {
+			switch pol.Check(stem, env.Source) {
+			case stream.Foreign:
+				rep.ForeignSource++
+				key := file + "\x00" + env.Source
+				if f, ok := foreign[key]; ok {
+					f.Count++
+				} else if len(foreign) < maxForeignPairs {
+					foreign[key] = &Foreign{File: file, Stem: stem, Claimed: env.Source, Count: 1, Allowed: pol.AllowedFor(stem)}
+				}
+				continue
+			case stream.AllowedUnknownStem:
+				rep.UnknownStream++
+				if u, ok := unknown[file]; ok {
+					u.Count++
+				} else if len(unknown) < maxForeignPairs {
+					unknown[file] = &UnknownFile{File: file, Stem: stem, Count: 1}
+				}
+			case stream.Allowed:
+			}
 		}
 
 		if !seenAgents[env.AgentID] {
@@ -333,6 +430,19 @@ func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
 			Source: env.Source,
 		})
 	}
+	for _, f := range foreign {
+		rep.Foreign = append(rep.Foreign, *f)
+	}
+	sort.Slice(rep.Foreign, func(i, j int) bool {
+		if rep.Foreign[i].File != rep.Foreign[j].File {
+			return rep.Foreign[i].File < rep.Foreign[j].File
+		}
+		return rep.Foreign[i].Claimed < rep.Foreign[j].Claimed
+	})
+	for _, u := range unknown {
+		rep.Unknown = append(rep.Unknown, *u)
+	}
+	sort.Slice(rep.Unknown, func(i, j int) bool { return rep.Unknown[i].File < rep.Unknown[j].File })
 	return identities, events, rep
 }
 
@@ -350,6 +460,15 @@ func parse(data []byte, file string) ([]model.Identity, []model.Event, Report) {
 // the file it was found in. Two files are two chains, so the second file
 // starting a fresh chain is a head, not a break.
 func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
+	return LoadWith(pathOrGlob, stream.Default())
+}
+
+// LoadWith is Load with the policy that decides which sources each file may
+// carry: the convention, the measured exceptions, and whatever the operator
+// declared (see `internal/ingest/stream`). Each file is checked by its OWN
+// name, so a glob over a bus directory refuses a foreign line in one file and
+// keeps the same source's line in the file that is its own.
+func LoadWith(pathOrGlob string, policy stream.Policy) ([]model.Identity, []model.Event, Report, error) {
 	matches, err := filepath.Glob(pathOrGlob)
 	if err != nil {
 		return nil, nil, Report{}, fmt.Errorf("tokenfuse: bad glob %q: %w", pathOrGlob, err)
@@ -377,7 +496,7 @@ func Load(pathOrGlob string) ([]model.Identity, []model.Event, Report, error) {
 		if err != nil {
 			return nil, nil, Report{}, fmt.Errorf("tokenfuse: read %s: %w", path, err)
 		}
-		ids, evs, r := parse(data, path)
+		ids, evs, r := parse(data, path, &policy)
 		for _, id := range ids {
 			switch id.Type {
 			case model.IdentityAgent:

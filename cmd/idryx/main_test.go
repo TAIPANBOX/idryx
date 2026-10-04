@@ -203,9 +203,9 @@ func TestLoadAgentBusSourcesAttributeCorrectSource(t *testing.T) {
 		source string
 		path   string
 	}{
-		{"wardryx", "../../internal/ingest/tokenfuse/testdata/wardryx/events.ndjson"},
-		{"mockryx", "../../internal/ingest/tokenfuse/testdata/mockryx/events.ndjson"},
-		{"verdryx", "../../internal/ingest/tokenfuse/testdata/verdryx/events.ndjson"},
+		{"wardryx", "../../internal/ingest/tokenfuse/testdata/wardryx/wardryx.ndjson"},
+		{"mockryx", "../../internal/ingest/tokenfuse/testdata/mockryx/mockryx.ndjson"},
+		{"verdryx", "../../internal/ingest/tokenfuse/testdata/verdryx/verdryx.ndjson"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.source, func(t *testing.T) {
@@ -246,10 +246,10 @@ func TestLoadAgentBusSourcesAttributeCorrectSource(t *testing.T) {
 // producer's Source rather than collapsing to "tokenfuse".
 func TestLoadWholeAgentEventBusStitchesAllProducers(t *testing.T) {
 	loads := loadList{
-		{Source: "tokenfuse", Path: "../../internal/ingest/tokenfuse/testdata/events.ndjson"},
-		{Source: "wardryx", Path: "../../internal/ingest/tokenfuse/testdata/wardryx/events.ndjson"},
-		{Source: "mockryx", Path: "../../internal/ingest/tokenfuse/testdata/mockryx/events.ndjson"},
-		{Source: "verdryx", Path: "../../internal/ingest/tokenfuse/testdata/verdryx/events.ndjson"},
+		{Source: "tokenfuse", Path: "../../internal/ingest/tokenfuse/testdata/tokenfuse.ndjson"},
+		{Source: "wardryx", Path: "../../internal/ingest/tokenfuse/testdata/wardryx/wardryx.ndjson"},
+		{Source: "mockryx", Path: "../../internal/ingest/tokenfuse/testdata/mockryx/mockryx.ndjson"},
+		{Source: "verdryx", Path: "../../internal/ingest/tokenfuse/testdata/verdryx/verdryx.ndjson"},
 	}
 	g, err := buildGraph("", "", "", "", "", "", "", loads)
 	if err != nil {
@@ -794,7 +794,7 @@ func TestMainExitCodeCleanRunIsZero(t *testing.T) {
 // the raw lines so a test can tamper with one.
 func chainedFixture(t *testing.T, n int) (string, []string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "bus.ndjson")
+	path := filepath.Join(t.TempDir(), "tokenfuse.ndjson")
 	w, err := event.NewChainedWriter(path)
 	if err != nil {
 		t.Fatalf("new chained writer: %v", err)
@@ -873,7 +873,7 @@ func TestReportTokenFuseChainStatesAreDistinguishable(t *testing.T) {
 func TestPopulateVerifiesChainOnIngest(t *testing.T) {
 	_, lines := chainedFixture(t, 4)
 	lines[1] = strings.Replace(lines[1], `"type":"spend_spike"`, `"type":"sustained_loop"`, 1)
-	tampered := filepath.Join(t.TempDir(), "tampered.ndjson")
+	tampered := filepath.Join(t.TempDir(), "tokenfuse.ndjson")
 	if err := os.WriteFile(tampered, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

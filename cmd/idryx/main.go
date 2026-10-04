@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -28,6 +29,7 @@ import (
 	"github.com/TAIPANBOX/idryx/internal/graph"
 	"github.com/TAIPANBOX/idryx/internal/ingest"
 	"github.com/TAIPANBOX/idryx/internal/ingest/passport"
+	"github.com/TAIPANBOX/idryx/internal/ingest/stream"
 	"github.com/TAIPANBOX/idryx/internal/ingest/tokenfuse"
 	"github.com/TAIPANBOX/idryx/internal/model"
 	"github.com/TAIPANBOX/idryx/internal/remediation"
@@ -355,6 +357,27 @@ var agentBusSources = map[string]bool{
 	"scopyx":    true,
 }
 
+// streamsEnv names the environment variable that declares what a bus stream
+// file may carry, beyond the convention and the table built into
+// `internal/ingest/stream`. Read here, at the one door every agent-event-bus
+// load goes through, rather than per subcommand: a subcommand that read its own
+// copy is a subcommand that could forget to.
+const streamsEnv = "IDRYX_STREAMS"
+
+// loadAgentBus reads one agent-event-bus file or glob under the stream rule:
+// an event is ingested as the source it claims only when the file it sits in
+// may carry that source (AGENTS.md invariant 17). A malformed declaration is an
+// error that names the variable and refuses the load, because the rule fails
+// closed and a declaration silently ignored would read as a producer that
+// stopped being heard.
+func loadAgentBus(pathOrGlob string) ([]model.Identity, []model.Event, tokenfuse.Report, error) {
+	extra, err := stream.ParseExtra(os.Getenv(streamsEnv))
+	if err != nil {
+		return nil, nil, tokenfuse.Report{}, fmt.Errorf("%s: %w", streamsEnv, err)
+	}
+	return tokenfuse.LoadWith(pathOrGlob, stream.Default().Extend(extra))
+}
+
 // populate ingests one source spec into g. Inventory sources add identities;
 // event sources add events; aws_iam/gcp_iam optionally fold in usage enrichment.
 func populate(g *graph.Store, spec loadSpec) error {
@@ -365,7 +388,7 @@ func populate(g *graph.Store, spec loadSpec) error {
 	// special-cased before the generic os.ReadFile below, ahead of the
 	// inventory/event dispatch further down.
 	if agentBusSources[spec.Source] {
-		ids, events, rep, err := tokenfuse.Load(spec.Path)
+		ids, events, rep, err := loadAgentBus(spec.Path)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", spec.Source, err)
 		}
@@ -452,7 +475,73 @@ func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
 		fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
 			source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
 	}
+	reportStreams(source, pathOrGlob, rep)
 	reportChain(source, pathOrGlob, rep.Chain)
+}
+
+// reportStreams states what the stream rule did to this ingest: events refused
+// because the file they sat in may not carry the source they claimed, and files
+// of a stream nothing declares. Printed only when there is something to say,
+// like the malformed count above it, and never fatal, like a broken chain: an
+// identity tool that stopped reading because a file held a foreign line would
+// have been talked out of the rest of that file by whoever wrote the line.
+//
+// Every claimed source is producer-written, so it is printed through %q and
+// bounded: one line of stderr per pair, whatever the line said.
+func reportStreams(source, pathOrGlob string, rep tokenfuse.Report) {
+	if rep.ForeignSource > 0 {
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: %d event(s) not ingested: the file they were read from may not carry the source they claim; nothing in the graph carries that source for them\n",
+			source, pathOrGlob, rep.ForeignSource)
+		for i, f := range rep.Foreign {
+			if i == maxReportedBreaks {
+				fmt.Fprintf(os.Stderr, "idryx:   ... and %d more pair(s)\n", len(rep.Foreign)-maxReportedBreaks)
+				break
+			}
+			fmt.Fprintf(os.Stderr, "idryx:   %s claims %s %d time(s); it may carry %s.%s\n",
+				clipped(filepath.Base(f.File)), clipped(f.Claimed), f.Count, strings.Join(quoteAll(f.Allowed), ", "),
+				declareHint(f.Stem, f.Claimed))
+		}
+	}
+	for i, u := range rep.Unknown {
+		if i == maxReportedBreaks {
+			fmt.Fprintf(os.Stderr, "idryx:   ... and %d more unrecognised stream(s)\n", len(rep.Unknown)-maxReportedBreaks)
+			break
+		}
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: %s is not a stream this build knows: %d event(s) were ingested as source %s because they claim the file's own name.%s\n",
+			source, pathOrGlob, clipped(filepath.Base(u.File)), u.Count, clipped(u.Stem), declareHint(u.Stem, u.Stem))
+	}
+}
+
+// declareHint is the sentence that tells an operator how to say a stream is
+// expected. It is built from producer-written names, so it is only offered when
+// they are plain names an operator could type back in; otherwise it says
+// there is nothing to declare, rather than printing text that was written by
+// whoever the operator is trying to tell apart from a legitimate producer.
+func declareHint(stem, source string) string {
+	if !stream.ValidName(stem) || !stream.ValidName(source) {
+		return " The names are not plain names, so there is nothing to declare."
+	}
+	return fmt.Sprintf(" If it is expected, declare it: %s=%s=%s", streamsEnv, stem, source)
+}
+
+// maxClaimShown bounds how much of a claimed source one stderr line repeats.
+const maxClaimShown = 64
+
+// clipped quotes producer-written text for one line of stderr: bounded, then
+// escaped, so no line break or control byte survives.
+func clipped(s string) string {
+	if len(s) > maxClaimShown {
+		s = s[:maxClaimShown] + "..."
+	}
+	return fmt.Sprintf("%q", s)
+}
+
+func quoteAll(in []string) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = clipped(s)
+	}
+	return out
 }
 
 // maxReportedBreaks caps how many individual chain breaks are listed. One
@@ -1049,7 +1138,7 @@ func runLoad(args []string) error {
 	// for the file-graph path, they are all special-cased ahead of the
 	// generic os.ReadFile below.
 	if agentBusSources[*source] {
-		ids, events, rep, err := tokenfuse.Load(fs.Arg(0))
+		ids, events, rep, err := loadAgentBus(fs.Arg(0))
 		if err != nil {
 			return err
 		}

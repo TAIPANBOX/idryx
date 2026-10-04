@@ -471,7 +471,7 @@ func TestTheDeclaredListenDefaultIsTheOneServeFallsBackTo(t *testing.T) {
 
 func writeOneEvent(t *testing.T) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "events.ndjson")
+	p := filepath.Join(t.TempDir(), "tokenfuse.ndjson")
 	line := `{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-28T09:00:00.000Z",` +
 		`"source":"tokenfuse","type":"budget_exhausted","severity":"high",` +
 		`"agent_id":"agent://meridian.example/sre/rca","run_id":"run-1"}` + "\n"

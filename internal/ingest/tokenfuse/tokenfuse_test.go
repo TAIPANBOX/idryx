@@ -1,9 +1,13 @@
 package tokenfuse
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/TAIPANBOX/idryx/internal/ingest/stream"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
@@ -12,7 +16,7 @@ import (
 // (both a one-hop and a two-hop flattened chain), all eight v0.1 event
 // types, one unknown type, and one malformed line.
 func TestParseFixture(t *testing.T) {
-	data, err := os.ReadFile("testdata/events.ndjson")
+	data, err := os.ReadFile("testdata/tokenfuse.ndjson")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +157,7 @@ func TestLoadGlob(t *testing.T) {
 }
 
 func TestLoadSingleFile(t *testing.T) {
-	identities, events, _, err := Load("testdata/events.ndjson")
+	identities, events, _, err := Load("testdata/tokenfuse.ndjson")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +220,7 @@ func TestParseBusFixtures(t *testing.T) {
 	}{
 		{
 			name:           "wardryx",
-			file:           "testdata/wardryx/events.ndjson",
+			file:           "testdata/wardryx/wardryx.ndjson",
 			wantIdentities: 3, // tier1-bot, orchestrator, human
 			wantEvents:     3,
 			wantUnknown:    3, // policy_deny, approval_requested, approval_granted
@@ -227,7 +231,7 @@ func TestParseBusFixtures(t *testing.T) {
 		},
 		{
 			name:           "mockryx",
-			file:           "testdata/mockryx/events.ndjson",
+			file:           "testdata/mockryx/mockryx.ndjson",
 			wantIdentities: 2, // tier1-bot, human
 			wantEvents:     2,
 			wantUnknown:    2, // sim_finding, blast_radius_measured
@@ -237,7 +241,7 @@ func TestParseBusFixtures(t *testing.T) {
 		},
 		{
 			name:           "verdryx",
-			file:           "testdata/verdryx/events.ndjson",
+			file:           "testdata/verdryx/verdryx.ndjson",
 			wantIdentities: 3, // tier1-bot, orchestrator, human
 			wantEvents:     2,
 			wantUnknown:    1, // both lines share the type "quality_drift"
@@ -350,5 +354,144 @@ func TestAClaimedSubjectFromTheBusIsNotTypedAsAnEstablishedAgent(t *testing.T) {
 	}
 	if established.Type != model.IdentityAgent {
 		t.Errorf("an established subject came out as %q, want an agent", established.Type)
+	}
+}
+
+func envLine(source, agent string) string {
+	return `{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-04T10:00:00Z","source":"` + source +
+		`","type":"spend_spike","severity":"high","agent_id":"agent://acme.example/` + agent + `"}` + "\n"
+}
+
+func writeStream(t *testing.T, name, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A line whose claimed source the file may not carry creates no identity and
+// no event, and is counted beside Malformed with the pair that explains it.
+func TestLoadRefusesAForeignSourceAndCountsIt(t *testing.T) {
+	p := writeStream(t, "tokenfuse.ndjson",
+		envLine("tokenfuse", "legit")+envLine("wardryx", "forged")+envLine("wardryx", "forged-too")+envLine("engram", "other"))
+
+	ids, events, rep, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0].ID != "agent://acme.example/legit" || len(events) != 1 {
+		t.Fatalf("only the legitimate line may reach the graph: %+v / %+v", ids, events)
+	}
+	if rep.ForeignSource != 3 || rep.Malformed != 0 || rep.Lines != 4 {
+		t.Fatalf("ForeignSource = %d, Malformed = %d, Lines = %d, want 3, 0, 4", rep.ForeignSource, rep.Malformed, rep.Lines)
+	}
+	if len(rep.Foreign) != 2 || rep.Foreign[0].Claimed != "engram" || rep.Foreign[0].Count != 1 ||
+		rep.Foreign[1].Claimed != "wardryx" || rep.Foreign[1].Count != 2 {
+		t.Fatalf("pairs not grouped by (file, claim) in a stable order: %+v", rep.Foreign)
+	}
+	if f := rep.Foreign[1]; f.File != p || f.Stem != "tokenfuse" || len(f.Allowed) != 1 || f.Allowed[0] != "tokenfuse" {
+		t.Fatalf("a pair must name the file and what it may carry: %+v", f)
+	}
+}
+
+// Parse is handed bytes and no file, so it has nothing to check a claim
+// against and applies no rule; the door for a file is Load. Pinned so a caller
+// that reads a file and calls Parse is a visible choice.
+func TestParseWithoutAFileAppliesNoStreamRule(t *testing.T) {
+	ids, events, rep := Parse([]byte(envLine("wardryx", "a") + envLine("tokenfuse", "b")))
+	if len(ids) != 2 || len(events) != 2 || rep.ForeignSource != 0 {
+		t.Fatalf("Parse refused something it has no file to refuse by: %d ids, %d events, %d foreign", len(ids), len(events), rep.ForeignSource)
+	}
+}
+
+// An operator's declaration reaches the rule through LoadWith.
+func TestLoadWithADeclarationWidensWhatAFileMayCarry(t *testing.T) {
+	p := writeStream(t, "events.ndjson", envLine("tokenfuse", "t")+envLine("wardryx", "w"))
+
+	if ids, _, rep, _ := Load(p); len(ids) != 0 || rep.ForeignSource != 2 {
+		t.Fatalf("an undeclared events.ndjson must refuse other planes' names: %d ids, %d foreign", len(ids), rep.ForeignSource)
+	}
+	pol := stream.Default().Extend(map[string][]string{"events": {"tokenfuse", "wardryx"}})
+	ids, _, rep, err := LoadWith(p, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || rep.ForeignSource != 0 || rep.UnknownStream != 0 {
+		t.Fatalf("a declared file reads whole and reports nothing: %d ids, %d foreign, %d unknown", len(ids), rep.ForeignSource, rep.UnknownStream)
+	}
+}
+
+// A stream nothing declares is ingested when its lines claim its own name,
+// counted, and named; a line claiming any other name is refused.
+func TestAnUnknownStreamIsIngestedAndCountedAndAnotherNameIsRefused(t *testing.T) {
+	p := writeStream(t, "newplane.ndjson", envLine("newplane", "n1")+envLine("newplane", "n2")+envLine("tokenfuse", "forged"))
+	ids, _, rep, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || rep.UnknownStream != 2 || rep.ForeignSource != 1 {
+		t.Fatalf("%d ids, UnknownStream = %d, ForeignSource = %d, want 2, 2, 1", len(ids), rep.UnknownStream, rep.ForeignSource)
+	}
+	if len(rep.Unknown) != 1 || rep.Unknown[0].File != p || rep.Unknown[0].Stem != "newplane" || rep.Unknown[0].Count != 2 {
+		t.Fatalf("one entry per file: %+v", rep.Unknown)
+	}
+}
+
+// The glob is judged file by file, and the report aggregates the pairs.
+func TestAGlobIsJudgedFileByFileAndTheReportAggregates(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"tokenfuse.ndjson":       envLine("tokenfuse", "a") + envLine("wardryx", "forged"),
+		"wardryx.ndjson":         envLine("wardryx", "b"),
+		"tokenfuse-cloud.ndjson": envLine("tokenfuse", "c") + envLine("wardryx", "forged2"),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, _, rep, err := Load(filepath.Join(dir, "*.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || rep.ForeignSource != 2 || len(rep.Foreign) != 2 {
+		t.Fatalf("%d ids, ForeignSource = %d, %d pairs, want 3, 2, 2", len(ids), rep.ForeignSource, len(rep.Foreign))
+	}
+	if filepath.Base(rep.Foreign[0].File) != "tokenfuse-cloud.ndjson" || filepath.Base(rep.Foreign[1].File) != "tokenfuse.ndjson" {
+		t.Fatalf("pairs must name their own files: %+v", rep.Foreign)
+	}
+}
+
+// A producer minting a new claimed source per line cannot make the report the
+// size of its log: the count stays whole, the named pairs stop at the bound.
+func TestTheNamedPairsAreBoundedAndTheCountIsWhole(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < maxForeignPairs+30; i++ {
+		b.WriteString(envLine(fmt.Sprintf("forged-%d", i), "a"))
+	}
+	p := writeStream(t, "tokenfuse.ndjson", b.String())
+	_, _, rep, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ForeignSource != maxForeignPairs+30 {
+		t.Fatalf("the count must be whole: %d", rep.ForeignSource)
+	}
+	if len(rep.Foreign) != maxForeignPairs {
+		t.Fatalf("named pairs = %d, want the bound %d", len(rep.Foreign), maxForeignPairs)
+	}
+}
+
+// Hostile bytes are malformed exactly as before and never reach the source
+// check.
+func TestHostileLinesStillCountAsMalformedNotForeign(t *testing.T) {
+	p := writeStream(t, "tokenfuse.ndjson", "not json\n{\"source\":\"wardryx\"}\n\x00\x01\x02\n"+envLine("tokenfuse", "ok"))
+	ids, _, rep, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || rep.Malformed != 3 || rep.ForeignSource != 0 {
+		t.Fatalf("%d ids, Malformed = %d, ForeignSource = %d, want 1, 3, 0", len(ids), rep.Malformed, rep.ForeignSource)
 	}
 }
