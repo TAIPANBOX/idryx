@@ -316,11 +316,12 @@ same core, not a separate product. Data flows **source -> graph -> detectors ->
 output**:
 
 ```
-cmd/idryx/main.go          CLI: detect | serve | load | bom | remediate | ebpf-capture | version
+cmd/idryx/main.go          CLI: detect | serve | load | bom | ai-inventory | remediate | ebpf-capture | version
 internal/model               Identity, Event, Permission, Alert, Severity (shared types)
 internal/ingest               source connectors -> []model.Event or []model.Identity
 internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
 internal/ingest/passport        Agent Passport JSON documents (identity enrichment)
+internal/ingest/stream          which source a stream file may carry: the source-allowlist table and the IDRYX_STREAMS parser
 internal/ebpfcapture         Linux-only eBPF sensor: sys_enter_connect -> egress-shaped
                               flows (root/CAP_BPF, see SECURITY.md); feeds internal/ingest's
                               egress connector via idryx ebpf-capture -out + --load egress:
