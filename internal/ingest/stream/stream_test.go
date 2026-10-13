@@ -39,7 +39,7 @@ func TestAKnownStreamRefusesAnotherSourcesName(t *testing.T) {
 // and the launchers.
 func TestTheMeasuredExceptionsAreDeclared(t *testing.T) {
 	p := Default()
-	for _, stem := range []string{"tokenfuse-cloud", "tokenfuse-mcp"} {
+	for _, stem := range []string{"tokenfuse-cloud", "tokenfuse-mcp", "tokenfuse-openai"} {
 		if got := p.Check(stem, "tokenfuse"); got != Allowed {
 			t.Errorf("%s.ndjson carrying tokenfuse: %v, want Allowed", stem, got)
 		}

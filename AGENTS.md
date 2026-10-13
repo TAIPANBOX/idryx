@@ -655,7 +655,10 @@ an absent invariant.
     producers' writer code, estate-gates C4's producer table and the three
     launchers: `tokenfuse-cloud` and `tokenfuse-mcp` (the control plane and the
     MCP broker append to their own files and stamp `tokenfuse`, through the one
-    crate that builds the envelope). `demo` is deliberately NOT in the table
+    crate that builds the envelope), and `tokenfuse-openai` (`@claude
+    2026-10-13`: a second gateway process on the OpenAI wire, from tokenfuse
+    v1.11.0's `TOKENFUSE_WIRE` code, which runs beside the first and so keeps
+    its own file; the same crate stamps `tokenfuse`). `demo` is deliberately NOT in the table
     (`@claude 2026-10-04`, from review): `taipan demo` writes one file
     attributed to six planes, but until each writer owns its own file the
     events directory is writable by every co-tenant, and a built-in row would

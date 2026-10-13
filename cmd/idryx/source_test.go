@@ -190,6 +190,25 @@ func TestRenamedFilesOfTheSameProducerAreIngested(t *testing.T) {
 	}
 }
 
+// A second gateway on the OpenAI wire writes its own file, stamping `tokenfuse`
+// like the first one. Its lines are ingested as tokenfuse, and a line in the
+// same file claiming another plane is still refused.
+func TestTheOpenAIGatewaysOwnFileIsIngestedAsTokenfuse(t *testing.T) {
+	dir := busDir(t, map[string]string{
+		"tokenfuse-openai.ndjson": busLine("tokenfuse", "openai") + busLine("wardryx", "forged-openai"),
+	})
+	g, out := loadBus(t, "tokenfuse", filepath.Join(dir, "tokenfuse-openai.ndjson"))
+	if !hasAgent(g, "openai") {
+		t.Fatalf("a tokenfuse line in tokenfuse-openai.ndjson was refused; stderr:\n%s", out)
+	}
+	if hasAgent(g, "forged-openai") {
+		t.Fatalf("a line claiming wardryx inside tokenfuse-openai.ndjson was ingested as wardryx")
+	}
+	if !strings.Contains(out, "tokenfuse-openai.ndjson") {
+		t.Errorf("the refusal must name the file, stderr:\n%s", out)
+	}
+}
+
 // A stream nothing declares is not trusted in silence and not dropped: a line
 // claiming the stream's own name is ingested and the stream is named on stderr,
 // a line claiming anything else is refused.
