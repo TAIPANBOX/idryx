@@ -170,7 +170,7 @@ jobs:
   # The image, published from the SAME tag as the binaries above rather than
   # from its own, so "which version am I running" has one answer whether the
   # answer came from a tarball or from a registry. Immutable: no `:latest`, no
-  # `:main` (Yurii, 2026-08-02).
+  # `:main`. @decided 2026-08-02: immutable version tags only, so no moving tag is published.
   image:
     name: build + push
     # Never on a pull request: image-build above already proves the
