@@ -33,8 +33,10 @@ type Report = agentpassport.Report
 // shared wire type from agent-stack-go/passport instead of a private,
 // hand-rolled struct. It returns an error, meaning the file is malformed to
 // the caller, whenever agentpassport.Parse does: the document isn't valid
-// JSON, its schema isn't the supported taipanbox.dev/agent-passport/v0.1, id
-// or owner is missing, or id is not a well-formed agent:// URI.
+// JSON, its schema is neither taipanbox.dev/agent-passport/v0.1 nor v1.0 (the
+// two agent-stack-go/passport accepts), a v1.0 document carries a top-level
+// key the schema never names, id or owner is missing, or id is not a
+// well-formed agent:// URI.
 //
 // That last check is new relative to Idryx's previous hand-rolled decode,
 // which treated id as an opaque string and never validated its shape.

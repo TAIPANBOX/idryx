@@ -249,8 +249,9 @@ func verifyChain(data []byte, file string) Chain {
 }
 
 // Parse decodes one NDJSON blob of taipanbox.dev/agent-event envelopes
-// (schema v0.1 or v0.2; agent-stack-go/event's Unmarshal accepts either)
-// into identities and behavioral events.
+// (agent-stack-go/event registers v0.1, v0.2 and v1.0, and v0.3 for a claimed
+// subject; its Unmarshal checks only that the schema field is present, so the
+// value is not checked here) into identities and behavioral events.
 //
 //   - Each event with an agent_id not seen earlier in this blob yields an
 //     Identity{Type: IdentityAgent, ID: agent_id, Source: env.Source}. The
