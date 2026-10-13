@@ -55,6 +55,12 @@ Feature: An event is ingested as the source it claims only when its file may car
     Then both agents are in the graph and nothing is reported as refused
   # @test:TestRenamedFilesOfTheSameProducerAreIngested
 
+  Scenario: the second gateway's own file is ingested as tokenfuse, and a forged claim in it is refused
+    Given tokenfuse-openai.ndjson, the file of a second gateway on the OpenAI wire, holds a tokenfuse line and a line claiming wardryx
+    When idryx loads the file
+    Then the tokenfuse agent is in the graph, the wardryx claim is not ingested as wardryx, and stderr names the file
+  # @test:TestTheOpenAIGatewaysOwnFileIsIngestedAsTokenfuse
+
   Scenario: a stream nothing declares is ingested and named, and a forged claim in it is refused
     Given newplane.ndjson holds a line claiming newplane and a line claiming tokenfuse
     When idryx loads it
