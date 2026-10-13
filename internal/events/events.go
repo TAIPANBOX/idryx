@@ -11,8 +11,8 @@
 //
 // # ONE TYPE, NOT TWENTY-FIVE
 //
-// `@yurii 2026-08-10`, asked with both shapes measured and costed: "перший,
-// один тип".
+// `@decided 2026-08-10`, with both shapes measured and costed: one event type,
+// the detector name carried in the data.
 //
 // idryx ships 26 detectors and the registry reserved seven names, two of which
 // had no producer at all. Registering 26 types would put 26 rows in SPEC 6.2,

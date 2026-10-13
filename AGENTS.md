@@ -272,7 +272,7 @@ an absent invariant.
    into its socket. Radar's role narrows to emitting what
    it observes into the shared agent-event stream; it does not grow new
    observation of its own.
-   *(@yurii 2026-08-08, "Idryx основний, radar зводимо до відправника подій")*
+   *(@decided 2026-08-08: Idryx is the primary product, and the radar is reduced to a sender of events)*
 
    This list named "TLS ClientHello" and "JA3/JA4" until 2026-08-09, when both
    were decided against rather than scheduled (see SECURITY.md). An invariant
@@ -740,7 +740,7 @@ hand. The gate does that, and separately requires the `!linux` stub in
 path: a stub returning an empty result and no error is the exact failure
 invariant 4 exists to prevent, a partial graph presented as complete.
 
-**Invariant 6 is gone, and `sandbox.mod` with it** (@yurii 2026-08-01, "go").
+**Invariant 6 is gone, and `sandbox.mod` with it** (@decided 2026-08-01: approved, the invariant and the file are removed).
 It said sandbox.mod "exists to prove the core builds without the eBPF
 dependency" and "is not a scratch file". All three claims were false: it was
 never in the repository, it did not build, and it also excluded

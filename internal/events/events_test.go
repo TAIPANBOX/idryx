@@ -37,7 +37,7 @@ func alert(detector, identity string, sev model.Severity) model.Alert {
 }
 
 // The decision this package was built around: one type, the detector name in
-// data. `@yurii 2026-08-10`, "перший, один тип".
+// data. `@decided 2026-08-10`: the same one-type decision, recorded in events.go.
 func TestEveryFindingIsOneTypeAndTheDetectorTravelsInData(t *testing.T) {
 	s, path := open(t)
 	if err := s.Send([]model.Alert{
