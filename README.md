@@ -102,7 +102,7 @@ Run the whole open stack locally with one command via [**stack-up**](https://git
 ## Live infrastructure validation
 
 Before any public launch, Idryx was run against a real Postgres 16 backend and real agent-fleet event
-data: 16/16 integration tests pass, the delegation-chain backfill migration is correct and idempotent,
+data: the integration tests passed (VALIDATION.md has the run), the delegation-chain backfill migration is correct and idempotent,
 and the full detector suite fires correctly off Postgres-backed state.
 
 ![Idryx identity/access dashboard: agent fleet spend by non-human identity, 3 detectors fired live, CycloneDX Agent-BOM generated](assets/06-idryx.png)
@@ -123,7 +123,7 @@ other planes append to (`--load tokenfuse:<file>`, mounted read-only), so on
 one machine that coupling is invisible and on Kubernetes it becomes a
 ReadWriteMany claim. That claim turned out to be the single largest price
 difference between the clouds: a 5 GiB shared event log costs USD 1.80/month
-on EFS and USD 194.56/month on Filestore, which bills a whole TiB. It also
+on EFS and USD 194.56/month on Filestore, which bills a whole TiB (both prices are from the July 2026 deployment and have not been re-checked since). It also
 runs a nightly `identity-sweep` CronJob (04:42).
 
 To be clear about scope: those runs verified the deployment shape and the
@@ -135,8 +135,9 @@ this file is still the one to read.
 
 ## What it does
 
-1. **Ingest** - read-only connectors to IdPs, clouds, secrets stores, GitHub,
-   Kubernetes, and agent runtimes, normalized into one model.
+1. **Ingest** - read-only connectors to IdPs (Okta, Entra ID), clouds (AWS
+   CloudTrail and IAM, GCP IAM, Azure), network egress, agent and MCP
+   inventories, and the agent-event bus, normalized into one model.
 2. **Graph** - every identity type and its permissions, events, owners, and
    delegation chains in a single identity / access graph.
 3. **Baseline + detection** - per-identity normal behavior; deterministic
@@ -146,7 +147,7 @@ this file is still the one to read.
 
 idryx is a complete MVP for detection and remediation and has passed a security
 self-review (see [`SECURITY.md`](SECURITY.md)). A first eBPF network-behavior
-layer has shipped since (the `sys_enter_connect` sensor and its
+layer has shipped since (the eBPF sensor, a kprobe on `__sys_connect_file`, and its
 `unmanaged_egress` detector). Beaconing shipped, and corroborating a claimed
 identity against the graph has begun: `unrouted_egress` reads the web-egress
 plane's own journal to decide whether a claim names an agent that plane
@@ -215,7 +216,7 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   graph a `--source`, `--load`, or `--db` already built.
 - **Agent-event bus behavioral events** (`--source tokenfuse|wardryx|mockryx|verdryx|scopyx`
   / `--load tokenfuse:` / `wardryx:` / `mockryx:` / `verdryx:` / `scopyx:<path|glob>`): NDJSON
-  `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2), the shared wire
+  `taipanbox.dev/agent-event` envelopes (the reader checks the required fields, not the schema string; the registry defines v0.1, v0.2, v0.3 and v1.0), the shared wire
   format every producer on the bus writes: **TokenFuse** (spend), **Wardryx**
   (policy), **Mockryx** (pre-prod rehearsal), **Verdryx** (quality/drift),
   **scopyx** (web egress: one event per fetch and one per refusal), and any
@@ -322,7 +323,7 @@ internal/ingest               source connectors -> []model.Event or []model.Iden
 internal/ingest/tokenfuse       TokenFuse agent-event NDJSON (identities + events)
 internal/ingest/passport        Agent Passport JSON documents (identity enrichment)
 internal/ingest/stream          which source a stream file may carry: the source-allowlist table and the IDRYX_STREAMS parser
-internal/ebpfcapture         Linux-only eBPF sensor: sys_enter_connect -> egress-shaped
+internal/ebpfcapture         Linux amd64/arm64 eBPF sensor: kprobe on __sys_connect_file -> egress-shaped
                               flows (root/CAP_BPF, see SECURITY.md); feeds internal/ingest's
                               egress connector via idryx ebpf-capture -out + --load egress:
 internal/graph                Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
@@ -352,13 +353,13 @@ Design principles, held as hard rules:
 
 ## Stack
 
-One language and three direct dependencies. `make build` produces a single binary that carries the dashboard, the detectors and the eBPF program inside it.
+One language and four direct dependencies. `make build` produces a single binary that carries the dashboard, the detectors and the eBPF program inside it.
 
 - **Core, ingest, baseline, detection, remediation:** Go 1.27. Detection is Go rather than a separate analytics runtime on purpose: it is statistics and rules over the graph, it has to stay deterministic, and somebody eventually has to defend a finding by reading the code that made it.
-- **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`) on the `sys_enter_connect` tracepoint, compiled with `bpf2go` and embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, and the only non-Go source in the repository.
+- **eBPF sensor:** one C program (`internal/ebpfcapture/bpf/connect.c`) on a kprobe on `__sys_connect_file`, compiled with `bpf2go` and embedded as an object in the binary, driven from Go through `cilium/ebpf`. Linux only, on amd64 and arm64, and the only non-Go source in the repository.
 - **Graph:** in-memory by default, Postgres (`pgx/v5`, embedded `schema.sql`, additive `IF NOT EXISTS` migrations) as the alternative. Both satisfy the same `graph.Reader`, so detectors run unchanged against either. Delegation chains are walked in Go (`graph.WalkDelegationChain`, cycle-safe), not in SQL.
 - **API and dashboard:** Go `net/http`, a JSON API and one self-contained `html/template` page. No frontend build step, no CDN, no framework.
-- **Dependencies:** `cilium/ebpf`, `pgx/v5`, and `agent-stack-go` for the shared wire types. That is the entire list.
+- **Dependencies:** `cilium/ebpf`, `pgx/v5`, `golang.org/x/sys`, and `agent-stack-go` for the shared wire types. That is the entire list of direct dependencies.
 - **License:** Apache-2.0, fully open source. There are no paid Idryx tiers: like the rest of the open TAIPANBOX stack, everything in this repo is free to self-host.
 
 ---
@@ -447,7 +448,7 @@ your download arrive intact. It cannot answer this one, because `tar` and
 when every byte of the binary inside it is.
 
 Measured on 5 August 2026 against the real published artifact:
-`idryx_v0.3.0_darwin_arm64` from the Releases page, built on a Linux runner
+`idryx_v0.3.0_darwin_arm64` from the Releases page (v0.3.0 was the last release whose asset names carried a version), built on a Linux runner
 cross-compiling to darwin/arm64, and a local build of that tag on macOS are both
 
 ```
@@ -618,8 +619,8 @@ runs deterministic detectors.
 | `azure` | NHI inventory | Azure AD service principals + role assignments, with owners, credential expiry, and the escalation actions each built-in role definition contains |
 | `agents` | agent inventory | AI agents with runtime, tools/scopes, used tools, and the identity each acts `on_behalf_of` |
 | `mcp` | MCP inventory | MCP servers and their exposed tools, checked against the sanctioned registry to surface shadow servers |
-| `tokenfuse` / `wardryx` / `mockryx` / `verdryx` / `scopyx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (schema v0.1 or v0.2; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:`/`scopyx:path/*.ndjson`), one connector shared by every bus producer |
-| `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
+| `tokenfuse` / `wardryx` / `mockryx` / `verdryx` / `scopyx` | agent identities + behavioral events | NDJSON [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-event` envelopes (the reader checks the required fields, not the schema string; one file or a glob via `--load tokenfuse:`/`wardryx:`/`mockryx:`/`verdryx:`/`scopyx:path/*.ndjson`), one connector shared by every bus producer |
+| `--passports <dir-or-glob>` | agent identity enrichment | static [agent-passport](https://github.com/TAIPANBOX/agent-passport) `taipanbox.dev/agent-passport/v0.1` or `v1.0` JSON documents, one per agent, layered onto whichever source/`--load`/`--db` built the graph |
 
 **Detectors** - see the [Detectors](#detectors) table above: 27 detectors across
 ITDR, NHI, agents/AI, and least-privilege.
@@ -688,9 +689,10 @@ idryx detect --load tokenfuse:tokenfuse.ndjson \
   --webhook-header "Authorization: Bearer $OPS_KEY"
 ```
 
-TokenFuse Cloud's `/v1/findings` accepts this payload as-is, which puts an
-idryx finding in front of whoever is watching the fleet dashboard, labelled
-with the service that made it. Headers are outbound only: nothing about what idryx
+The webhook sends the findings as plain JSON to whatever URL you give it, so a
+TokenFuse Cloud `/v1/findings` endpoint receives an ordinary webhook body. How that
+endpoint presents the findings is the service's own behavior, which this
+repository does not test. Headers are outbound only: nothing about what idryx
 reads, or how it detects, changes.
 
 Setting `IDRYX_OTLP_ENDPOINT` turns on a hand-rolled OTLP/HTTP JSON exporter
@@ -738,12 +740,12 @@ and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 
 **eBPF network sensor** (`internal/ebpfcapture`, `idryx ebpf-capture`) -
-Linux-only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached to the
-`sys_enter_connect` tracepoint via `cilium/ebpf`, capturing real outbound
+Linux amd64 or arm64 only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached as a
+kprobe on `__sys_connect_file` via `cilium/ebpf`, capturing real outbound
 connections (pid, process name, destination) with no dependency on IAM,
 agent-event, or Passport data. Writes an egress-shaped log consumed by the
 same `--load egress:` pipeline every other source uses. Known LLM API
-destinations are resolved to their hostname so the existing `shadow_ai`
+destinations on port 443 are resolved to their hostname so the existing `shadow_ai`
 detector reasons over eBPF-captured traffic for free; its own
 `unmanaged_egress` detector flags any identity this sensor is the *only*
 evidence for, and `unrouted_egress` asks the next question of a governed one:
@@ -783,7 +785,7 @@ against, both because they would need to read a payload, see
 - [x] Agent-BOM (CycloneDX-shaped) via `idryx bom`, with its `bom_incomplete` companion detector
 - [x] Security self-review passed (see [`SECURITY.md`](SECURITY.md))
 - [x] eBPF network-behavior layer (descoped first version): Linux sensor on
-      `sys_enter_connect` (`idryx ebpf-capture`), its `unmanaged_egress`
+      a kprobe on `__sys_connect_file` (`idryx ebpf-capture`), its `unmanaged_egress`
       detector, live-validated against real traffic on a disposable VM (see
       [`SECURITY.md`](SECURITY.md#ebpf-network-sensor-ebpf-capture)); the
       original larger spec's beaconing shipped 2026-08-09; JA3/JA4 and
