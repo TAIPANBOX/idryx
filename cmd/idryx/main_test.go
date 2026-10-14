@@ -1097,3 +1097,43 @@ func TestAIInventoryReadsAQryxDocument(t *testing.T) {
 		t.Errorf("root = %q, want /src", scan.Root)
 	}
 }
+
+// TestARegisteredTypeNoDetectorReadsIsNotCalledUnknown is the operator-facing
+// half of the unread-type fix. Four types the bus registry names (agent-passport
+// SPEC 6.2) are ingested as they are, and no idryx detector reads them yet. The
+// stderr line must say exactly that, and must not call a registered type
+// "unknown", which is what it said before.
+func TestARegisteredTypeNoDetectorReadsIsNotCalledUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokenfuse.ndjson")
+	var lines []string
+	for i, typ := range []string{"spend_spike", "identity_mismatch", "taint_raised", "unit_cap_exceeded", "dependency_failed"} {
+		lines = append(lines, fmt.Sprintf(`{"schema":%q,"ts":"2026-08-05T10:0%d:00Z","source":"tokenfuse","type":%q,"agent_id":"agent://acme.example/bot"}`,
+			event.SchemaV02, i, typ))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStderr(t, func() {
+		if _, err := buildGraph("", "", "", "", "", "", "", loadList{{Source: "tokenfuse", Path: path}}); err != nil {
+			t.Fatalf("buildGraph: %v", err)
+		}
+	})
+	if strings.Contains(out, "unknown") {
+		t.Errorf("a registered type must not be called unknown, got %q", out)
+	}
+	if !strings.Contains(out, "4 event type(s) no idryx detector reads, ingested as they are") {
+		t.Errorf("the four unread types must be named as ingested as they are, got %q", out)
+	}
+	for _, typ := range []string{"identity_mismatch", "taint_raised", "unit_cap_exceeded", "dependency_failed"} {
+		if !strings.Contains(out, fmt.Sprintf("%q", typ)) {
+			t.Errorf("the line must name %s, got %q", typ, out)
+		}
+	}
+	if strings.Contains(out, `"spend_spike"`) {
+		t.Errorf("a type a detector reads must not be listed, got %q", out)
+	}
+	if strings.Contains(out, "source(s) no idryx detector reads") {
+		t.Errorf("tokenfuse has a type a detector reads, so it must not be listed as an unread source, got %q", out)
+	}
+}

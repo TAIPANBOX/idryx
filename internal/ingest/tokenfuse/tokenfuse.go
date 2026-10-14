@@ -77,6 +77,11 @@ type Report struct {
 	Malformed    int
 	UnknownTypes map[string]int
 	Chain        Chain
+	// Sources tallies each source this ingest carried: how many of its events
+	// were ingested, and how many of those carry a type a detector reads (a
+	// type in knownTypes). A source none of whose events is read is one no
+	// detector reads, and UnreadSources names it.
+	Sources map[string]SourceTally
 
 	// ForeignSource counts well-formed events whose `source` the file they
 	// were read from may not carry. They are NOT ingested: no identity, no
@@ -95,6 +100,14 @@ type Report struct {
 	UnknownStream int
 	// Unknown names those files, sorted and bounded like Foreign.
 	Unknown []UnknownFile
+}
+
+// SourceTally is what one source contributed to a Report.
+type SourceTally struct {
+	// Events is how many of the source's events were ingested.
+	Events int
+	// Read is how many of them carry an event type in knownTypes.
+	Read int
 }
 
 // Foreign is one (file, claimed source) pair whose events were refused.
@@ -179,7 +192,78 @@ func (c Chain) Present() bool {
 func (c Chain) Intact() bool { return c.Verified && len(c.Breaks) == 0 }
 
 func newReport() Report {
-	return Report{UnknownTypes: map[string]int{}}
+	return Report{UnknownTypes: map[string]int{}, Sources: map[string]SourceTally{}}
+}
+
+// UnreadSources lists, sorted, the sources this ingest carried none of whose
+// events a detector reads: each has ingested events, and none of them is a
+// type in knownTypes. A source read in one file of a load is read for the
+// whole load.
+func (r Report) UnreadSources() []string {
+	var out []string
+	for s, t := range r.Sources {
+		if t.Events > 0 && t.Read == 0 {
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// maxNamed bounds how many names one list in StderrSummary shows, and
+// maxNameShown how many bytes of one name, before it is quoted.
+const (
+	maxNamed     = 8
+	maxNameShown = 64
+)
+
+// StderrSummary is the body of the one stderr line an agent-event-bus ingest
+// earns from its own counts, after the caller's "idryx: <source> <path>:"
+// prefix, or "" when there is nothing to say. It names the malformed lines,
+// the event types no detector reads and the sources no detector reads. Those
+// are ingested as they are (carried through, counted, never dropped), so the
+// line says exactly that and never calls a registered type unknown.
+func StderrSummary(rep Report) string {
+	var parts []string
+	if rep.Malformed > 0 {
+		parts = append(parts, fmt.Sprintf("%d line(s) read, %d malformed", rep.Lines, rep.Malformed))
+	}
+	if len(rep.UnknownTypes) > 0 {
+		types := make([]string, 0, len(rep.UnknownTypes))
+		for t := range rep.UnknownTypes {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		parts = append(parts, fmt.Sprintf("%d event type(s) no idryx detector reads, ingested as they are: %s",
+			len(types), namesList(types)))
+	}
+	if srcs := rep.UnreadSources(); len(srcs) > 0 {
+		parts = append(parts, fmt.Sprintf("%d source(s) no idryx detector reads, ingested as they are: %s",
+			len(srcs), namesList(srcs)))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// namesList quotes the first maxNamed of names, which are sorted already, and
+// says how many it did not show. A producer wrote these words: each is cut and
+// then escaped by %q, so nothing in one can break the line it is printed on.
+func namesList(names []string) string {
+	shown := names
+	if len(shown) > maxNamed {
+		shown = shown[:maxNamed]
+	}
+	quoted := make([]string, len(shown))
+	for i, n := range shown {
+		if len(n) > maxNameShown {
+			n = n[:maxNameShown] + "..."
+		}
+		quoted[i] = fmt.Sprintf("%q", n)
+	}
+	out := strings.Join(quoted, ", ")
+	if rest := len(names) - len(shown); rest > 0 {
+		out += fmt.Sprintf(" +%d more", rest)
+	}
+	return out
 }
 
 func (r *Report) merge(o Report) {
@@ -187,6 +271,12 @@ func (r *Report) merge(o Report) {
 	r.Malformed += o.Malformed
 	for t, n := range o.UnknownTypes {
 		r.UnknownTypes[t] += n
+	}
+	for s, t := range o.Sources {
+		cur := r.Sources[s]
+		cur.Events += t.Events
+		cur.Read += t.Read
+		r.Sources[s] = cur
 	}
 	r.Chain.merge(o.Chain)
 	r.ForeignSource += o.ForeignSource
@@ -419,6 +509,12 @@ func parse(data []byte, file string, pol *stream.Policy) ([]model.Identity, []mo
 			evType = model.EventType(env.Type) // generic: pass the raw type through, never error
 			rep.UnknownTypes[env.Type]++
 		}
+		tally := rep.Sources[env.Source]
+		tally.Events++
+		if known {
+			tally.Read++
+		}
+		rep.Sources[env.Source] = tally
 		events = append(events, model.Event{
 			Time:       ts,
 			IdentityID: env.AgentID,

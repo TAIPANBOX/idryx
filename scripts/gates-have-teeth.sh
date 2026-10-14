@@ -479,10 +479,14 @@ run_case "features-are-bound: prose edited inside a scenario" pass \
 	'./scripts/features-are-bound.sh' \
 	"$(py 'edit("features/source-must-match-its-stream.feature", "Given tokenfuse.ndjson holds a line claiming wardryx", "Given tokenfuse.ndjson holds one line claiming wardryx (a harmless prose edit)")')"
 
+# Every feature file goes, not one named file: the case means "no scenario left
+# in features/", and a second feature file (added after this case was written)
+# would otherwise keep scenarios alive and turn the gate's silence into a pass.
 run_case "features-are-bound: no scenario left, so it measured nothing" fail \
 	'./scripts/features-are-bound.sh' \
-	"$(py 'import os
-os.remove("features/source-must-match-its-stream.feature")')" \
+	"$(py 'import glob, os
+for f in glob.glob("features/*.feature"):
+    os.remove(f)')" \
 	"measured nothing"
 
 echo
