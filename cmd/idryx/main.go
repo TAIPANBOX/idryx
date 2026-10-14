@@ -471,9 +471,8 @@ func populate(g *graph.Store, spec loadSpec) error {
 // message only; it plays no part in identity/event attribution, which
 // comes from each envelope's own `source` field).
 func reportTokenFuse(source, pathOrGlob string, rep tokenfuse.Report) {
-	if rep.Malformed > 0 || len(rep.UnknownTypes) > 0 {
-		fmt.Fprintf(os.Stderr, "idryx: %s %s: %d line(s) read, %d malformed, %d unknown event type(s)\n",
-			source, pathOrGlob, rep.Lines, rep.Malformed, len(rep.UnknownTypes))
+	if msg := tokenfuse.StderrSummary(rep); msg != "" {
+		fmt.Fprintf(os.Stderr, "idryx: %s %s: %s\n", source, pathOrGlob, msg)
 	}
 	reportStreams(source, pathOrGlob, rep)
 	reportChain(source, pathOrGlob, rep.Chain)

@@ -537,3 +537,134 @@ func TestTheMergedReportBoundsTheNamedPairsAcrossFiles(t *testing.T) {
 		t.Fatalf("UnknownStream = %d, named = %d, want %d and %d", urep.UnknownStream, len(urep.Unknown), maxForeignPairs+5, maxForeignPairs)
 	}
 }
+
+// busLine is one agent-event envelope as a producer writes it. It carries no
+// prev_hash, so the chain verdict is "no chain" and stays out of the way.
+func busLine(source, typ, agent string) string {
+	return fmt.Sprintf(`{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-05T10:00:00Z","source":%q,"type":%q,"agent_id":%q}`,
+		source, typ, agent)
+}
+
+// TestStderrSummaryNamesTheTypesNoDetectorReads: the types nothing reads are
+// named as ingested as they are, sorted, never called unknown.
+func TestStderrSummaryNamesTheTypesNoDetectorReads(t *testing.T) {
+	rep := newReport()
+	rep.Lines = 3
+	rep.UnknownTypes["taint_raised"] = 1
+	rep.UnknownTypes["identity_mismatch"] = 2
+	want := `2 event type(s) no idryx detector reads, ingested as they are: "identity_mismatch", "taint_raised"`
+	if got := StderrSummary(rep); got != want {
+		t.Errorf("StderrSummary = %q, want %q", got, want)
+	}
+}
+
+// TestStderrSummaryIsEmptyWhenEveryTypeAndSourceIsRead: an ingest a detector
+// reads in full says nothing, as the malformed count says nothing when zero.
+func TestStderrSummaryIsEmptyWhenEveryTypeAndSourceIsRead(t *testing.T) {
+	rep := newReport()
+	rep.Lines = 3
+	rep.Sources["tokenfuse"] = SourceTally{Events: 3, Read: 3}
+	if got := StderrSummary(rep); got != "" {
+		t.Errorf("a clean ingest must say nothing, got %q", got)
+	}
+}
+
+// TestStderrSummaryJoinsItsPartsOnOneLine: malformed lines, unread types and
+// unread sources share one line, separated by semicolons, in that order.
+func TestStderrSummaryJoinsItsPartsOnOneLine(t *testing.T) {
+	rep := newReport()
+	rep.Lines, rep.Malformed = 5, 1
+	rep.UnknownTypes["dependency_failed"] = 1
+	rep.Sources["typryx"] = SourceTally{Events: 1, Read: 0}
+	want := `5 line(s) read, 1 malformed; 1 event type(s) no idryx detector reads, ingested as they are: "dependency_failed"; ` +
+		`1 source(s) no idryx detector reads, ingested as they are: "typryx"`
+	if got := StderrSummary(rep); got != want {
+		t.Errorf("StderrSummary = %q, want %q", got, want)
+	}
+}
+
+// TestStderrSummaryBoundsAndEscapesEveryName: a producer writes these words.
+// Whatever it wrote stays on one line, a long name is cut at 64 bytes, and
+// only eight names are listed, with the rest counted.
+func TestStderrSummaryBoundsAndEscapesEveryName(t *testing.T) {
+	rep := newReport()
+	long := "a" + strings.Repeat("x", 100)
+	rep.UnknownTypes[long] = 1
+	rep.UnknownTypes["bad\nline\x1b[31m"] = 1
+	for i := 0; i < 10; i++ {
+		rep.UnknownTypes[fmt.Sprintf("type_%02d", i)] = 1
+	}
+	got := StderrSummary(rep)
+	if strings.ContainsAny(got, "\n\x1b") {
+		t.Errorf("the line must hold no raw line break or control byte, got %q", got)
+	}
+	// 64 bytes in all, the leading "a" included, then the marker.
+	if !strings.Contains(got, `"a`+strings.Repeat("x", 63)+`..."`) {
+		t.Errorf("a long name must be cut at 64 bytes and marked, got %q", got)
+	}
+	if strings.Contains(got, strings.Repeat("x", 64)) {
+		t.Errorf("a long name must not be shown past 64 bytes, got %q", got)
+	}
+	if !strings.Contains(got, `"bad\nline\x1b[31m"`) {
+		t.Errorf("a hostile name must be escaped, got %q", got)
+	}
+	if !strings.Contains(got, `"type_05" +4 more`) {
+		t.Errorf("eight names then the count of the rest, got %q", got)
+	}
+	if strings.Contains(got, "type_06") {
+		t.Errorf("a ninth name must not be listed, got %q", got)
+	}
+	if !strings.Contains(got, "12 event type(s) no idryx detector reads") {
+		t.Errorf("the count must be the whole, got %q", got)
+	}
+}
+
+// TestStderrSummaryNamesMalformedLinesOnly: a malformed line alone says how
+// many lines were read and how many were malformed, and nothing about types.
+func TestStderrSummaryNamesMalformedLinesOnly(t *testing.T) {
+	rep := newReport()
+	rep.Lines, rep.Malformed = 5, 1
+	rep.Sources["tokenfuse"] = SourceTally{Events: 4, Read: 4}
+	if got, want := StderrSummary(rep), "5 line(s) read, 1 malformed"; got != want {
+		t.Errorf("StderrSummary = %q, want %q", got, want)
+	}
+}
+
+// TestAnUnreadSourceIsJudgedAcrossEveryFileOfALoad: a source is read when any
+// of its events, in any file of the load, carries a type a detector reads. A
+// line refused by the stream rule is not a source the file claimed to carry.
+func TestAnUnreadSourceIsJudgedAcrossEveryFileOfALoad(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, lines ...string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// tokenfuse reads one type in one file and not in the other.
+	write("tokenfuse.ndjson", busLine("tokenfuse", "identity_mismatch", "agent://acme.example/a"))
+	write("tokenfuse-cloud.ndjson", busLine("tokenfuse", "spend_spike", "agent://acme.example/a"))
+	// typryx reads nothing, and its line claiming wardryx is refused.
+	write("typryx.ndjson",
+		busLine("typryx", "answer_given", "agent://acme.example/t"),
+		busLine("wardryx", "policy_deny", "agent://acme.example/t"))
+
+	_, _, rep, err := Load(filepath.Join(dir, "*.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep.UnreadSources(); len(got) != 1 || got[0] != "typryx" {
+		t.Fatalf("UnreadSources = %v, want [typryx]", got)
+	}
+	if got, want := rep.Sources["tokenfuse"], (SourceTally{Events: 2, Read: 1}); got != want {
+		t.Errorf("tokenfuse tally = %+v, want %+v", got, want)
+	}
+	if _, counted := rep.Sources["wardryx"]; counted {
+		t.Errorf("a refused line must not be tallied under the source it claimed: %v", rep.Sources)
+	}
+	want := `2 event type(s) no idryx detector reads, ingested as they are: "answer_given", "identity_mismatch"; ` +
+		`1 source(s) no idryx detector reads, ingested as they are: "typryx"`
+	if got := StderrSummary(rep); got != want {
+		t.Errorf("StderrSummary = %q, want %q", got, want)
+	}
+}

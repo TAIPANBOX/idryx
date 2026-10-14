@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-374-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-381-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -227,7 +227,9 @@ speak the [agent-passport](https://github.com/TAIPANBOX/agent-passport) spec:
   `sustained_loop`, `spend_spike`, `fanout_explosion`, `breaker_tripped`,
   `dlp_block`, `taint_block`, `mcp_drift`) and scopyx's two (`web_fetch`,
   `web_blocked`, which `unrouted_egress` reads) map to named constants; any
-  other type, from any producer, is tolerated generically.
+  other type, from any producer, is tolerated generically. Each ingest says on
+  stderr which event types and which sources no detector reads: they are
+  ingested as they are, and the line says so rather than calling them unknown.
   Every such stream is checked against the SPEC 6.5 `prev_hash` integrity
   chain on ingest, through `agent-stack-go`'s own `event.VerifyChain`, and
   the verdict goes to stderr: chain intact, chain broken at these lines, or
