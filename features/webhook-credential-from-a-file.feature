@@ -60,3 +60,33 @@ Feature: A webhook credential can come from a file that other users cannot read
     When the header file is read
     Then the headers are read, and on Linux the same file is refused
   # @test:TestHeaderFileModeCheckIsSkippedOnWindowsByInjection
+
+  Scenario: a header file owned by root with group read only is read
+    Given a header file owned by root with mode 0440, as a Kubernetes Secret presents it under an fsGroup
+    When the header file is checked, run as another user
+    Then the file is accepted
+  # @test:TestOwnerRuleOwnedByRootAt0440IsAccepted
+
+  Scenario: a header file owned by root with group read is read
+    Given a header file owned by root with mode 0640
+    When the header file is checked, run as another user
+    Then the file is accepted
+  # @test:TestOwnerRuleOwnedByRootAt0640IsAccepted
+
+  Scenario: a header file owned by root with group write is refused
+    Given a header file owned by root with mode 0660
+    When the header file is checked, run as another user
+    Then the file is refused
+  # @test:TestOwnerRuleOwnedByRootAt0660IsRefused
+
+  Scenario: a header file owned by another user is refused, whatever its mode
+    Given a header file owned by a user who is neither this user nor root, with mode 0600 or 0400
+    When the header file is checked
+    Then the file is refused and the error names the owner
+  # @test:TestOwnerRuleOwnedByAnotherUserIsRefused
+
+  Scenario: a header file with any access bit for other users is refused
+    Given header files with mode 0604, 0644, 0606 or 0445, owned by this user or by root
+    When each file is checked
+    Then every file is refused
+  # @test:TestOwnerRuleAnyOtherReadBitIsRefused
