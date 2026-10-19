@@ -18,7 +18,7 @@ package passport
 import (
 	"fmt"
 
-	agentpassport "github.com/TAIPANBOX/agent-stack-go/passport"
+	agentpassport "github.com/TAIPANBOX/agent-stack-go/v2/passport"
 	"github.com/TAIPANBOX/idryx/internal/model"
 )
 
