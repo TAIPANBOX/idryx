@@ -707,21 +707,27 @@ an absent invariant.
     header typed after `--webhook-header` sits in the process list for as long
     as the run lasts, where other users on the machine can read it. So the
     webhook's headers can come from a file named by `--webhook-header-file` or by
-    `IDRYX_WEBHOOK_HEADER_FILE`. That file is refused when group or other users
-    can read it, and a malformed line is refused by its number without being
-    printed. A command-line header whose name looks like a credential is still
+    `IDRYX_WEBHOOK_HEADER_FILE`. The file must be a regular file after links are
+    followed, and owned by this user at 0600 or stricter, or by root at 0640 or
+    stricter; any other owner, any access bit for other users, and any group write
+    or execute bit are refused. This is PostgreSQL's owner rule for the private key
+    a server loads (the libpq-ssl docs, section 32.19.2, and
+    check_ssl_key_file_permissions in src/backend/libpq/be-secure-common.c); the
+    root case admits the group read a Kubernetes Secret presents under an fsGroup. A
+    malformed line is refused by its number without being printed. A command-line header whose name looks like a credential is still
     sent, and stderr names it on one line without its value. `@decided
     2026-10-17`: credentials for outbound destinations leave argv, starting with
     the webhook. `@claude 2026-10-17`: the warning is a name test, so a harmless
     name with `key` in it also gets the line; that is the accepted cost, a
-    warning and not a refusal. Not checked: the owner of the file (only its mode).
-    Named limit: on Windows the mode is not checked at all, because Go reports a
-    writable file there as 0666 whatever its ACL, so the owner-only rule cannot
-    tell the files apart; the file must still be a regular file. The rule is
-    tested by injecting the operating system, so the Windows branch runs everywhere.
+    warning and not a refusal. Named limit: on Windows the owner rule is not made,
+    because Go reports a writable file there as 0666 whatever its ACL; the file must
+    still be a regular file. The rule is tested with an injected stat and uid, so
+    its cases run unprivileged, and the Windows branch runs everywhere.
     *(test: `TestHeaderFileReadableByOthersIsRefusedBeforeAnySend`,
     `TestHeaderFileModeBoundary`, `TestCredentialHeaderOnTheCommandLineIsNamedWithAWarning`,
     `TestCommandLineHeaderOverridesTheFile`, `TestHeaderFileModeCheckIsSkippedOnWindowsByInjection`,
+    `TestOwnerRuleOwnedByRootAt0440IsAccepted`, `TestOwnerRuleOwnedByRootAt0660IsRefused`,
+    `TestOwnerRuleOwnedByAnotherUserIsRefused` (`cmd/idryx/owner_rule_test.go`),
     all in `cmd/idryx/webhook_header_test.go`;
     scenarios in `features/webhook-credential-from-a-file.feature`, bound both
     ways by `scripts/features-are-bound.sh`. No gate script: whether a credential
