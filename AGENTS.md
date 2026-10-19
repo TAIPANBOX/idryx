@@ -714,12 +714,15 @@ an absent invariant.
     2026-10-17`: credentials for outbound destinations leave argv, starting with
     the webhook. `@claude 2026-10-17`: the warning is a name test, so a harmless
     name with `key` in it also gets the line; that is the accepted cost, a
-    warning and not a refusal. Not checked: the owner of the file (only its mode),
-    and a Windows host, where Go reports a writable file as 0666, so the file
-    route refuses there and the variable cannot be used.
+    warning and not a refusal. Not checked: the owner of the file (only its mode).
+    Named limit: on Windows the mode is not checked at all, because Go reports a
+    writable file there as 0666 whatever its ACL, so the owner-only rule cannot
+    tell the files apart; the file must still be a regular file. The rule is
+    tested by injecting the operating system, so the Windows branch runs everywhere.
     *(test: `TestHeaderFileReadableByOthersIsRefusedBeforeAnySend`,
     `TestHeaderFileModeBoundary`, `TestCredentialHeaderOnTheCommandLineIsNamedWithAWarning`,
-    `TestCommandLineHeaderOverridesTheFile`, all in `cmd/idryx/webhook_header_test.go`;
+    `TestCommandLineHeaderOverridesTheFile`, `TestHeaderFileModeCheckIsSkippedOnWindowsByInjection`,
+    all in `cmd/idryx/webhook_header_test.go`;
     scenarios in `features/webhook-credential-from-a-file.feature`, bound both
     ways by `scripts/features-are-bound.sh`. No gate script: whether a credential
     is on argv is a property of a call, not of a file.)*

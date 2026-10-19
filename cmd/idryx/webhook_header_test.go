@@ -293,3 +293,26 @@ func TestHeaderFileMissingOrDirectoryIsAnError(t *testing.T) {
 		t.Error("a directory was read as a header file without an error")
 	}
 }
+
+// TestHeaderFileModeCheckIsSkippedOnWindowsByInjection runs on every OS: the
+// Windows rule is tested by injecting "windows" as the operating system. On
+// Windows Go reports a writable file as 0666 whatever its ACL, so the mode rule
+// cannot be applied there; the check is skipped, and that is a named limit, not
+// a pass. The regular-file rule still applies on Windows.
+func TestHeaderFileModeCheckIsSkippedOnWindowsByInjection(t *testing.T) {
+	path := writeHeaderFile(t, "Authorization: Bearer test-key\n", 0o644)
+
+	h, err := readHeaderFileFor(path, "windows")
+	if err != nil {
+		t.Fatalf("windows, mode 0644: %v; want the file read, the mode is not checked there", err)
+	}
+	if h["Authorization"] != "Bearer test-key" {
+		t.Errorf("windows, mode 0644: headers %v, want the Authorization header", h)
+	}
+	if _, err := readHeaderFileFor(path, "linux"); err == nil {
+		t.Error("linux, mode 0644: read, want a refusal")
+	}
+	if _, err := readHeaderFileFor(t.TempDir(), "windows"); err == nil {
+		t.Error("windows, a directory: read, want a refusal: the regular-file rule applies on every OS")
+	}
+}

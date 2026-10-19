@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-392-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-393-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -687,7 +687,9 @@ The safer route is a file: `--webhook-header-file <path>`, or the environment
 variable `IDRYX_WEBHOOK_HEADER_FILE` naming the same file. The file holds one
 `Name: Value` per line, blank lines and `#` comments are skipped, and it must be
 readable by its owner only (`chmod 600`). A file that group or other users can
-read is refused before anything is sent. A header on the command line overrides
+read is refused before anything is sent. On Windows that mode check is not made,
+because Go reports a writable file there as 0666 whatever its ACL says: a named
+limit, and the file must still be a regular file. A header on the command line overrides
 the file's header of the same name.
 
 A sink that fails to deliver (a dead webhook, a Slack URL returning 401 after

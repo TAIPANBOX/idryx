@@ -54,3 +54,9 @@ Feature: A webhook credential can come from a file that other users cannot read
     When each name is checked for credential-looking
     Then each one is credential-looking, and Accept and X-Origin are not
   # @test:TestCredentialLookingNamesAreRecognised
+
+  Scenario: on Windows the owner-only check is skipped, and the file is still read
+    Given a header file with mode 0644, and idryx is told it runs on Windows
+    When the header file is read
+    Then the headers are read, and on Linux the same file is refused
+  # @test:TestHeaderFileModeCheckIsSkippedOnWindowsByInjection

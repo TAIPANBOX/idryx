@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -192,16 +193,27 @@ func (h headerList) Set(v string) error {
 // would expose.
 const headerFileOthers os.FileMode = 0o077
 
-// readHeaderFile reads a file of "Name: Value" lines for --webhook. Blank lines
+// readHeaderFile reads path under the rules of the operating system this binary
+// runs on. See readHeaderFileFor.
+func readHeaderFile(path string) (headerList, error) {
+	return readHeaderFileFor(path, runtime.GOOS)
+}
+
+// readHeaderFileFor reads a file of "Name: Value" lines for --webhook. Blank lines
 // and lines starting with '#' are skipped; only the first colon separates the
 // name from the value. The file is refused when group or other users can read
-// it, and a malformed line is refused by its number without being printed: a
+// it (not on Windows, see goos below), and a malformed line is refused by its number without being printed: a
 // line with no colon is exactly where a secret pasted into the wrong place
 // would sit.
 //
 // It opens the file once and checks the mode on that open file, so the mode
 // that was checked is the one that is read.
-func readHeaderFile(path string) (headerList, error) {
+//
+// goos names the operating system whose rules apply, so the Windows rule can be
+// tested on any machine. On windows the mode check is skipped: Go reports a
+// writable file there as 0666 whatever its ACL, so the rule would refuse every
+// file. That is a named limit, not a pass; the regular-file rule still applies.
+func readHeaderFileFor(path, goos string) (headerList, error) {
 	f, err := os.Open(path) // #nosec G304 -- path is an operator-supplied flag or environment value, the same trust as the other input paths
 	if err != nil {
 		return nil, fmt.Errorf("--webhook-header-file: %w", err)
@@ -215,7 +227,7 @@ func readHeaderFile(path string) (headerList, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("--webhook-header-file %s is not a regular file", path)
 	}
-	if mode := info.Mode().Perm(); mode&headerFileOthers != 0 {
+	if mode := info.Mode().Perm(); goos != "windows" && mode&headerFileOthers != 0 {
 		return nil, fmt.Errorf("--webhook-header-file %s has mode %04o: group or other users can read it; make it owner-only (chmod 600)", path, mode)
 	}
 
@@ -787,7 +799,7 @@ func runDetect(args []string) error {
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
 	fs.Var(webhookHdr, "webhook-header", "\"Name: Value\" header for --webhook; repeatable (e.g. --webhook-header \"Authorization: Bearer KEY\"). A credential here is on the process list: prefer --webhook-header-file")
-	webhookHdrFile := fs.String("webhook-header-file", "", "file of \"Name: Value\" lines for --webhook, readable by its owner only (env IDRYX_WEBHOOK_HEADER_FILE)")
+	webhookHdrFile := fs.String("webhook-header-file", "", "file of \"Name: Value\" lines for --webhook, readable by its owner only (env IDRYX_WEBHOOK_HEADER_FILE); on Windows the owner-only check is not made, a named limit")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
