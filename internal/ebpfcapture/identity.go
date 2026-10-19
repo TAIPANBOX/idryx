@@ -25,7 +25,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TAIPANBOX/agent-stack-go/passport"
+	"github.com/TAIPANBOX/agent-stack-go/v2/passport"
 )
 
 // IdentityPrefix marks a graph identity ID as sourced from raw eBPF
