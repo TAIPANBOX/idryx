@@ -69,6 +69,11 @@
       "checked": {
         "package": "github.com/TAIPANBOX/idryx/cmd/idryx",
         "subcommand": "detect",
+        "env": {
+          "IDRYX_WEBHOOK_HEADER_FILE": {
+            "required": false
+          }
+        },
         "exits_zero_with_nothing_configured": true
       },
       "declared": {

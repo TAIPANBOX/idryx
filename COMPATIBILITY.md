@@ -67,6 +67,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 
 - a detector: a new one is a new finding, never a removed one
 - an optional environment name, such as IDRYX_STREAMS, which only widens what a bus file may carry
+- an optional environment name that names a file, such as IDRYX_WEBHOOK_HEADER_FILE, read in place of a value on the command line
 - a CLI flag on an existing subcommand
 - a connector source
 - an event type in events.consumed

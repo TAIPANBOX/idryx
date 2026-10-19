@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-381-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-393-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -677,7 +677,20 @@ pushed to a Slack incoming webhook (`--slack`), a generic JSON webhook for
 SIEM/SOAR (`--webhook`), and/or an OTLP collector (`IDRYX_OTLP_ENDPOINT`).
 Fully-filtered batches make no network call to any of the three.
 `--webhook-header "Name: Value"` (repeatable) sets outbound headers, which is
-how the destination authenticates the sender.
+how the destination authenticates the sender. A header typed on the command
+line sits in the process list, where other users on the machine can read it,
+so `idryx` says so on stderr when the name looks like a credential (for
+example `Authorization`, `Cookie`, `X-Api-Key`, or any name with `key`, `token`
+or `secret` in it). The value is never printed.
+
+The safer route is a file: `--webhook-header-file <path>`, or the environment
+variable `IDRYX_WEBHOOK_HEADER_FILE` naming the same file. The file holds one
+`Name: Value` per line, blank lines and `#` comments are skipped, and it must be
+readable by its owner only (`chmod 600`). A file that group or other users can
+read is refused before anything is sent. On Windows that mode check is not made,
+because Go reports a writable file there as 0666 whatever its ACL says: a named
+limit, and the file must still be a regular file. A header on the command line overrides
+the file's header of the same name.
 
 A sink that fails to deliver (a dead webhook, a Slack URL returning 401 after
 a rotation) is never silent: `idryx detect` prints one stderr line per
@@ -689,8 +702,12 @@ is what a cron or CI invocation checking `$?` actually needs.
 ```sh
 idryx detect --load tokenfuse:tokenfuse.ndjson \
   --webhook 'https://cloud.example/v1/findings?source=idryx' \
-  --webhook-header "Authorization: Bearer $OPS_KEY"
+  --webhook-header-file ~/.config/idryx/webhook.headers
 ```
+
+where `webhook.headers` holds one line, `Authorization: Bearer <key>`, and is
+created with `chmod 600`. The same run with `--webhook-header "Authorization:
+Bearer $OPS_KEY"` still works, and prints the warning described above.
 
 The webhook sends the findings as plain JSON to whatever URL you give it, so a
 TokenFuse Cloud `/v1/findings` endpoint receives an ordinary webhook body. How that

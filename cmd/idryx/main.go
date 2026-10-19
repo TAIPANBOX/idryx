@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -181,8 +182,124 @@ func (h headerList) Set(v string) error {
 	if !ok || name == "" || value == "" {
 		return fmt.Errorf("--webhook-header expects \"Name: Value\", got %q", v)
 	}
-	h[name] = value
+	// Canonical so a file and the command line that name a header in different
+	// cases land on one key, and the command line's value replaces the file's.
+	h[http.CanonicalHeaderKey(name)] = value
 	return nil
+}
+
+// headerFileOthers is the group and other permission bits. A header file with
+// any of them set is refused: the credential in it is the thing those bits
+// would expose.
+const headerFileOthers os.FileMode = 0o077
+
+// readHeaderFile reads path under the rules of the operating system this binary
+// runs on. See readHeaderFileFor.
+func readHeaderFile(path string) (headerList, error) {
+	return readHeaderFileFor(path, runtime.GOOS)
+}
+
+// readHeaderFileFor reads a file of "Name: Value" lines for --webhook. Blank lines
+// and lines starting with '#' are skipped; only the first colon separates the
+// name from the value. The file is refused when group or other users can read
+// it (not on Windows, see goos below), and a malformed line is refused by its number without being printed: a
+// line with no colon is exactly where a secret pasted into the wrong place
+// would sit.
+//
+// It opens the file once and checks the mode on that open file, so the mode
+// that was checked is the one that is read.
+//
+// goos names the operating system whose rules apply, so the Windows rule can be
+// tested on any machine. On windows the mode check is skipped: Go reports a
+// writable file there as 0666 whatever its ACL, so the rule would refuse every
+// file. That is a named limit, not a pass; the regular-file rule still applies.
+func readHeaderFileFor(path, goos string) (headerList, error) {
+	f, err := os.Open(path) // #nosec G304 -- path is an operator-supplied flag or environment value, the same trust as the other input paths
+	if err != nil {
+		return nil, fmt.Errorf("--webhook-header-file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("--webhook-header-file %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("--webhook-header-file %s is not a regular file", path)
+	}
+	if mode := info.Mode().Perm(); goos != "windows" && mode&headerFileOthers != 0 {
+		return nil, fmt.Errorf("--webhook-header-file %s has mode %04o: group or other users can read it; make it owner-only (chmod 600)", path, mode)
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("--webhook-header-file %s: %w", path, err)
+	}
+	h := headerList{}
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, ":")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !ok || name == "" || value == "" {
+			return nil, fmt.Errorf("--webhook-header-file %s: line %d is not \"Name: Value\"", path, i+1)
+		}
+		h[http.CanonicalHeaderKey(name)] = value
+	}
+	return h, nil
+}
+
+// webhookHeaders returns the headers for the --webhook sink. The file's headers
+// come first and the command line's after, so a header typed on the command
+// line wins over the file for the same name.
+func webhookHeaders(file string, flagged headerList) (headerList, error) {
+	out := headerList{}
+	if file != "" {
+		fromFile, err := readHeaderFile(file)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range fromFile {
+			out[k] = v
+		}
+	}
+	for k, v := range flagged {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// isCredentialHeader reports whether a header name looks like it carries a
+// credential: Authorization (and Proxy-Authorization), Cookie, X-Api-Key, or any
+// name with key, token or secret in it, compared case-insensitively. It is a
+// name test and a warning trigger, not a refusal, so a harmless match costs one
+// line on stderr.
+func isCredentialHeader(name string) bool {
+	n := strings.ToLower(name)
+	for _, s := range []string{"authorization", "cookie", "key", "token", "secret"} {
+		if strings.Contains(n, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// warnCredentialHeaders writes one line per credential-looking header given on
+// the command line. The value is never written: the line says the process list
+// now carries it, and printing it would put a second copy in a log.
+func warnCredentialHeaders(w io.Writer, h headerList) {
+	names := make([]string, 0, len(h))
+	for name := range h {
+		if isCredentialHeader(name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(w, "idryx: warning: --webhook-header %s carries a credential on the command line, where other users can read it in the process list; use --webhook-header-file or IDRYX_WEBHOOK_HEADER_FILE\n", name)
+	}
 }
 
 // usageEnrichment pairs a usage-log flag with the inventory source it can
@@ -681,19 +798,39 @@ func runDetect(args []string) error {
 	)
 	var loads loadList
 	fs.Var(&loads, "load", "source:path to stitch into one graph; repeatable (e.g. --load agents:a.json --load mcp:m.json)")
-	fs.Var(webhookHdr, "webhook-header", "\"Name: Value\" header for --webhook; repeatable (e.g. --webhook-header \"Authorization: Bearer KEY\")")
+	fs.Var(webhookHdr, "webhook-header", "\"Name: Value\" header for --webhook; repeatable (e.g. --webhook-header \"Authorization: Bearer KEY\"). A credential here is on the process list: prefer --webhook-header-file")
+	webhookHdrFile := fs.String("webhook-header-file", "", "file of \"Name: Value\" lines for --webhook, readable by its owner only (env IDRYX_WEBHOOK_HEADER_FILE); on Windows the owner-only check is not made, a named limit")
 	db := fs.String("db", "", "Postgres DSN to read the graph from instead of a file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: idryx detect [flags] <log.json>\n\nflags:\n")
 		fs.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nenv:\n  IDRYX_OTLP_ENDPOINT  OTLP/HTTP collector endpoint to deliver alerts to as trace spans (e.g. http://localhost:4318); unset disables the sink\n")
+		fmt.Fprintf(os.Stderr, "\nenv:\n  IDRYX_OTLP_ENDPOINT  OTLP/HTTP collector endpoint to deliver alerts to as trace spans (e.g. http://localhost:4318); unset disables the sink\n  IDRYX_WEBHOOK_HEADER_FILE  the --webhook-header-file path, used when that flag is not given\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// A header typed on the command line is on the process list for as long as
+	// the run lasts, so say so, once per credential-looking name.
+	warnCredentialHeaders(os.Stderr, webhookHdr)
 	path, err := inputArg(fs, *db, loads)
 	if err != nil {
 		return err
+	}
+
+	// The webhook's headers are read before the graph is built, so a refused
+	// header file ends the run before it has read any input. The environment
+	// names the file only when the flag does not, and only a webhook uses it: a
+	// deployment that sets the variable must not fail the runs that send nothing.
+	var hdrs headerList
+	if *webhookURL != "" {
+		headerFile := *webhookHdrFile
+		if headerFile == "" {
+			headerFile = os.Getenv("IDRYX_WEBHOOK_HEADER_FILE")
+		}
+		hdrs, err = webhookHeaders(headerFile, webhookHdr)
+		if err != nil {
+			return err
+		}
 	}
 
 	g, err := buildGraph(*source, *privileged, path, *db, *ctPath, *auditPath, *passports, loads)
@@ -731,7 +868,7 @@ func runDetect(args []string) error {
 		sinks = append(sinks, sink.NewSlack(*slackURL, threshold))
 	}
 	if *webhookURL != "" {
-		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold, webhookHdr))
+		sinks = append(sinks, sink.NewWebhook(*webhookURL, threshold, hdrs))
 	}
 	// OTLP has no --otlp flag: IDRYX_OTLP_ENDPOINT is the only switch. A
 	// collector endpoint is typically already environment-configured for
