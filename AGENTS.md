@@ -703,6 +703,27 @@ an absent invariant.
     and each verified by the mutation that puts the defect back, recorded in the
     pull request)*
 
+18. **A credential for an outbound webhook can stay off the command line.** A
+    header typed after `--webhook-header` sits in the process list for as long
+    as the run lasts, where other users on the machine can read it. So the
+    webhook's headers can come from a file named by `--webhook-header-file` or by
+    `IDRYX_WEBHOOK_HEADER_FILE`. That file is refused when group or other users
+    can read it, and a malformed line is refused by its number without being
+    printed. A command-line header whose name looks like a credential is still
+    sent, and stderr names it on one line without its value. `@decided
+    2026-10-17`: credentials for outbound destinations leave argv, starting with
+    the webhook. `@claude 2026-10-17`: the warning is a name test, so a harmless
+    name with `key` in it also gets the line; that is the accepted cost, a
+    warning and not a refusal. Not checked: the owner of the file (only its mode),
+    and a Windows host, where Go reports a writable file as 0666, so the file
+    route refuses there and the variable cannot be used.
+    *(test: `TestHeaderFileReadableByOthersIsRefusedBeforeAnySend`,
+    `TestHeaderFileModeBoundary`, `TestCredentialHeaderOnTheCommandLineIsNamedWithAWarning`,
+    `TestCommandLineHeaderOverridesTheFile`, all in `cmd/idryx/webhook_header_test.go`;
+    scenarios in `features/webhook-credential-from-a-file.feature`, bound both
+    ways by `scripts/features-are-bound.sh`. No gate script: whether a credential
+    is on argv is a property of a call, not of a file.)*
+
 ## Decisions that have no gate yet
 
 **A correction first, because this section was wrong about its own repository.**
