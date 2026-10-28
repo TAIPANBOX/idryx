@@ -1,5 +1,5 @@
-github.com/TAIPANBOX/agent-stack-go/v2 v2.0.1 h1:NulO5PU07Icae9RpMXxIHWZWU3O4QRoXcfOs0pabxMI=
-github.com/TAIPANBOX/agent-stack-go/v2 v2.0.1/go.mod h1:ihHPs5YtQlmjofjBqN+Gw68EUXl/ZVN8E3hyHzMSWaw=
+github.com/TAIPANBOX/agent-stack-go/v2 v2.0.2 h1:E/VaxwQFBWQJbdUfKRMSDCmlhtN3R4K+druGg83tFuI=
+github.com/TAIPANBOX/agent-stack-go/v2 v2.0.2/go.mod h1:AgWtwXz1xoJ4DaA3drPEUEZ3rZOpxOuE6rvhUjZJ43E=
 github.com/cilium/ebpf v0.22.0 h1:v2ktp0roffpMOj2MMf3idtCQZOsAoC4BJbAJN+ke2bY=
 github.com/cilium/ebpf v0.22.0/go.mod h1:CDzZbe2hC5JjlDC+CY3KFCzlYwN4gbxppYM+Z10bQt4=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
