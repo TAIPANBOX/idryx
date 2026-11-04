@@ -600,3 +600,30 @@ func FuzzParseCodeScan(f *testing.F) {
 		}
 	})
 }
+
+// TestEveryKindOfIdentityIsNamedAndAnUnknownGapStillRenders covers the two
+// branches no scenario reaches: a service account, a key, an MCP server and a
+// human that reach a provider are subjects with their own kind, and a gap code
+// from a newer document renders as itself, escaped, instead of blank.
+func TestEveryKindOfIdentityIsNamedAndAnUnknownGapStillRenders(t *testing.T) {
+	g := graphWith(func(g *graph.Store) {
+		for id, typ := range map[string]model.IdentityType{
+			"svc:builder": model.IdentityServiceAccount, "key:ci": model.IdentityKey,
+			"mcp:files": model.IdentityMCPServer, "alice@example.com": model.IdentityHuman,
+		} {
+			g.AddIdentity(model.Identity{ID: id, Type: typ})
+			g.AddEvent(egress(id, "api.openai.com"))
+		}
+	})
+	r := Build(g, fakeMatch, nil)
+	for id, kind := range map[string]string{
+		"svc:builder": "service account", "key:ci": "key", "mcp:files": "mcp server", "alice@example.com": "human",
+	} {
+		if got := subjectRow(t, r, id, "openai").Kind; got != kind {
+			t.Errorf("%s kind = %q, want %q", id, got, kind)
+		}
+	}
+	if got := GapText("a_future_gap\x1b[2J"); got != `a_future_gap\x1b[2J` {
+		t.Errorf("an unknown gap renders as %q, want itself escaped", got)
+	}
+}
