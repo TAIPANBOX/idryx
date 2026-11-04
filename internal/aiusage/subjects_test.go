@@ -590,7 +590,7 @@ func TestTheSameEstateInAnyOrderGivesTheSameReport(t *testing.T) {
 // panics. Run with: go test -fuzz FuzzParseCodeScan -fuzztime 60s ./internal/aiusage/
 func FuzzParseCodeScan(f *testing.F) {
 	f.Add([]byte(validQryxDoc))
-	f.Add([]byte(`{"schema":"qryx.ai-inventory/v1","entries":[null,{"provider":"openai\u001b[2J","occurrences":[{}]}],"limits":["‮"]}`))
+	f.Add([]byte(`{"schema":"qryx.ai-inventory/v1","entries":[null,{"provider":"openai\u001b[2J","occurrences":[{}]}],"limits":["\u202e"]}`))
 	f.Add([]byte(`{"schema":"qryx.ai-inventory/v1","entries":{"a":1}}`))
 	f.Add([]byte(`null`))
 	f.Fuzz(func(t *testing.T, data []byte) {
