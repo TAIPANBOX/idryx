@@ -491,6 +491,9 @@ for f in glob.glob("features/*.feature"):
 
 # --- the usage report's names (invariant 19) --------------------------------
 
+echo
+echo "=== usage-gaps-complete: every name the report can print is in the code and the README ==="
+
 run_case "usage-gaps-complete: a gap with no README row" fail \
 	'./scripts/usage-gaps-complete.sh' \
 	"$(py 'import re
