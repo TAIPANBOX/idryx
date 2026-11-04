@@ -20,6 +20,7 @@ go test ./...                     # all packages MUST be ok
 ./scripts/detectors-complete.sh   # every detector registered and tested
 ./scripts/compat-surface.sh       # invariant 16, the promised surface is in the code
 ./scripts/features-are-bound.sh   # invariant 17, every scenario names a test that exists
+./scripts/usage-gaps-complete.sh  # invariant 19, the usage report's names are one list
 ./scripts/gates-have-teeth.sh     # invariant 9, the gates above can still fail
                                   # (mutates tracked files; needs a clean tree)
 
@@ -81,6 +82,7 @@ internal/ingest          source connectors -> []model.Event OR []model.Identity
 internal/ingest/tokenfuse  agent-event NDJSON connector, shared by every bus producer
                            (TokenFuse, Wardryx, Mockryx, Verdryx, scopyx)
 internal/ingest/passport   Agent Passport JSON ingestion
+internal/aiusage         the AI-inventory report: declared, seen and in code, per provider and per subject (a report, never a detector)
 internal/graph           Store (in-memory) + PgStore (Postgres); both satisfy graph.Reader
 internal/baseline        per-identity behavioral baseline (Build / NewProfile+Observe / Score)
 internal/detect          Detector interface
@@ -392,8 +394,8 @@ an absent invariant.
    This also puts a check under a claim invariant 6 has made since it was
    written, that `reproducible-build.sh` refuses just as loudly when it finds
    no asset name at all. That was true, and nothing had ever confirmed it.
-   *(gate: `scripts/gates-have-teeth.sh`, 28 cases over eight gates: thirteen
-   real faults each must catch, five non-faults they must not, nine subjects
+   *(gate: `scripts/gates-have-teeth.sh`, 34 cases over nine gates: sixteen
+   real faults each must catch, six non-faults they must not, eleven subjects
    taken away entirely, where the gate must say it measured nothing instead of
    reporting OK, and one compiler pin that must refuse to compare across two
    versions. Every mutation asserts it applied, because a mutation that
@@ -732,6 +734,56 @@ an absent invariant.
     scenarios in `features/webhook-credential-from-a-file.feature`, bound both
     ways by `scripts/features-are-bound.sh`. No gate script: whether a credential
     is on argv is a property of a call, not of a file.)*
+
+19. **The AI-usage report names every disagreement from one list, states each
+    source it was built from even when that source is absent, and treats the
+    qryx document as input somebody else could have edited.** The report
+    (`internal/aiusage`, `idryx ai-inventory`) has one row per agent or service
+    and provider, and one row per source: declared, bus, egress, ebpf, code. A
+    source nobody supplied is a row saying what its absence means, never a zero
+    and never a missing column: "code not scanned" is not "nothing in the code".
+    Each disagreement is a `Gap*` constant with a sentence and a README row:
+    `declared_not_seen`, `declared_bus_only`, `seen_not_declared`,
+    `seen_no_declaration`, `declares_no_models`, `no_declaration`,
+    `in_code_not_seen`, and `agrees`. The report still ranks nothing (invariant
+    10) and still has no subject for the code column, which is per provider for
+    the whole estate.
+
+    The agents it names `seen_not_declared` are exactly the agents
+    `undeclared_llm` fires for, and the processes it names `seen_no_declaration`
+    are exactly the ones `unmanaged_egress` grades as having reached a model API;
+    a declared endpoint exempts a host in both. The report is a second
+    implementation of that comparison, kept apart from the detectors on purpose,
+    and a test holds the two equal.
+
+    The qryx file is read at most 32 MiB, every string kept from it is escaped
+    and cut, at most 512 providers and 32 labels per provider are carried, a
+    provider that is not an id is set aside, and each cut is counted in the
+    limits. Names from a Passport, a bus envelope or a capture are escaped in
+    the same way before they reach a terminal.
+
+    **Named limits, not defects.** The bus names no provider: `call_retained`
+    carries a model only for a call that was retained, and is not read here, so
+    an agent active on the bus is shown as `bus_only`, which is not the same as
+    not seen. Whether an identity has a declaration is read from its source
+    (`passport`) or from a declared model or attestation, which is a reading of
+    the graph and not an attested fact. Attribution of a flow to an agent is
+    self-declared (agent-passport SPEC 3.3), the eBPF sensor is Linux-only, and a
+    process with code execution can open a socket of its own (the three limits
+    every report carries).
+    *(test: `TestADeclaredProviderNoSourceSawIsNamedDeclaredNotSeen`,
+    `TestAProviderAnAgentReachedAndNeverDeclaredIsNamedSeenNotDeclared`,
+    `TestAnAgentActiveOnTheBusIsNotCalledUnseenAndTheBusNamesNoProvider`,
+    `TestAnAbsentSourceIsARowAndNotAZero`,
+    `TestAHostileCodeScanIsRefusedOrReadWithinBounds`,
+    `TestHostileNamesNeverReachTheTerminalRaw`,
+    `TestTheSameEstateInAnyOrderGivesTheSameReport` (`internal/aiusage`),
+    `TestTheReportAgreesWithUndeclaredLLMAndUnmanagedEgress` and
+    `TestAIInventoryPerSubjectRowsAreWiredToTheRealVocabularyAndTheBus`
+    (`cmd/idryx`), each run red first and each held by a mutant that puts the
+    defect back; gate: `scripts/usage-gaps-complete.sh`, six cases in
+    `gates-have-teeth.sh`; scenarios: `features/ai-usage-by-subject.feature`,
+    bound both ways by `scripts/features-are-bound.sh`)*
 
 ## Decisions that have no gate yet
 

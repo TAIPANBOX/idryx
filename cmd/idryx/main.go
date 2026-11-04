@@ -1037,13 +1037,9 @@ func runAIInventory(args []string) error {
 
 	var scan *aiusage.CodeScan
 	if *codeScan != "" {
-		data, err := os.ReadFile(*codeScan)
-		if err != nil {
+		var err error
+		if scan, err = aiusage.LoadCodeScan(*codeScan); err != nil {
 			return fmt.Errorf("read --code-scan: %w", err)
-		}
-		scan, err = aiusage.ParseCodeScan(data)
-		if err != nil {
-			return err
 		}
 	}
 
