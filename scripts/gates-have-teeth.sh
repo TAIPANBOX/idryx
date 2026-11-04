@@ -489,6 +489,49 @@ for f in glob.glob("features/*.feature"):
     os.remove(f)')" \
 	"measured nothing"
 
+# --- the usage report's names (invariant 19) --------------------------------
+
+run_case "usage-gaps-complete: a gap with no README row" fail \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'import re
+s = open("README.md").read()
+t = re.sub(r"^\| `declared_bus_only` \|.*\n", "", s, count=1, flags=re.M)
+assert t != s, "row not found"
+open("README.md", "w").write(t)')" \
+	"has no row in the README table"
+
+run_case "usage-gaps-complete: a README row for a gap nothing defines" fail \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'edit("README.md", "<!-- usage-gaps:end -->", "| `invented_gap` | a name the code never produces |\n<!-- usage-gaps:end -->")')" \
+	"defines no such name"
+
+run_case "usage-gaps-complete: a gap with no sentence" fail \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'import re
+s = open("internal/aiusage/subjects.go").read()
+t = re.sub(r"^\tGapSeenNotDeclared:\s+\".*\n", "", s, count=1, flags=re.M)
+assert t != s, "sentence not found"
+open("internal/aiusage/subjects.go", "w").write(t)')" \
+	"has no sentence in gapText"
+
+run_case "usage-gaps-complete: prose added around the tables" pass \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'edit("README.md", "The disagreements it names (`gap` in the JSON form):", "The disagreements it names (`gap` in the JSON form). A harmless prose edit.")')"
+
+run_case "usage-gaps-complete: no gap constant left, so it measured nothing" fail \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'import re
+s = open("internal/aiusage/subjects.go").read()
+t = re.sub(r"^(\t)Gap([A-Za-z]+)(\s+= \")", r"\1Gone\2\3", s, flags=re.M)
+assert t != s, "no constant renamed"
+open("internal/aiusage/subjects.go", "w").write(t)')" \
+	"measured nothing"
+
+run_case "usage-gaps-complete: the README tables gone, so nothing was compared" fail \
+	'./scripts/usage-gaps-complete.sh' \
+	"$(py 'edit("README.md", "<!-- usage-gaps:begin -->", "")')" \
+	"nothing was compared"
+
 echo
 if [ -n "$(git status --porcelain)" ]; then
 	printf 'FAIL: this script left the tree dirty, so it cannot be trusted about anything above\n'

@@ -65,6 +65,9 @@ type Row struct {
 	// CodeLabels are the human labels the scan attached, e.g. "OpenAI SDK
 	// (python)", sorted and de-duplicated.
 	CodeLabels []string `json:"code_labels,omitempty"`
+	// Gaps names every disagreement this provider has across the sources, using
+	// the Gap constants. Empty for a provider all three sources agree on.
+	Gaps []string `json:"gaps,omitempty"`
 }
 
 // Declared, Observed and Coded say which sides know about this provider at
@@ -84,6 +87,13 @@ func (r Row) Agrees() bool { return r.Declared() && r.Observed() && r.Coded() }
 // Report is the whole answer, plus what it could not see.
 type Report struct {
 	Rows []Row `json:"rows"`
+
+	// Sources is one row for each source this report is built from, present or
+	// not. A source nobody supplied is a row saying so.
+	Sources []SourceRow `json:"sources"`
+	// Subjects is one row per agent or service and provider, with the
+	// disagreement named. The code column in it is per provider and says so.
+	Subjects []SubjectRow `json:"subjects"`
 
 	// CodeScan describes the source scan this was built with, or is empty when
 	// none was supplied. A report with no code leg is still useful and must
@@ -111,6 +121,9 @@ var baseLimits = []string{
 	"The observed column shows only hosts this sensor recognises, and only traffic it captured.",
 	"The declared column is a self-declaration. agent-passport SPEC 4.5 says so, and nothing here attests it.",
 	"The coded column has no agent: a source scan finds a file and a line, and no field binds a repository to an identity. Its counts are estate-wide.",
+	"Attribution of a flow to an agent is self-declared: a process names itself through AGENT_PASSPORT_ID (agent-passport SPEC 3.3), and one that unsets it is still seen but unattributed. That is enough for detection and never for authorisation.",
+	"The eBPF sensor is Linux-only and needs privilege and a kernel with BTF, so a laptop is not covered; an absent capture is not a capture that saw nothing.",
+	"A process that can execute code can open a socket of its own. An enforcement point constrains traffic routed through it, and the bus names no provider, so an agent active there is seen to be governed and the provider it calls is visible only where its connection is captured.",
 }
 
 // Build reconciles the three sides.
@@ -192,8 +205,10 @@ func Build(g graph.Reader, match MatchHost, scan *CodeScan) Report {
 		sort.Strings(r.DeclaredBy)
 		sort.Strings(r.ObservedBy)
 		r.CodeLabels = dedupeSorted(r.CodeLabels)
+		r.Gaps = providerGaps(*r, scan != nil)
 		report.Rows = append(report.Rows, *r)
 	}
+	report.Subjects, report.Sources = buildSubjects(g, match, scan)
 	// Sorted, because the map above randomises and a report that reorders
 	// between two runs of one unchanged estate makes every diff noise.
 	sort.Slice(report.Rows, func(i, j int) bool {
@@ -225,4 +240,21 @@ func dedupeSorted(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// providerGaps names the disagreements of one provider across the sources. An
+// empty answer means the declared and observed sides agree and the code, when
+// it was scanned, does not contradict them.
+func providerGaps(r Row, scanned bool) []string {
+	var gaps []string
+	if r.Declared() && !r.Observed() {
+		gaps = append(gaps, GapDeclaredNotSeen)
+	}
+	if r.Observed() && !r.Declared() {
+		gaps = append(gaps, GapSeenNotDeclared)
+	}
+	if scanned && r.Coded() && !r.Observed() {
+		gaps = append(gaps, GapInCodeNotSeen)
+	}
+	return gaps
 }

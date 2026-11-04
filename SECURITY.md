@@ -48,6 +48,7 @@ These are load-bearing security properties. A change that breaks one is a bug.
 | Enforcement (`--open-pr`) | identity/policy names as `git`/`gh` arguments | executed via `exec.CommandContext` with an argument slice -- **no shell**, so no command injection; a preflight verifies a clean git work tree and authenticated `gh` before any branch is created |
 | Postgres (`--db`, `--save-db`) | event/identity/remediation rows | parameterized queries only (pgx); no string-concatenated SQL |
 | eBPF sensor (`ebpf-capture`) | raw kernel tracepoint data (pid, process name, destination ip:port) | fixed-size ring buffer records validated by exact byte length before parsing; malformed/short records are skipped, never trusted as control data; the eBPF program itself only ever reads, never writes, kernel or process memory |
+| `ai-inventory --code-scan` | a qryx ai-inventory document, a file somebody else could have edited | read at most 32 MiB; the schema string is checked first and an unknown one is refused; every string kept is escaped and cut, at most 512 providers and 32 labels each are carried, a provider that is not a registered id is set aside, and each cut is counted in the report's limits; the document never reaches a command, a path or a query |
 
 ### eBPF network sensor (`ebpf-capture`)
 

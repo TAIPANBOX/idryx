@@ -296,18 +296,18 @@ graph: `idryx detect --load agents:agents.json --load mcp:mcp.json`.
 `least_privilege` fires only for identities that have usage data, so sources
 without an observed-usage signal produce no false recommendations.
 
-`undeclared_llm` is the declared-vs-observed leg of a three-source AI
-inventory idryx is building toward: what an agent's Passport **declares**
-it uses (`--passports`, `models`, SPEC §4.5), what network egress **observes**
-it actually reaching (an `egress`-shaped source, or `ebpf-capture`), and
-eventually what its own source **code** references (not built yet). It needs
-both a `--passports` directory/glob *and* an egress-bearing source in the
-same graph to have anything to compare; an agent with no declared models at
-all is out of scope for it by design (a fresh, un-declared agent's LLM
-egress is `shadow_ai`'s finding, not inventory drift). This is an audit tool
-for an operator checking their *own* agents' actual AI usage against what
-those agents' own passports say, never an enforcement point: idryx only
-ever reports the discrepancy.
+`undeclared_llm` is the declared-vs-observed leg of the three-source AI
+inventory: what an agent's Passport **declares** it uses (`--passports`,
+`models`, SPEC §4.5) against what network egress **observes** it reaching (an
+`egress`-shaped source, or `ebpf-capture`). The third leg, what its source
+**code** references, has no agent to attach a finding to, so it lives in the
+`ai-inventory` report below and not in a detector. `undeclared_llm` needs both a
+`--passports` directory/glob *and* an egress-bearing source in the same graph to
+have anything to compare; an agent with no declared models at all is out of
+scope for it by design (a fresh, un-declared agent's LLM egress is `shadow_ai`'s
+finding, not inventory drift). This is an audit tool for an operator checking
+their *own* agents' actual AI usage against what those agents' own passports
+say, never an enforcement point: idryx only ever reports the discrepancy.
 
 ---
 
@@ -665,6 +665,74 @@ estate-wide and it can never produce a finding about one agent.
 Every report carries what none of the three can see, including the scan's own
 limits, and says plainly when no scan was supplied, because an empty third
 column otherwise reads as an estate whose code reaches no model.
+
+**By agent or service.** The same report has one row for each agent or service
+and provider, so a disagreement belongs to a subject and not only to a
+provider, and one row for each source it was built from.
+
+```
+SOURCE    STATE    WHAT IT HOLDS
+declared  present  2 subject(s) carry a declaration, 1 of them name at least one model
+bus       present  2 event(s) from tokenfuse about 1 subject(s); the bus names no provider ...
+egress    present  1 flow(s) about 1 subject(s), 1 of them to a model provider ...
+ebpf      present  1 flow(s) from 1 captured process(es); a flow is attributed by the process's own name ...
+code      absent   no code scan was supplied (run `qryx scan --format ai-inventory <path>` ...
+
+SUBJECT                    KIND                   PROVIDER   DECLARED           SEEN            CODE         WHERE THEY DISAGREE
+agent://acme.example/bot   agent                  anthropic  claude-sonnet-5-5  bus only (...)  not scanned  declared; active on the bus, which names no provider, ...
+proc:python3@cg9           process, process name  anthropic  -                  ebpf api....    not scanned  seen reaching it; this subject declares nothing to compare with
+```
+
+A source nobody supplied is a row that says so. The CODE column is per provider
+for the whole estate, because a scan has no subject. The bus names no provider,
+so an agent active there through an enforcement point is shown as `bus_only`,
+which is a different statement from not seen: the provider connection of a
+governed agent is made by the gateway's process, where only a capture of that
+host sees it. The model names in the DECLARED column are the Passport's own and
+are compared with nothing, because the egress side names a host and never a
+model.
+
+The disagreements it names (`gap` in the JSON form):
+
+<!-- usage-gaps:begin -->
+| Gap | Meaning |
+|---|---|
+| `agrees` | declared, and seen reaching the provider |
+| `declared_not_seen` | declared, and no source saw the subject reach it |
+| `declared_bus_only` | declared; the subject is active on the bus, which names no provider, and was not seen reaching it directly |
+| `seen_not_declared` | seen reaching it, and the subject declares other providers (the case `undeclared_llm` judges) |
+| `seen_no_declaration` | seen reaching it, and the subject declares nothing to compare with (a process, or an agent with no model declared) |
+| `declares_no_models` | an agent whose Passport names no model, and nothing seen |
+| `no_declaration` | an agent known from another source only, and nothing seen |
+| `in_code_not_seen` | on a provider row: found in the code and not seen in operation by any subject |
+<!-- usage-gaps:end -->
+
+The sources it states, present or absent:
+
+<!-- usage-sources:begin -->
+| Source | Present when |
+|---|---|
+| `declared` | any subject carries a Passport or a declared model |
+| `bus` | any agent-event bus file was loaded, and events with a source are in the graph |
+| `egress` | an egress log or a capture was loaded |
+| `ebpf` | a flow came from a `proc:` or `claimed:` identity, which is what `ebpf-capture` writes |
+| `code` | a qryx document was passed with `--code-scan`, even one that found nothing |
+<!-- usage-sources:end -->
+
+Two limits of agent monitoring travel with every report because no further work
+removes them. Attribution of a flow to an agent is self-declared: a process
+names itself through `AGENT_PASSPORT_ID` (SPEC 3.3), and one that unsets it is
+still seen, but unattributed. The eBPF sensor is Linux-only and needs privilege
+and a kernel with BTF, so a laptop is not covered, and an absent capture is not a
+capture that saw nothing. A process that can execute code can also open a socket
+of its own; only the network layer constrains that, and only where the
+deployment is owned.
+
+A qryx document is a file somebody else could have edited, so `--code-scan`
+reads at most 32 MiB, cuts every string it keeps, carries at most 512 providers
+and 32 labels each, sets aside a provider that is not an id, and shows any
+control character escaped. Each cut is counted in the limits and never dropped
+in silence.
 
 **Agent-BOM** (`internal/bom`, `idryx bom`) - a defensive governance inventory
 of an operator's own AI agent identities: owner, runtime, attestation,

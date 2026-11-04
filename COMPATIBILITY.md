@@ -69,6 +69,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 - an optional environment name, such as IDRYX_STREAMS, which only widens what a bus file may carry
 - an optional environment name that names a file, such as IDRYX_WEBHOOK_HEADER_FILE, read in place of a value on the command line
 - a CLI flag on an existing subcommand
+- a field added to the ai-inventory JSON document, whose schema string idryx.ai-inventory/v1 stays
 - a connector source
 - an event type in events.consumed
 - the agent-event schema version this repository emits, which moves in its own release (agent-passport SPEC 6.4.1)

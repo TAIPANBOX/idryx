@@ -80,6 +80,11 @@ jobs:
       - name: every scenario is bound to a test
         run: ./scripts/features-are-bound.sh
 
+      # The AI-usage report's gap and source names are one list: each has a
+      # sentence in the code and a row in the README (AGENTS.md invariant 19).
+      - name: the usage report's names are one list
+        run: ./scripts/usage-gaps-complete.sh
+
       # Last, because it mutates tracked files and restores them: anything
       # after it would run against a tree it had just rewritten and put back.
       #
