@@ -88,8 +88,8 @@ var gapText = map[string]string{
 	GapDeclaredBusOnly:   "declared; active on the bus, which names no provider, and not seen reaching it directly",
 	GapSeenNotDeclared:   "seen reaching it, and not declared (this subject declares other providers)",
 	GapSeenNoDeclaration: "seen reaching it; this subject declares nothing to compare with",
-	GapDeclaresNoModels:  "declares no model; nothing seen",
-	GapNoDeclaration:     "no declaration loaded for this subject; nothing seen",
+	GapDeclaresNoModels:  "declares no model; no source names a provider for it",
+	GapNoDeclaration:     "no declaration loaded; no source names a provider for it",
 	GapInCodeNotSeen:     "in code, not seen in operation",
 }
 

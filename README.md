@@ -702,8 +702,8 @@ The disagreements it names (`gap` in the JSON form):
 | `declared_bus_only` | declared; the subject is active on the bus, which names no provider, and was not seen reaching it directly |
 | `seen_not_declared` | seen reaching it, and the subject declares other providers (the case `undeclared_llm` judges) |
 | `seen_no_declaration` | seen reaching it, and the subject declares nothing to compare with (a process, or an agent with no model declared) |
-| `declares_no_models` | an agent whose Passport names no model, and nothing seen |
-| `no_declaration` | an agent known from another source only, and nothing seen |
+| `declares_no_models` | an agent whose Passport names no model, and no source names a provider for it |
+| `no_declaration` | an agent known from another source only, and no source names a provider for it |
 | `in_code_not_seen` | on a provider row: found in the code and not seen in operation by any subject |
 <!-- usage-gaps:end -->
 
