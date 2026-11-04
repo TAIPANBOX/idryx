@@ -54,7 +54,7 @@ func validProviderID(s string) bool {
 // LoadCodeScan reads a qryx ai-inventory document from a file, refusing one
 // larger than MaxCodeScanBytes before it is held in memory.
 func LoadCodeScan(path string) (*CodeScan, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the operator's --code-scan flag, the same trust as the other input paths
 	if err != nil {
 		return nil, err
 	}
