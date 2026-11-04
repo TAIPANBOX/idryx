@@ -386,7 +386,7 @@ func TestAHostileCodeScanIsRefusedOrReadWithinBounds(t *testing.T) {
 	}
 	accepted := map[string]string{
 		"null entries and nulls inside": `{"schema":"qryx.ai-inventory/v1","entries":[null,{"provider":null,"label":null,"occurrences":null}],"limits":null}`,
-		"control bytes everywhere": `{"schema":"qryx.ai-inventory/v1","root":"/src\u001b[2J\nroot","generatedAt":"\u0007","tool":{"name":"qryx\u001b]0;x\u0007","version":"‮1"},` +
+		"control bytes everywhere": `{"schema":"qryx.ai-inventory/v1","root":"/src\u001b[2J\nroot","generatedAt":"\u0007","tool":{"name":"qryx\u001b]0;x\u0007","version":"\u202e1"},` +
 			`"entries":[{"provider":"openai\u001b[31m","label":"lab\u001b[2Jel\r\nx","occurrences":[{"file":"f","line":1}]},{"provider":"openai","label":" \u0085"}],"limits":["a\u001b[2Jb\nc"]}`,
 		"a provider that is not an id": `{"schema":"qryx.ai-inventory/v1","entries":[{"provider":"Open AI Inc.","occurrences":[{"file":"f","line":1}]},{"provider":"` + strings.Repeat("x", 5000) + `","occurrences":[{"file":"f","line":1}]}]}`,
 		"thousands of labels":          `{"schema":"qryx.ai-inventory/v1","entries":[` + strings.Join(labels, ",") + `]}`,
@@ -454,7 +454,7 @@ func TestHostileNamesNeverReachTheTerminalRaw(t *testing.T) {
 	g := graphWith(func(g *graph.Store) {
 		g.AddIdentity(passportAgent("agent://acme.example/"+esc+"bot\nforged line",
 			model.DeclaredModel{Provider: "anthropic", Model: "m" + esc + strings.Repeat("z", 500)}))
-		g.AddEvent(egress("agent://acme.example/"+esc+"bot\nforged line", "‮"+esc+"api.openai.com"))
+		g.AddEvent(egress("agent://acme.example/"+esc+"bot\nforged line", "\u202e"+esc+"api.openai.com"))
 		g.AddEvent(egress("proc:"+esc+"curl", "api.openai.com"))
 	})
 	scan := &CodeScan{Root: "/src" + esc, Tool: "qryx" + esc, GeneratedAt: esc,
