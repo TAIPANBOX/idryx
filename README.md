@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/idryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-416-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-417-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/phase-3%20%2B%20eBPF%20sensor-success.svg)
 
@@ -684,7 +684,10 @@ proc:python3@cg9           process, process name  anthropic  -                  
 ```
 
 A source nobody supplied is a row that says so. The CODE column is per provider
-for the whole estate, because a scan has no subject. The bus names no provider,
+for the whole estate, because a scan has no subject. The provider table above
+joins the sides across subjects, so a provider can agree there (one agent declares
+it, another process is seen reaching it) while the subject rows below name the
+disagreement of each. The bus names no provider,
 so an agent active there through an enforcement point is shown as `bus_only`,
 which is a different statement from not seen: the provider connection of a
 governed agent is made by the gateway's process, where only a capture of that
