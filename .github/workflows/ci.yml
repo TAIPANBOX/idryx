@@ -85,6 +85,9 @@ jobs:
       - name: the usage report's names are one list
         run: ./scripts/usage-gaps-complete.sh
 
+      - name: no pipe ends in a grep that leaves early
+        run: ./scripts/no-reader-leaves-a-pipe-early.sh
+
       # Last, because it mutates tracked files and restores them: anything
       # after it would run against a tree it had just rewritten and put back.
       #

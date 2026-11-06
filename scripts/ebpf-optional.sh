@@ -104,7 +104,7 @@ if [ ! -f "$STUB" ]; then
   note "$STUB is gone. It is the whole of 'the absence is a reported fact': without
       it there is no non-Linux path to report anything."
 else
-  if ! head -3 "$STUB" | grep -q '^//go:build !linux'; then
+  if ! grep -q '^//go:build !linux' <<<"$(head -3 "$STUB")"; then
     note "$STUB has lost its '//go:build !linux' tag, so the non-Linux report is
       either compiled everywhere or nowhere."
   fi
@@ -165,7 +165,7 @@ else
   if [ "$rc" -eq 0 ]; then
     note "on $host_os, which has no eBPF, 'idryx ebpf-capture' exited 0. A command
       that cannot do its job must fail, not return success quietly."
-  elif ! printf '%s' "$out" | grep -q "$host_os"; then
+  elif ! grep -q "$host_os" <<<"$out"; then
     note "on $host_os, 'idryx ebpf-capture' failed but did not name the platform:
 $(printf '%s' "$out" | sed 's/^/      /' | tail -3)"
   fi
