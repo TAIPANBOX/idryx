@@ -19,8 +19,9 @@ gateways: it reads the data Okta, Entra, AWS, GCP, and Azure already generate,
 plus the whole TAIPANBOX agent-event bus, and stitches every identity type,
 humans, service accounts, keys, MCP servers, and AI agents, into a single
 identity / access graph. Twenty-seven deterministic detectors then surface excessive
-privilege and anomalous behavior across that graph. Open source, dev-first, built
-for mid-market. See [`idryx-plan.md`](idryx-plan.md) for the full design and
+privilege and anomalous behavior across that graph. Open source and built for the
+enterprise: it reads the identity providers and clouds an organization already
+runs, and stays read-only, proposing changes rather than making them. See [`idryx-plan.md`](idryx-plan.md) for the full design and
 roadmap.
 
 <div align="center">
