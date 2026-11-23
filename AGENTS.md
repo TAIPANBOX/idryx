@@ -582,8 +582,10 @@ an absent invariant.
     held by the live runs in estate-gates PROVEN.md, since no gate can attach a
     kprobe.)*
 
-    **What is NOT proven.** No live run on x86_64: this machine's kernel is
-    aarch64 and cannot load an x86_64 object. No run on arm64 below 6.4, which
+    **What is NOT proven.** The x86_64 gap this paragraph first named is
+    closed: a live run on 2026-09-27 on Debian's own kernel
+    (`6.12.107+deb13-amd64`) captured 349 flows in 70 seconds (SECURITY.md,
+    "Measured on x86_64 too"). No run on arm64 below 6.4, which
     is the configuration the kprobe choice exists to protect. No LSM-denied
     attempt was run; that one is structural rather than measured, since a kprobe
     fires at function entry and `security_socket_connect` is in the body. And
