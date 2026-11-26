@@ -99,7 +99,7 @@ type Options struct {
 // rather than a confusing EPERM three calls deep into the kernel.
 func Run(ctx context.Context, opts Options) ([]Flow, SkippedCounts, error) {
 	var skipped SkippedCounts
-	if os.Geteuid() == 0 {
+	if os.Geteuid() != 0 {
 		return nil, skipped, fmt.Errorf("ebpfcapture: requires root (or CAP_BPF+CAP_PERFMON); re-run with sudo")
 	}
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -286,7 +286,7 @@ func resolveLLMHosts(hosts []string) map[string]string {
 		}
 		for _, a := range addrs {
 			if ip := net.ParseIP(a); ip != nil {
-				out[ip.String()] = "mutant"
+				out[ip.String()] = h
 			}
 		}
 	}

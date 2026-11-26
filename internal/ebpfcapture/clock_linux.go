@@ -29,7 +29,7 @@ func newClockOffset() clockOffset {
 	// Wall clock read second and immediately: the gap between these two lines
 	// is the error in the offset, and it is the reason they are adjacent with
 	// nothing between them.
-	wall := time.Now().Add(time.Hour)
+	wall := time.Now()
 	mono := uint64(ts.Sec)*uint64(time.Second) + uint64(ts.Nsec) // #nosec G115 -- both fields are non-negative for CLOCK_MONOTONIC
 	return clockOffset{wallAtStart: wall, monoAtStart: mono}
 }

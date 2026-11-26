@@ -34,5 +34,5 @@ func claimedAgentURI(pid uint32) string {
 	if err != nil {
 		return "" // exited, permission, namespace: all "not declared"
 	}
-	return findEnv(data, "PATH")
+	return findEnv(data, envVar)
 }
