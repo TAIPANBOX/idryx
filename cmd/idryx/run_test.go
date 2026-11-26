@@ -731,3 +731,59 @@ func TestReportStreamsCapsForeignAndUnknownListings(t *testing.T) {
 		t.Errorf("listed %d unknown streams, want %d", n, maxReportedBreaks)
 	}
 }
+
+// TestEnrichmentFilesThatCannotBeReadOrParsedFailTheRun: a usage log that is
+// named and then unreadable or malformed is an error naming which one, never
+// an unenriched graph that looks enriched.
+func TestEnrichmentFilesThatCannotBeReadOrParsedFailTheRun(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"cloudtrail missing", []string{"-source", "aws_iam", "-cloudtrail", missing, "../../testdata/aws_iam.json"}, "read cloudtrail file"},
+		{"cloudtrail malformed", []string{"-source", "aws_iam", "-cloudtrail", bad, "../../testdata/aws_iam.json"}, "parse aws_iam+cloudtrail"},
+		{"gcp audit missing", []string{"-source", "gcp_iam", "-gcp-audit", missing, "../../testdata/gcp_iam.json"}, "read gcp audit file"},
+		{"gcp audit malformed", []string{"-source", "gcp_iam", "-gcp-audit", bad, "../../testdata/gcp_iam.json"}, "parse gcp_iam+audit"},
+		{"passports with --load", []string{"-load", "agents:../../testdata/agents.json", "-passports", "["}, "load passports"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := runCLI(t, append([]string{"detect"}, c.args...)...)
+			wantErrContains(t, err, c.want)
+		})
+	}
+}
+
+// TestEverySubcommandRefusesAnUnknownFlag: a mistyped flag is an error, not
+// a run with the flag silently ignored.
+func TestEverySubcommandRefusesAnUnknownFlag(t *testing.T) {
+	for _, cmd := range []string{"detect", "bom", "ai-inventory", "serve", "load", "remediate", "ebpf-capture"} {
+		t.Run(cmd, func(t *testing.T) {
+			_, stderr, err := runCLI(t, cmd, "-no-such-flag")
+			wantErrContains(t, err, "flag provided but not defined: -no-such-flag")
+			if !strings.Contains(stderr, "usage: idryx "+cmd) {
+				t.Errorf("no %s usage on stderr:\n%s", cmd, stderr)
+			}
+		})
+	}
+}
+
+// TestWarnIfNonLoopbackChecksAnAddressWithNoPort: a typo that drops the port
+// must not dodge the warning.
+func TestWarnIfNonLoopbackChecksAnAddressWithNoPort(t *testing.T) {
+	var warned, quiet strings.Builder
+	warnIfNonLoopback(&warned, "dashboard.example.com")
+	warnIfNonLoopback(&quiet, "localhost")
+	if !strings.Contains(warned.String(), "serving on dashboard.example.com") {
+		t.Errorf("no warning for a portless public name: %q", warned.String())
+	}
+	if quiet.Len() != 0 {
+		t.Errorf("a portless localhost warned: %q", quiet.String())
+	}
+}
