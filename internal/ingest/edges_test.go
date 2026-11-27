@@ -90,8 +90,22 @@ func TestNormalizeARNOnlyRewritesWellFormedSessions(t *testing.T) {
 		"arn:aws:sts::123:assumed-role/etl":           "arn:aws:iam::123:role/etl",
 	}
 	for in, want := range cases {
-		if got := normalizeARN(in); got != want {
-			t.Errorf("normalizeARN(%q) = %q, want %q", in, got, want)
+		if got, ok := normalizeARN(in); !ok || got != want {
+			t.Errorf("normalizeARN(%q) = %q, %v, want %q, true", in, got, ok, want)
+		}
+	}
+}
+
+// TestNormalizeARNRefusesASessionThatNamesNoRoleOrAccount: these are session
+// ARNs, so leaving them unchanged would not do either; they are refused.
+func TestNormalizeARNRefusesASessionThatNamesNoRoleOrAccount(t *testing.T) {
+	for _, in := range []string{
+		"arn:aws:sts::123:assumed-role/",
+		"arn:aws:sts::123:assumed-role//session",
+		"arn:aws:sts:::assumed-role/etl/session",
+	} {
+		if got, ok := normalizeARN(in); ok || got != "" {
+			t.Errorf("normalizeARN(%q) = %q, %v, want a refusal", in, got, ok)
 		}
 	}
 }
@@ -111,6 +125,27 @@ func TestCloudTrailUsageSkipsRecordsWithoutAnActorOrService(t *testing.T) {
 		"arn:aws:iam::1:user/a": {"ec2": true},
 		"arn:aws:iam::1:role/r": {"s3": true},
 	}
+	if !reflect.DeepEqual(usage, want) {
+		t.Errorf("usage = %v, want %v", usage, want)
+	}
+}
+
+// TestCloudTrailUsageRefusesASessionARNThatNamesNoRole: a session ARN with
+// nothing after "assumed-role/" (or no account) names no role, so its activity
+// is refused rather than credited to "arn:aws:iam::123:role/", a role with an
+// empty name that no IAM inventory entry can ever match.
+func TestCloudTrailUsageRefusesASessionARNThatNamesNoRole(t *testing.T) {
+	data := []byte(`{"Records":[
+		{"eventSource":"s3.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role/"}},
+		{"eventSource":"s3.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role//session"}},
+		{"eventSource":"ec2.amazonaws.com","userIdentity":{"arn":"arn:aws:sts:::assumed-role/etl/session"}},
+		{"eventSource":"iam.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role/etl/s"}}
+	]}`)
+	usage, err := CloudTrailUsage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]bool{"arn:aws:iam::123:role/etl": {"iam": true}}
 	if !reflect.DeepEqual(usage, want) {
 		t.Errorf("usage = %v, want %v", usage, want)
 	}

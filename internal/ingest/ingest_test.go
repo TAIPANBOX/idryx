@@ -82,9 +82,9 @@ func TestNormalizeARN(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		got := normalizeARN(c.in)
-		if got != c.want {
-			t.Errorf("normalizeARN(%q) = %q, want %q", c.in, got, c.want)
+		got, ok := normalizeARN(c.in)
+		if !ok || got != c.want {
+			t.Errorf("normalizeARN(%q) = %q, %v, want %q, true", c.in, got, ok, c.want)
 		}
 	}
 }
