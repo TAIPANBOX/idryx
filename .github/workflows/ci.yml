@@ -39,19 +39,14 @@ jobs:
           staticcheck ./...
       - name: test
         run: go test -race -coverprofile="$RUNNER_TEMP/coverage.out" -covermode=atomic ./...
-      # Total coverage of the run above against .coverage-floor, printed in
-      # the job summary. The profile lives in RUNNER_TEMP so the tree stays
-      # clean for gates-have-teeth.sh.
-      - name: coverage is not below the floor
-        run: |
-          go tool cover -func="$RUNNER_TEMP/coverage.out" > "$RUNNER_TEMP/coverage.txt"
-          ./scripts/coverage-floor.sh check "$RUNNER_TEMP/coverage.txt"
-      - name: the coverage floor only rises
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
-          git show FETCH_HEAD:.coverage-floor > "$RUNNER_TEMP/base-floor" 2>/dev/null || rm -f "$RUNNER_TEMP/base-floor"
-          ./scripts/coverage-floor.sh ratchet "$RUNNER_TEMP/base-floor"
+      # The profile is uploaded so the `coverage` job can merge it with the
+      # integration run's profile and gate the total.
+      - name: upload unit coverage profile
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-unit
+          path: ${{ runner.temp }}/coverage.out
+          if-no-files-found: error
       - name: build
         run: go build ./...
 
@@ -238,4 +233,44 @@ jobs:
         # parallel (the default), that truncate lands in the middle of cmd/idryx's
         # own ingest-then-read, and the failure looks like a bug in the code under
         # test rather than in how it was run.
-        run: go test -p 1 -tags integration ./internal/graph/ ./cmd/idryx/
+        # Same -covermode as the unit run, and -coverpkg=./... so every package
+        # the unit run measures is measured here too; the `coverage` job takes
+        # the highest count per block across both profiles.
+        run: go test -p 1 -tags integration -covermode=atomic -coverpkg=./... -coverprofile="$RUNNER_TEMP/integration.out" ./internal/graph/ ./cmd/idryx/
+      - name: upload integration coverage profile
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-integration
+          path: ${{ runner.temp }}/integration.out
+          if-no-files-found: error
+
+  # Total coverage = unit run merged with the integration run (the Postgres
+  # statements are only reachable there), against .coverage-floor. The number
+  # goes to the job summary.
+  coverage:
+    needs: [build, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/profiles
+      - name: coverage is not below the floor
+        run: |
+          ./scripts/coverage-merge.sh "$RUNNER_TEMP/merged.out" \
+            "$RUNNER_TEMP/profiles/coverage-unit/coverage.out" \
+            "$RUNNER_TEMP/profiles/coverage-integration/integration.out"
+          go tool cover -func="$RUNNER_TEMP/merged.out" > "$RUNNER_TEMP/coverage.txt"
+          tail -1 "$RUNNER_TEMP/coverage.txt"
+          ./scripts/coverage-floor.sh check "$RUNNER_TEMP/coverage.txt"
+      - name: the coverage floor only rises
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          git show FETCH_HEAD:.coverage-floor > "$RUNNER_TEMP/base-floor" 2>/dev/null || rm -f "$RUNNER_TEMP/base-floor"
+          ./scripts/coverage-floor.sh ratchet "$RUNNER_TEMP/base-floor"

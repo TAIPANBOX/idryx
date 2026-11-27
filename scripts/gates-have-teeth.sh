@@ -697,6 +697,19 @@ cov_case "ratchet: floor rose" pass ./scripts/coverage-floor.sh ratchet "$cov_di
 cov_case "ratchet: no floor file" nothing ./scripts/coverage-floor.sh ratchet "$cov_dir/floor" "$cov_dir/absent"
 # The floor this repository actually records must be one the gate can read.
 cov_case "the recorded floor parses" pass ./scripts/coverage-floor.sh ratchet "$cov_dir/absent" "${COVERAGE_FLOOR_FILE:-.coverage-floor}"
+# The merge: a block covered by either run counts as covered, and a missing
+# input is MEASURED NOTHING, not the other run's number.
+printf 'mode: atomic\na.go:1.1,2.2 1 0\na.go:3.1,4.2 1 5\n' >"$cov_dir/m-unit"
+printf 'mode: atomic\na.go:1.1,2.2 1 3\na.go:3.1,4.2 1 0\n' >"$cov_dir/m-int"
+cov_case "merge: runs together" pass ./scripts/coverage-merge.sh "$cov_dir/m-out" "$cov_dir/m-unit" "$cov_dir/m-int"
+cases=$((cases + 1))
+if [ "$(grep -c ' 0$' "$cov_dir/m-out")" -eq 0 ] && [ "$(wc -l <"$cov_dir/m-out")" -eq 3 ]; then
+	printf 'ok    coverage-merge: a block covered by either run is covered\n'
+else
+	printf 'FAIL  coverage-merge: a block covered by either run is covered\n'
+	cov_failures=$((cov_failures + 1))
+fi
+cov_case "merge: one input missing" nothing ./scripts/coverage-merge.sh "$cov_dir/m-out2" "$cov_dir/m-unit" "$cov_dir/absent"
 rm -rf "$cov_dir"
 if [ "$cov_failures" -gt 0 ]; then
 	if [ -n "${failures+x}" ]; then
