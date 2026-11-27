@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,20 @@ func testClaimedAgentURIReadsTheLiveProcessItWasGiven(t *testing.T) {
 			t.Skipf("cannot start a child process: %v", err)
 		}
 		t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+		// Start returns once execve has closed the parent's pipe, which the
+		// kernel does before it lays out the new environment (env_start is
+		// set later in create_elf_tables). Until then /proc/<pid>/environ
+		// reads empty, so wait for the new image's environment to appear.
+		path := "/proc/" + strconv.Itoa(cmd.Process.Pid) + "/environ"
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("child %d never showed an environment", cmd.Process.Pid)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 		return cmd
 	}
 
