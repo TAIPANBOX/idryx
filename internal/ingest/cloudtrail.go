@@ -83,8 +83,8 @@ func CloudTrailUsage(data []byte) (map[string]map[string]bool, error) {
 	}
 	out := make(map[string]map[string]bool)
 	for _, r := range env.Records {
-		arn := normalizeARN(r.UserIdentity.ARN)
-		if arn == "" || r.EventSource == "" {
+		arn, ok := normalizeARN(r.UserIdentity.ARN)
+		if !ok || arn == "" || r.EventSource == "" {
 			continue
 		}
 		svc := serviceFromEventSource(r.EventSource)
@@ -108,18 +108,27 @@ func serviceFromEventSource(src string) string {
 // normalizeARN converts an assumed-role session ARN to the canonical role ARN
 // so CloudTrail activity can be matched against IAM inventory entries.
 // arn:aws:sts::ACCT:assumed-role/ROLE/SESSION → arn:aws:iam::ACCT:role/ROLE
-func normalizeARN(arn string) string {
+//
+// ok is false for a session ARN that names no role or no account: there is no
+// role to credit, and "arn:aws:iam::ACCT:role/" would be one with an empty name
+// that no inventory entry matches. Any other ARN that does not have the full
+// session shape is returned unchanged.
+func normalizeARN(arn string) (normalized string, ok bool) {
 	if !strings.Contains(arn, ":assumed-role/") {
-		return arn
+		return arn, true
 	}
 	// arn:aws:sts::ACCT:assumed-role/ROLE/SESSION — six colon-delimited fields
 	parts := strings.SplitN(arn, ":", 6)
 	if len(parts) != 6 {
-		return arn
+		return arn, true
 	}
 	segments := strings.SplitN(parts[5], "/", 3)
 	if len(segments) < 2 {
-		return arn
+		return arn, true
 	}
-	return "arn:aws:iam::" + parts[4] + ":role/" + segments[1]
+	account, role := parts[4], segments[1]
+	if account == "" || role == "" {
+		return "", false
+	}
+	return "arn:aws:iam::" + account + ":role/" + role, true
 }

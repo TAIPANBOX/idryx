@@ -90,8 +90,22 @@ func TestNormalizeARNOnlyRewritesWellFormedSessions(t *testing.T) {
 		"arn:aws:sts::123:assumed-role/etl":           "arn:aws:iam::123:role/etl",
 	}
 	for in, want := range cases {
-		if got := normalizeARN(in); got != want {
-			t.Errorf("normalizeARN(%q) = %q, want %q", in, got, want)
+		if got, ok := normalizeARN(in); !ok || got != want {
+			t.Errorf("normalizeARN(%q) = %q, %v, want %q, true", in, got, ok, want)
+		}
+	}
+}
+
+// TestNormalizeARNRefusesASessionThatNamesNoRoleOrAccount: these are session
+// ARNs, so leaving them unchanged would not do either; they are refused.
+func TestNormalizeARNRefusesASessionThatNamesNoRoleOrAccount(t *testing.T) {
+	for _, in := range []string{
+		"arn:aws:sts::123:assumed-role/",
+		"arn:aws:sts::123:assumed-role//session",
+		"arn:aws:sts:::assumed-role/etl/session",
+	} {
+		if got, ok := normalizeARN(in); ok || got != "" {
+			t.Errorf("normalizeARN(%q) = %q, %v, want a refusal", in, got, ok)
 		}
 	}
 }
