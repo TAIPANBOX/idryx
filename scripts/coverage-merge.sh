@@ -12,7 +12,9 @@ set -euo pipefail
 [ "$#" -ge 2 ] || { printf 'usage: %s <out> <profile>...\n' "$0" >&2; exit 2; }
 out="$1"; shift
 for f in "$@"; do
-	if [ ! -s "$f" ] || ! head -1 "$f" | grep -q '^mode: '; then
+	first=""
+	[ ! -s "$f" ] || IFS= read -r first <"$f" || true
+	if [ "${first#mode: }" = "$first" ]; then
 		printf 'MEASURED NOTHING: %s is missing, empty or not a coverage profile\n' "$f" >&2
 		exit 1
 	fi
