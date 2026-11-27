@@ -116,6 +116,27 @@ func TestCloudTrailUsageSkipsRecordsWithoutAnActorOrService(t *testing.T) {
 	}
 }
 
+// TestCloudTrailUsageRefusesASessionARNThatNamesNoRole: a session ARN with
+// nothing after "assumed-role/" (or no account) names no role, so its activity
+// is refused rather than credited to "arn:aws:iam::123:role/", a role with an
+// empty name that no IAM inventory entry can ever match.
+func TestCloudTrailUsageRefusesASessionARNThatNamesNoRole(t *testing.T) {
+	data := []byte(`{"Records":[
+		{"eventSource":"s3.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role/"}},
+		{"eventSource":"s3.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role//session"}},
+		{"eventSource":"ec2.amazonaws.com","userIdentity":{"arn":"arn:aws:sts:::assumed-role/etl/session"}},
+		{"eventSource":"iam.amazonaws.com","userIdentity":{"arn":"arn:aws:sts::123:assumed-role/etl/s"}}
+	]}`)
+	usage, err := CloudTrailUsage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]bool{"arn:aws:iam::123:role/etl": {"iam": true}}
+	if !reflect.DeepEqual(usage, want) {
+		t.Errorf("usage = %v, want %v", usage, want)
+	}
+}
+
 func TestGCPAuditUsageSkipsEntriesWithoutAPrincipalOrService(t *testing.T) {
 	data := []byte(`[
 		{"protoPayload":{"serviceName":"storage.googleapis.com","authenticationInfo":{"principalEmail":""}}},
