@@ -839,6 +839,12 @@ Postgres keeps it. Integration tests live behind the `integration` build tag
 and run in CI against a Postgres service (`make test-integration` with
 `DATABASE_URL`).
 
+CI measures statement coverage with the unit and the integration profiles merged
+(`scripts/coverage-merge.sh`) and fails below the floor in `.coverage-floor`,
+which may only be raised: 93.00% against a floor of 92.00% on main on 2026-11-27
+(target 90%). A weekly workflow (`mutation.yml`) runs gremlins over every tested
+package and reports the kill score on the run page; it measures and gates nothing.
+
 **eBPF network sensor** (`internal/ebpfcapture`, `idryx ebpf-capture`) -
 Linux amd64 or arm64 only (5.7 or later), root (or `CAP_BPF`+`CAP_PERFMON`) sensor attached as a
 kprobe on `__sys_connect_file` via `cilium/ebpf`, capturing real outbound
